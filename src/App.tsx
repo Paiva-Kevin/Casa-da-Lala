@@ -114,7 +114,8 @@ import {
   downloadDriveBackupContent,
   findDriveBackupFile,
   getAccessToken,
-   googleSignIn,
+  getSavedGoogleUser,
+  googleSignIn,
   GoogleUserProfile,
   initAuth,
   logoutGoogleDrive,
@@ -386,11 +387,15 @@ export default function App() {
     }, 3200);
   }, []);
 
-  // Offline-First & Google Drive Sync State
+  // Offline-First & Google Drive Sync State — Persisted in localStorage so user stays logged in offline & across app restarts
   const isOnline = useOnlineStatus();
   const [syncModalOpen, setSyncModalOpen] = useState<boolean>(false);
-  const [googleUser, setGoogleUser] = useState<GoogleUserProfile | null>(null);
-  const [needsAuth, setNeedsAuth] = useState<boolean>(true);
+  const [googleUser, setGoogleUser] = useState<GoogleUserProfile | null>(() =>
+    getSavedGoogleUser()
+  );
+  const [needsAuth, setNeedsAuth] = useState<boolean>(
+    () => !getSavedGoogleUser()
+  );
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
   const [useAppDataFolder, setUseAppDataFolder] = useState<boolean>(false);
   const [pendingConfirmation, setPendingConfirmation] =
@@ -440,8 +445,8 @@ export default function App() {
 
       const token = await getAccessToken();
       if (!token) {
-        setNeedsAuth(true);
         if (!silentIfNoChanges) {
+          setNeedsAuth(true);
           setSyncModalOpen(true);
         }
         return;
@@ -527,10 +532,12 @@ export default function App() {
         const msg =
           err instanceof Error ? err.message : "Falha na comunicação com o Drive";
         if (msg === "AUTH_REQUIRED") {
-          setNeedsAuth(true);
+          if (!silentIfNoChanges) {
+            setNeedsAuth(true);
+          }
           const errState = await updateSyncMetadata({
             syncStatus: "pending",
-            lastError: "Sessão expirada. Conecte novamente ao Google Drive.",
+            lastError: "Token OAuth expirado. Reconecte quando quiser sincronizar com o Drive.",
           });
           setSyncMeta(errState);
         } else {
@@ -777,14 +784,7 @@ export default function App() {
       if (result) {
         setGoogleUser(result.user);
         setNeedsAuth(false);
-        if (!demoLimpo) {
-          limparDadosDeExemplo(true);
-          showToast(
-            "Conectado ao Google! Dados de exemplo limpos — fale com a Lala a qualquer momento para preencher."
-          );
-        } else {
-          showToast("Conectado ao Google Drive & Agenda com sucesso!");
-        }
+        showToast("Conectado ao Google Drive & Agenda com sucesso!");
         await handleSyncCheckWithDrive(false);
       } else {
         showToast("Janela de login fechada. Clique novamente quando quiser conectar.");
@@ -804,14 +804,7 @@ export default function App() {
       const result = await signInWithCustomGISClient(clientId);
       setGoogleUser(result.user);
       setNeedsAuth(false);
-      if (!demoLimpo) {
-        limparDadosDeExemplo(true);
-        showToast(
-          "Autenticado! Dados de exemplo limpos — fale com a Lala para preencher."
-        );
-      } else {
-        showToast("Autenticado via Google Identity Services (GIS)!");
-      }
+      showToast("Autenticado via Google Identity Services (GIS)!");
       await handleSyncCheckWithDrive(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erro no login GIS";
@@ -952,10 +945,13 @@ export default function App() {
     taskId: number,
     hora: string,
     duracaoMin?: number,
-    diaMes = 27
+    diaMes = new Date().getDate()
   ) => {
     const alvo = tarefas.find((tk) => tk.id === taskId);
     if (!alvo) return;
+    const hoje = new Date();
+    const mesAtual = hoje.getMonth() + 1;
+    const anoAtual = hoje.getFullYear();
     const duracaoReal = Math.max(1, duracaoMin ?? alvo.duracaoMin ?? 25);
     setTarefas((prev) =>
       prev.map((tk) =>
@@ -973,8 +969,8 @@ export default function App() {
     );
     setCompromissos((prev) => {
       const existente = prev.find((c) => c.taskId === taskId);
-      const diaIdx =
-        DIAS_SEMANA_HEADER.find((d) => d.diaMes === diaMes)?.idx ?? 6;
+      const dtObj = new Date(anoAtual, mesAtual - 1, diaMes);
+      const diaIdx = (dtObj.getDay() + 6) % 7;
       if (existente) {
         return prev
           .map((c) =>
@@ -984,6 +980,8 @@ export default function App() {
                   hora,
                   duracaoMin: duracaoReal,
                   diaMes,
+                  mes: mesAtual,
+                  ano: anoAtual,
                   diaSemanaIdx: diaIdx,
                 }
               : c
@@ -999,6 +997,8 @@ export default function App() {
         cor: alvo.cor,
         aba: alvo.aba,
         diaMes,
+        mes: mesAtual,
+        ano: anoAtual,
         diaSemanaIdx: diaIdx,
         gcalSynced: true,
         taskId: alvo.id,
@@ -1652,9 +1652,11 @@ export default function App() {
           const hoje = new Date();
           const novos: Compromisso[] = listaComps.map((c, idx) => {
             const diaMes = c.diaMes || hoje.getDate();
-            const mes = c.mes !== undefined ? c.mes : hoje.getMonth();
+            const rawMes =
+              c.mes !== undefined ? c.mes : hoje.getMonth() + 1;
+            const mes = rawMes >= 1 && rawMes <= 12 ? rawMes : hoje.getMonth() + 1;
             const ano = c.ano || hoje.getFullYear();
-            const dataObj = new Date(ano, mes, diaMes);
+            const dataObj = new Date(ano, mes - 1, diaMes);
             const diaSemanaIdx = (dataObj.getDay() + 6) % 7;
             const cat = c.categoriaCalendario || "rotina";
             return {
@@ -1700,7 +1702,7 @@ export default function App() {
                 titulo: nc.titulo,
                 local: nc.local,
                 ano: nc.ano || new Date().getFullYear(),
-                mes: (nc.mes !== undefined ? nc.mes : new Date().getMonth()) + 1,
+                mes: nc.mes || new Date().getMonth() + 1,
                 diaMes: nc.diaMes,
                 horaInicio: nc.hora,
                 duracaoMin: nc.duracaoMin,

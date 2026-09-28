@@ -177,10 +177,32 @@ export function AbaCalendario({
     useState<CategoriaEventoCalendario>("todas");
   const [painelConfigAberto, setPainelConfigAberto] = useState<boolean>(false);
 
-  // Estado de sincronização com Google Calendar
+  // Estado de sincronização com Google Calendar (com cache local para funcionar 100% offline)
   const [eventosGoogle, setEventosGoogle] = useState<
     GoogleCalendarEventMapped[]
-  >([]);
+  >(() => {
+    try {
+      const raw = localStorage.getItem("casa_lala_gcal_events_cache_v1");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        "casa_lala_gcal_events_cache_v1",
+        JSON.stringify(eventosGoogle)
+      );
+    } catch {
+      // ignore
+    }
+  }, [eventosGoogle]);
   const [sincronizandoGCal, setSincronizandoGCal] = useState<boolean>(false);
   const [ultimaSyncGCal, setUltimaSyncGCal] = useState<string | null>(null);
   const [confirmacaoGCal, setConfirmacaoGCal] =
@@ -341,7 +363,12 @@ export function AbaCalendario({
 
     // 1. Compromissos nativos do App
     compromissos.forEach((c) => {
-      const mesComp = c.mes ?? mesAtivo;
+      const mesComp =
+        c.mes === undefined
+          ? mesAtivo
+          : c.mes === 0
+          ? 1
+          : c.mes;
       const anoComp = c.ano ?? anoAtivo;
       if (mesComp !== mesAtivo || anoComp !== anoAtivo) return;
 
@@ -706,9 +733,15 @@ export function AbaCalendario({
   }, [diaSelecionado, offsetInicioMes, diasNoMesCount]);
 
   const horasGrade = useMemo(() => {
-    const inicio = Math.min(12, Math.max(5, configCalendario.horaInicioGrade || 7));
+    let inicio = Math.min(12, Math.max(5, configCalendario.horaInicioGrade || 7));
+    eventosFiltrados.forEach((ev) => {
+      const h = parseInt((ev.horario || "09:00").split(":")[0], 10);
+      if (!isNaN(h) && h >= 0 && h < inicio) {
+        inicio = h;
+      }
+    });
     return Array.from({ length: 23 - inicio + 1 }, (_, i) => inicio + i);
-  }, [configCalendario.horaInicioGrade]);
+  }, [configCalendario.horaInicioGrade, eventosFiltrados]);
 
   const getCorHexCategoria = (
     cat: CategoriaCalendarioApp,
@@ -850,7 +883,7 @@ export function AbaCalendario({
   const salvarCompromissoLocal = (
     tituloFinal: string,
     gcalEventIdCriado?: string
-  ) => {
+  ): number => {
     const abaMap: Record<CategoriaCalendarioApp, Compromisso["aba"]> = {
       uerj: "estudos_trabalho",
       trabalho: "estudos_trabalho",
@@ -860,17 +893,32 @@ export function AbaCalendario({
       pessoal: "casa_rotinas",
     };
 
+    const horaFinal = diaInteiroModal ? "08:00" : novaHora || "14:00";
+    const duracaoFinal = diaInteiroModal
+      ? 480
+      : tipoItemModal === "tarefa"
+      ? 30
+      : Number(novaDuracao) || 60;
+
+    const novoId = Date.now();
     const novo: Compromisso = {
-      id: Date.now(),
-      hora: novaHora,
-      duracaoMin: tipoItemModal === "tarefa" ? 30 : novaDuracao,
+      id: novoId,
+      hora: horaFinal,
+      duracaoMin: duracaoFinal,
       titulo: tituloFinal,
       local:
         novoLocal.trim() ||
         (novaDescricao.trim()
           ? novaDescricao.trim()
-          : `Calendário (${novaCat.toUpperCase()})`),
-      cor: tipoItemModal === "tarefa" ? "action" : "primary",
+          : `Agenda (${novaCat.toUpperCase()})`),
+      cor:
+        novaCat === "uerj" || novaCat === "saude"
+          ? "primary"
+          : novaCat === "financas"
+          ? "finance"
+          : novaCat === "trabalho"
+          ? "alert"
+          : "action",
       aba: abaMap[novaCat],
       diaMes: diaSelecionado,
       mes: mesAtivo,
@@ -885,10 +933,14 @@ export function AbaCalendario({
     setNovoTitulo("");
     setNovoLocal("");
     setNovaDescricao("");
+    return novoId;
   };
 
   const handleAgendarCompromisso = async () => {
-    if (!novoTitulo.trim()) return;
+    if (!novoTitulo.trim()) {
+      showToast("Digite um título para o evento ou tarefa.");
+      return;
+    }
 
     const tituloFormatado =
       tipoItemModal === "tarefa" &&
@@ -906,7 +958,7 @@ export function AbaCalendario({
               ? {
                   ...c,
                   titulo: tituloFormatado,
-                  hora: novaHora,
+                  hora: diaInteiroModal ? "08:00" : novaHora,
                   duracaoMin: novaDuracao,
                   local: novoLocal.trim() || c.local,
                   categoriaCalendario: novaCat,
@@ -919,10 +971,14 @@ export function AbaCalendario({
         );
       }
 
-      if (eventoEditando.gcalId) {
+      setModalCriacaoAberto(false);
+      const editRef = eventoEditando;
+      setEventoEditando(null);
+
+      if (editRef.gcalId && navigator.onLine) {
         try {
           const atualizado = await atualizarEventoGoogleCalendar(
-            eventoEditando.gcalId,
+            editRef.gcalId,
             {
               titulo: tituloFormatado,
               descricao: novaDescricao.trim(),
@@ -930,39 +986,38 @@ export function AbaCalendario({
               ano: anoAtivo,
               mes: mesAtivo,
               diaMes: diaSelecionado,
-              horaInicio: novaHora,
+              horaInicio: diaInteiroModal ? "08:00" : novaHora,
               duracaoMin: novaDuracao,
               diaInteiro: diaInteiroModal,
               categoria: novaCat,
               targetAccountEmail:
-                contaDestinoCriacao || eventoEditando.contaEmail,
-              targetCalendarId: eventoEditando.calendarId || "primary",
+                contaDestinoCriacao || editRef.contaEmail,
+              targetCalendarId: editRef.calendarId || "primary",
             }
           );
           setEventosGoogle((prev) =>
             prev.map((x) =>
-              x.gcalId === eventoEditando.gcalId ? atualizado : x
+              x.gcalId === editRef.gcalId ? atualizado : x
             )
           );
-          showToast(`"${atualizado.titulo}" atualizado no Google Agenda!`);
-        } catch (err) {
-          showToast(
-            err instanceof Error
-              ? err.message
-              : "Atualizado localmente no app."
-          );
+          showToast(`"${atualizado.titulo}" atualizado na Agenda e no Google!`);
+        } catch {
+          showToast(`"${tituloFormatado}" atualizado na Agenda local!`);
         }
       } else {
-        showToast(`"${tituloFormatado}" atualizado!`);
+        showToast(`"${tituloFormatado}" atualizado na Agenda!`);
       }
-
-      setModalCriacaoAberto(false);
-      setEventoEditando(null);
       return;
     }
 
+    // 1. SEMPRE salva imediatamente na agenda local (instantâneo, funciona 100% offline e sem modais extras)
+    const idCriadoLocal = salvarCompromissoLocal(tituloFormatado);
+    setModalCriacaoAberto(false);
+    setEventoEditando(null);
+
     const token = await getAccessToken();
-    const temContaAtiva = Boolean(token) || contasGoogle.length > 0;
+    const temContaAtiva =
+      navigator.onLine && (Boolean(token) || contasGoogle.length > 0);
 
     if (enviarNovoParaGoogle && temContaAtiva) {
       const contaAlvo =
@@ -974,52 +1029,48 @@ export function AbaCalendario({
         ano: anoAtivo,
         mes: mesAtivo,
         diaMes: diaSelecionado,
-        horaInicio: novaHora,
+        horaInicio: diaInteiroModal ? "08:00" : novaHora,
         duracaoMin: tipoItemModal === "tarefa" ? 30 : novaDuracao,
         diaInteiro: diaInteiroModal,
         categoria: novaCat,
         targetAccountEmail: contaAlvo,
       };
 
-      setModalCriacaoAberto(false);
-      setConfirmacaoGCal({
-        tipo: "criar",
-        tituloModal: `Confirmar criação de ${
-          tipoItemModal === "tarefa" ? "Tarefa" : "Evento"
-        } no Google Agenda?`,
-        descricaoModal: `Será salvo no App e adicionado à agenda Google (${
-          contaAlvo || "Conta Principal"
-        }):`,
-        itensAfetados: [
-          `${inputGCal.titulo} — ${String(diaSelecionado).padStart(
-            2,
-            "0"
-          )}/${String(mesAtivo).padStart(2, "0")}/${anoAtivo} ${
-            diaInteiroModal
-              ? "(Dia inteiro)"
-              : `às ${novaHora} (${inputGCal.duracaoMin} min)`
-          }`,
-        ],
-        onConfirmar: async () => {
-          const criado = await criarEventoGoogleCalendar(inputGCal);
-          setEventosGoogle((prev) => [...prev, criado]);
-          salvarCompromissoLocal(tituloFormatado, criado.gcalId);
-          showToast(
-            `"${criado.titulo}" criado e sincronizado com o Google Agenda!`
-          );
-        },
-      });
+      showToast(
+        `"${tituloFormatado}" salvo na Agenda em ${String(
+          diaSelecionado
+        ).padStart(2, "0")}/${String(mesAtivo).padStart(
+          2,
+          "0"
+        )} às ${novaHora}! Sincronizando com Google...`
+      );
+
+      try {
+        const criado = await criarEventoGoogleCalendar(inputGCal);
+        setEventosGoogle((prev) => [...prev, criado]);
+        setCompromissos((prev) =>
+          prev.map((c) =>
+            c.id === idCriadoLocal
+              ? { ...c, gcalSynced: true, gcalEventId: criado.gcalId }
+              : c
+          )
+        );
+        showToast(
+          `"${criado.titulo}" sincronizado com o Google Agenda!`
+        );
+      } catch {
+        // Mantém o evento salvo localmente sem perder nada
+      }
       return;
     }
 
-    salvarCompromissoLocal(tituloFormatado);
-    setModalCriacaoAberto(false);
     showToast(
       `${
         tipoItemModal === "tarefa" ? "Tarefa" : "Evento"
-      } "${tituloFormatado}" agendado em ${diaSelecionado}/${String(
-        mesAtivo
-      ).padStart(2, "0")} às ${novaHora}!`
+      } "${tituloFormatado}" agendado em ${String(diaSelecionado).padStart(
+        2,
+        "0"
+      )}/${String(mesAtivo).padStart(2, "0")} às ${novaHora}!`
     );
   };
 
@@ -1754,6 +1805,144 @@ export function AbaCalendario({
         </div>
       </section>
 
+      {/* BARRA RÁPIDA DE CRIAÇÃO DIRETA NA AGENDA (1 CLIQUE OU ENTER, SEM MODAIS DESNECESSÁRIOS) */}
+      <section
+        className="rounded-3xl p-3.5 sm:p-4 border flex flex-col lg:flex-row items-stretch lg:items-center gap-2.5"
+        style={{ background: t.card, borderColor: t.border }}
+      >
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          <div
+            className="flex gap-1 p-0.5 rounded-xl border"
+            style={{ background: t.bg, borderColor: t.border }}
+          >
+            <button
+              type="button"
+              onClick={() => setTipoItemModal("evento")}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
+              style={{
+                background:
+                  tipoItemModal === "evento" ? t.action : "transparent",
+                color: tipoItemModal === "evento" ? "#fff" : t.textSoft,
+              }}
+            >
+              Evento
+            </button>
+            <button
+              type="button"
+              onClick={() => setTipoItemModal("tarefa")}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
+              style={{
+                background:
+                  tipoItemModal === "tarefa" ? t.primary : "transparent",
+                color: tipoItemModal === "tarefa" ? "#fff" : t.textSoft,
+              }}
+            >
+              Tarefa
+            </button>
+          </div>
+
+          <input
+            type="date"
+            value={`${anoAtivo}-${String(mesAtivo).padStart(2, "0")}-${String(
+              diaSelecionado
+            ).padStart(2, "0")}`}
+            onChange={(e) => {
+              const parts = e.target.value.split("-").map(Number);
+              if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+                setAnoAtivo(parts[0]);
+                setMesAtivo(parts[1]);
+                setDiaSelecionado(parts[2]);
+              }
+            }}
+            className="px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+            style={{
+              background: t.bg,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          />
+
+          <input
+            type="time"
+            value={novaHora}
+            onChange={(e) => setNovaHora(e.target.value)}
+            className="px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+            style={{
+              background: t.bg,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          />
+
+          <select
+            value={novaCat}
+            onChange={(e) =>
+              setNovaCat(e.target.value as CategoriaCalendarioApp)
+            }
+            className="px-2.5 py-1.5 rounded-xl text-xs font-bold border outline-none"
+            style={{
+              background: t.bg,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          >
+            <option value="pessoal">Pessoal</option>
+            <option value="uerj">UERJ</option>
+            <option value="trabalho">Trabalho</option>
+            <option value="pets">Pets</option>
+            <option value="financas">Finanças</option>
+            <option value="saude">Saúde/Treino</option>
+          </select>
+        </div>
+
+        <input
+          value={novoTitulo}
+          onChange={(e) => setNovoTitulo(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleAgendarCompromisso()}
+          placeholder={`Criação rápida em ${String(diaSelecionado).padStart(
+            2,
+            "0"
+          )}/${String(mesAtivo).padStart(
+            2,
+            "0"
+          )} às ${novaHora}: digite o título e aperte Enter...`}
+          className="flex-1 px-3.5 py-2 rounded-xl text-xs font-semibold border outline-none"
+          style={{
+            background: t.bg,
+            color: t.text,
+            borderColor: t.border,
+          }}
+        />
+
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={handleAgendarCompromisso}
+            className="flex-1 lg:flex-initial px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+            style={{
+              background: tipoItemModal === "tarefa" ? t.primary : t.action,
+            }}
+          >
+            <Plus size={14} /> Agendar Agora
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              abrirModalCriacaoRapida(diaSelecionado, novaHora, tipoItemModal)
+            }
+            className="px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer"
+            style={{
+              background: t.bg,
+              color: t.textSoft,
+              borderColor: t.border,
+            }}
+            title="Abrir mais opções (local, descrição, duração, conta Google)"
+          >
+            Mais opções
+          </button>
+        </div>
+      </section>
+
       {/* CORPO PRINCIPAL DO CALENDÁRIO: VISÃO SELECIONADA (ESQUERDA) + PAINEL DO DIA E CRIAÇÃO (DIREITA) */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
         <section
@@ -1975,11 +2164,14 @@ export function AbaCalendario({
                             />
                           );
                         }
-                        const evsSlot = eventosFiltrados.filter(
-                          (e) =>
-                            e.diaMes === dia &&
-                            e.horario.startsWith(prefixoHora)
-                        );
+                        const evsSlot = eventosFiltrados.filter((e) => {
+                          if (e.diaMes !== dia) return false;
+                          const hEv = parseInt(
+                            (e.horario || "09:00").split(":")[0],
+                            10
+                          );
+                          return hEv === hora;
+                        });
 
                         return (
                           <div
@@ -2058,9 +2250,13 @@ export function AbaCalendario({
               <div className="max-h-[520px] overflow-y-auto space-y-1.5 pr-1">
                 {horasGrade.map((hora) => {
                   const prefixoHora = String(hora).padStart(2, "0");
-                  const evsHora = eventosDoDiaSelecionado.filter((e) =>
-                    e.horario.startsWith(prefixoHora)
-                  );
+                  const evsHora = eventosDoDiaSelecionado.filter((e) => {
+                    const hEv = parseInt(
+                      (e.horario || "09:00").split(":")[0],
+                      10
+                    );
+                    return hEv === hora;
+                  });
 
                   return (
                     <div
@@ -2702,22 +2898,28 @@ export function AbaCalendario({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
-                    Dia do Mês
+                    Data
                   </label>
                   <input
-                    type="number"
-                    min={1}
-                    max={diasNoMesCount}
-                    value={diaSelecionado}
-                    onChange={(e) =>
-                      setDiaSelecionado(
-                        Math.min(
-                          diasNoMesCount,
-                          Math.max(1, Number(e.target.value) || 1)
-                        )
-                      )
-                    }
-                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num outline-none border"
+                    type="date"
+                    value={`${anoAtivo}-${String(mesAtivo).padStart(
+                      2,
+                      "0"
+                    )}-${String(diaSelecionado).padStart(2, "0")}`}
+                    onChange={(e) => {
+                      const parts = e.target.value.split("-").map(Number);
+                      if (
+                        parts.length === 3 &&
+                        parts[0] &&
+                        parts[1] &&
+                        parts[2]
+                      ) {
+                        setAnoAtivo(parts[0]);
+                        setMesAtivo(parts[1]);
+                        setDiaSelecionado(parts[2]);
+                      }
+                    }}
+                    className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num outline-none border"
                     style={{ background: t.bg, color: t.text, borderColor: t.border }}
                   />
                 </div>

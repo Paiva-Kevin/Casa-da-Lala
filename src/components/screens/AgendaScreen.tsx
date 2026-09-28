@@ -51,20 +51,69 @@ export function AgendaScreen({
   openCard,
   showToast,
 }: AgendaScreenProps) {
-  const [diaSelecionado, setDiaSelecionado] = useState<number>(27);
+  const hojeReal = React.useMemo(() => new Date(), []);
+  const [diaSelecionado, setDiaSelecionado] = useState<number>(() =>
+    new Date().getDate()
+  );
+  const [mesSelecionado, setMesSelecionado] = useState<number>(
+    () => new Date().getMonth() + 1
+  );
+  const [anoSelecionado, setAnoSelecionado] = useState<number>(() =>
+    new Date().getFullYear()
+  );
+
   // Escala em pixels por minuto real: 3.2px/min (192px/hora -> 5 min = 16px exatos, 60 min = 192px exatos)
   const [pxPorMinuto, setPxPorMinuto] = useState<number>(3.2);
-  const [horaAtualSimulada, setHoraAtualSimulada] = useState<string>("10:20");
+  const [horaAtualSimulada, setHoraAtualSimulada] = useState<string>(() => {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, "0")}:${String(
+      now.getMinutes()
+    ).padStart(2, "0")}`;
+  });
 
-  // Formulário de Novo Bloco com Duração Real em Minutos
+  // Formulário de Novo Bloco com Duração Real em Minutos + Criação Inline Direto na Régua
   const [novoTitulo, setNovoTitulo] = useState<string>("");
-  const [novaHoraInicio, setNovaHoraInicio] = useState<string>("11:50");
-  const [novaDuracaoMin, setNovaDuracaoMin] = useState<number>(5);
+  const [novaHoraInicio, setNovaHoraInicio] = useState<string>("14:00");
+  const [novaDuracaoMin, setNovaDuracaoMin] = useState<number>(30);
   const [novaCor, setNovaCor] = useState<ColorTokenKey>("primary");
   const [novoLocal, setNovoLocal] = useState<string>("");
+  const [slotInlineAtivo, setSlotInlineAtivo] = useState<string | null>(null);
+  const inputTituloRef = React.useRef<HTMLInputElement | null>(null);
+
+  // Gera dinamicamente os 7 dias da semana (Seg..Dom) ao redor do diaSelecionado
+  const diasDaSemanaDinamicos = React.useMemo(() => {
+    const baseDate = new Date(anoSelecionado, mesSelecionado - 1, diaSelecionado);
+    const jsDay = baseDate.getDay(); // 0=Dom..6=Sab
+    const offsetSeg = jsDay === 0 ? -6 : 1 - jsDay;
+    const nomes = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+    return Array.from({ length: 7 }, (_, idx) => {
+      const d = new Date(
+        anoSelecionado,
+        mesSelecionado - 1,
+        diaSelecionado + offsetSeg + idx
+      );
+      return {
+        idx,
+        label: nomes[idx],
+        diaMes: d.getDate(),
+        mes: d.getMonth() + 1,
+        ano: d.getFullYear(),
+      };
+    });
+  }, [anoSelecionado, mesSelecionado, diaSelecionado]);
 
   const compromissosDoDia = compromissos
-    .filter((c) => c.diaMes === diaSelecionado)
+    .filter((c) => {
+      if (c.diaMes !== diaSelecionado) return false;
+      if (
+        c.mes !== undefined &&
+        c.mes !== mesSelecionado &&
+        c.mes !== mesSelecionado - 1
+      ) {
+        return false;
+      }
+      return true;
+    })
     .sort((a, b) => horaParaMinutos(a.hora) - horaParaMinutos(b.hora));
 
   // Tarefas de Hoje ainda não alocadas na agenda
@@ -81,21 +130,29 @@ export function AgendaScreen({
     0
   );
 
-  const criarBlocoProporcional = () => {
-    if (!novoTitulo.trim()) return;
-    const duracaoValida = Math.max(1, Math.min(360, Number(novaDuracaoMin) || 5));
+  const criarBlocoProporcional = (horaOverride?: string) => {
+    if (!novoTitulo.trim()) {
+      inputTituloRef.current?.focus();
+      return;
+    }
+    const horaUsada = horaOverride || novaHoraInicio || "14:00";
+    const duracaoValida = Math.max(1, Math.min(360, Number(novaDuracaoMin) || 30));
+    const dtObj = new Date(anoSelecionado, mesSelecionado - 1, diaSelecionado);
+    const diaIdx = (dtObj.getDay() + 6) % 7;
+
     const novo: Compromisso = {
       id: Date.now(),
-      hora: novaHoraInicio,
+      hora: horaUsada,
       duracaoMin: duracaoValida,
       titulo: novoTitulo.trim(),
-      local: novoLocal.trim() || "Agenda Proporcional",
+      local: novoLocal.trim() || "Agenda",
       cor: novaCor,
       aba: "estudos_trabalho",
       diaMes: diaSelecionado,
-      diaSemanaIdx:
-        DIAS_SEMANA_HEADER.find((d) => d.diaMes === diaSelecionado)?.idx ?? 6,
-      gcalSynced: true,
+      mes: mesSelecionado,
+      ano: anoSelecionado,
+      diaSemanaIdx: diaIdx,
+      gcalSynced: false,
     };
 
     setCompromissos((prev) =>
@@ -104,10 +161,29 @@ export function AgendaScreen({
       )
     );
     showToast(
-      `Bloco "${novo.titulo}" (${duracaoValida} min reais) criado às ${novaHoraInicio}`
+      `"${novo.titulo}" (${duracaoValida} min) agendado no dia ${String(
+        diaSelecionado
+      ).padStart(2, "0")}/${String(mesSelecionado).padStart(
+        2,
+        "0"
+      )} às ${horaUsada}!`
     );
     setNovoTitulo("");
     setNovoLocal("");
+    setSlotInlineAtivo(null);
+  };
+
+  const handleCliqueDiretoNaRegua = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickY = Math.max(0, e.clientY - rect.top);
+    const minutosDesdeInicio = Math.round(clickY / pxPorMinuto / 15) * 15;
+    const totalMin = HORA_INICIO_DIA * 60 + minutosDesdeInicio;
+    const horaClicada = minutosParaHora(totalMin);
+    setNovaHoraInicio(horaClicada);
+    setSlotInlineAtivo(horaClicada);
+    setTimeout(() => {
+      inputTituloRef.current?.focus();
+    }, 30);
   };
 
   const alturaTotalCanvasPx = MINUTOS_TOTAIS_TIMELINE * pxPorMinuto;
@@ -132,16 +208,70 @@ export function AgendaScreen({
             <div className="flex items-center gap-2">
               <Calendar size={17} style={{ color: t.action }} />
               <h2 className="text-base font-bold" style={{ color: t.text }}>
-                Agenda · Timeline de Duração Real Proporcional
+                Agenda Diária · Clique em qualquer horário para criar direto na grade
               </h2>
             </div>
             <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
-              Cada minuto possui altura exata na régua: uma tarefa de <b>5 min</b> ocupa exatamente <b>1/12 de 1 hora</b>, sem forçar blocos fixos de 30m ou 1h.
+              Clique diretamente na linha do tempo abaixo ou use a barra rápida para criar compromissos e tarefas de 5 min a 2h.
             </p>
           </div>
 
-          {/* Controles de Zoom da Escala Proporcional */}
+          {/* Controles de Navegação da Semana + Zoom */}
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(
+                    anoSelecionado,
+                    mesSelecionado - 1,
+                    diaSelecionado - 7
+                  );
+                  setDiaSelecionado(d.getDate());
+                  setMesSelecionado(d.getMonth() + 1);
+                  setAnoSelecionado(d.getFullYear());
+                }}
+                className="px-2.5 py-1.5 rounded-xl border text-xs font-bold cursor-pointer"
+                style={{ background: t.bg, borderColor: t.border, color: t.text }}
+              >
+                ← Sem.
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDiaSelecionado(hojeReal.getDate());
+                  setMesSelecionado(hojeReal.getMonth() + 1);
+                  setAnoSelecionado(hojeReal.getFullYear());
+                }}
+                className="px-3 py-1.5 rounded-xl border text-xs font-bold cursor-pointer"
+                style={{
+                  background: t.bg,
+                  borderColor: t.border,
+                  color: t.action,
+                }}
+              >
+                Hoje ({String(hojeReal.getDate()).padStart(2, "0")}/
+                {String(hojeReal.getMonth() + 1).padStart(2, "0")})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const d = new Date(
+                    anoSelecionado,
+                    mesSelecionado - 1,
+                    diaSelecionado + 7
+                  );
+                  setDiaSelecionado(d.getDate());
+                  setMesSelecionado(d.getMonth() + 1);
+                  setAnoSelecionado(d.getFullYear());
+                }}
+                className="px-2.5 py-1.5 rounded-xl border text-xs font-bold cursor-pointer"
+                style={{ background: t.bg, borderColor: t.border, color: t.text }}
+              >
+                Sem. →
+              </button>
+            </div>
+
             <div
               className="flex items-center gap-1 p-1 rounded-xl border"
               style={{ background: t.bg, borderColor: t.border }}
@@ -149,8 +279,8 @@ export function AgendaScreen({
               <ZoomIn size={13} className="ml-1.5" style={{ color: t.textSoft }} />
               {[
                 { label: "Compacta", val: 2.0 },
-                { label: "Padrão (3.2px/m)", val: 3.2 },
-                { label: "Zoom 5m (4.5px/m)", val: 4.5 },
+                { label: "Padrão", val: 3.2 },
+                { label: "Detalhada", val: 4.5 },
               ].map((z) => (
                 <button
                   key={z.label}
@@ -168,15 +298,24 @@ export function AgendaScreen({
           </div>
         </div>
 
-        {/* Seletor dos 7 Dias da Semana */}
+        {/* Seletor Dinâmico dos 7 Dias da Semana */}
         <div className="grid grid-cols-7 gap-1.5">
-          {DIAS_SEMANA_HEADER.map((d) => {
-            const ativo = diaSelecionado === d.diaMes;
-            const qtdDia = compromissos.filter((c) => c.diaMes === d.diaMes).length;
+          {diasDaSemanaDinamicos.map((d) => {
+            const ativo =
+              diaSelecionado === d.diaMes && mesSelecionado === d.mes;
+            const qtdDia = compromissos.filter(
+              (c) =>
+                c.diaMes === d.diaMes &&
+                (c.mes === undefined || c.mes === d.mes || c.mes === d.mes - 1)
+            ).length;
             return (
               <button
-                key={d.diaMes}
-                onClick={() => setDiaSelecionado(d.diaMes)}
+                key={`${d.ano}-${d.mes}-${d.diaMes}`}
+                onClick={() => {
+                  setDiaSelecionado(d.diaMes);
+                  setMesSelecionado(d.mes);
+                  setAnoSelecionado(d.ano);
+                }}
                 className="py-2.5 px-1 rounded-2xl border flex flex-col items-center gap-0.5 transition-all cursor-pointer"
                 style={{
                   background: ativo ? t.action : t.bg,
@@ -187,16 +326,91 @@ export function AgendaScreen({
                 <span className="text-[10px] font-semibold opacity-80">
                   {d.label}
                 </span>
-                <span className="text-sm font-bold font-mono-num">{d.diaMes}</span>
+                <span className="text-sm font-bold font-mono-num">
+                  {String(d.diaMes).padStart(2, "0")}/
+                  {String(d.mes).padStart(2, "0")}
+                </span>
                 <span
                   className="text-[10px] font-mono-num"
                   style={{ color: ativo ? "#fff" : t.textSoft }}
                 >
-                  {qtdDia} bl.
+                  {qtdDia} ev.
                 </span>
               </button>
             );
           })}
+        </div>
+
+        {/* BARRA DE CRIAÇÃO DIRETA IMEDIATA (1 CLIQUE OU ENTER) */}
+        <div
+          className="p-3 rounded-2xl border flex flex-col sm:flex-row items-stretch sm:items-center gap-2"
+          style={{
+            background: slotInlineAtivo ? `${t.action}12` : t.bg,
+            borderColor: slotInlineAtivo ? t.action : t.border,
+          }}
+        >
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span
+              className="text-xs font-mono-num font-bold px-2.5 py-2 rounded-xl"
+              style={{ background: t.card, color: t.action }}
+            >
+              Dia {String(diaSelecionado).padStart(2, "0")}/
+              {String(mesSelecionado).padStart(2, "0")}
+            </span>
+            <input
+              type="time"
+              value={novaHoraInicio}
+              onChange={(e) => setNovaHoraInicio(e.target.value)}
+              className="px-2.5 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+              style={{
+                background: t.card,
+                color: t.text,
+                borderColor: t.border,
+              }}
+            />
+            <select
+              value={novaDuracaoMin}
+              onChange={(e) => setNovaDuracaoMin(Number(e.target.value))}
+              className="px-2 py-2 rounded-xl text-xs font-mono-num font-semibold border outline-none"
+              style={{
+                background: t.card,
+                color: t.text,
+                borderColor: t.border,
+              }}
+            >
+              <option value={5}>5 min</option>
+              <option value={10}>10 min</option>
+              <option value={15}>15 min</option>
+              <option value={30}>30 min</option>
+              <option value={45}>45 min</option>
+              <option value={60}>1h</option>
+              <option value={90}>1h30</option>
+              <option value={120}>2h</option>
+            </select>
+          </div>
+
+          <input
+            ref={inputTituloRef}
+            value={novoTitulo}
+            onChange={(e) => setNovoTitulo(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && criarBlocoProporcional()}
+            placeholder={`Digite o compromisso às ${novaHoraInicio} e aperte Enter...`}
+            className="flex-1 px-3.5 py-2 rounded-xl text-xs font-semibold border outline-none"
+            style={{
+              background: t.card,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          />
+
+          <button
+            type="button"
+            onClick={() => criarBlocoProporcional()}
+            className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
+            style={{ background: t.action }}
+          >
+            <Plus size={14} /> Agendar às {novaHoraInicio}
+          </button>
         </div>
       </section>
 
@@ -214,31 +428,26 @@ export function AgendaScreen({
                 style={{ background: t.danger }}
               />
               <span className="text-xs font-bold" style={{ color: t.text }}>
-                Dia {diaSelecionado}/09 · {compromissosDoDia.length} blocos ({Math.floor(totalMinutosAlocados / 60)}h {totalMinutosAlocados % 60}m alocados)
+                Dia {String(diaSelecionado).padStart(2, "0")}/
+                {String(mesSelecionado).padStart(2, "0")} ·{" "}
+                {compromissosDoDia.length} blocos (
+                {Math.floor(totalMinutosAlocados / 60)}h{" "}
+                {totalMinutosAlocados % 60}m alocados)
               </span>
             </div>
 
-            <div className="flex items-center gap-2 text-xs">
-              <span style={{ color: t.textSoft }}>Agulha Agora:</span>
-              <input
-                type="time"
-                value={horaAtualSimulada}
-                onChange={(e) => setHoraAtualSimulada(e.target.value)}
-                className="px-2 py-1 rounded-lg font-mono-num text-xs border outline-none"
-                style={{
-                  background: t.bg,
-                  color: t.text,
-                  borderColor: t.border,
-                }}
-              />
-            </div>
+            <span className="text-[11px]" style={{ color: t.textSoft }}>
+              Clique em qualquer horário na grade abaixo para agendar nesse horário
+            </span>
           </div>
 
           {/* CANVAS PROPORCIONAL COM RÉGUA DE HORAS E SUBDIVISÕES DE 15M / 5M */}
           <div className="relative overflow-y-auto max-h-[720px] pr-1 no-scrollbar">
             <div
-              className="relative w-full select-none"
+              onClick={handleCliqueDiretoNaRegua}
+              className="relative w-full select-none cursor-pointer"
               style={{ height: `${alturaTotalCanvasPx}px` }}
+              title="Clique em qualquer horário para criar um compromisso direto na agenda"
             >
               {/* 1. Linhas de Grade de Hora Inteira e Sub-linhas de 15 min / 30 min */}
               {HORAS_INTEIRAS_AGENDA.map((h) => {
@@ -321,7 +530,7 @@ export function AgendaScreen({
               })}
 
               {/* 2. Agulha Vermelha do Horário Atual ("AGORA") */}
-              {diaSelecionado === 27 && (
+              {diaSelecionado === hojeReal.getDate() && (
                 <div
                   className="absolute left-12 right-0 z-20 pointer-events-none flex items-center"
                   style={{ top: `${topAgoraPx}px` }}
@@ -354,7 +563,10 @@ export function AgendaScreen({
                 return (
                   <div
                     key={ev.id}
-                    onClick={() => openCard({ tipo: "compromisso", id: ev.id })}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      openCard({ tipo: "compromisso", id: ev.id });
+                    }}
                     style={{
                       top: `${topPx}px`,
                       height: `${heightRealPx}px`,

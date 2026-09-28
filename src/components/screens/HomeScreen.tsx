@@ -196,8 +196,9 @@ export function HomeScreen({
       ? Math.round((tarefasHojeConcluidas / tarefasHoje.length) * 100)
       : 0;
 
+  const diaHojeReal = new Date().getDate();
   const compromissosHoje = compromissos
-    .filter((c) => c.diaMes === 27)
+    .filter((c) => c.diaMes === diaHojeReal)
     .sort((a, b) => a.hora.localeCompare(b.hora));
 
   const formatTimer = (sec: number) => {

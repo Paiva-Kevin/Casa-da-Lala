@@ -25,10 +25,15 @@ const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
 
-// Session-scoped access token cache so page reloads keep Google Calendar & Drive active
-const SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
-const SESSION_CALENDAR_SCOPE_KEY = 'casa_lala_oauth_calendar_scope_v2';
-const SESSION_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v1';
+// Persistent storage keys (localStorage) so closing/reopening the app or using it offline keeps the user logged in
+const STORAGE_TOKEN_KEY = 'casa_lala_oauth_access_token_v3';
+const STORAGE_CALENDAR_SCOPE_KEY = 'casa_lala_oauth_calendar_scope_v3';
+const STORAGE_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v2';
+const STORAGE_USER_PROFILE_KEY = 'casa_lala_google_user_profile_v1';
+
+// Legacy sessionStorage keys for seamless migration
+const LEGACY_SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
+const LEGACY_SESSION_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v1';
 
 export interface ConnectedGoogleAccount {
   email: string;
@@ -53,21 +58,65 @@ const DEFAULT_ACCOUNT_COLORS = [
 let isSigningIn = false;
 let cachedAccessToken: string | null = (() => {
   try {
-    return sessionStorage.getItem(SESSION_TOKEN_KEY);
+    return (
+      localStorage.getItem(STORAGE_TOKEN_KEY) ||
+      sessionStorage.getItem(LEGACY_SESSION_TOKEN_KEY) ||
+      null
+    );
   } catch {
     return null;
   }
 })();
 
+export function getSavedGoogleUser(): GoogleUserProfile | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_USER_PROFILE_KEY);
+    if (raw) {
+      return JSON.parse(raw) as GoogleUserProfile;
+    }
+    const accounts = getConnectedGoogleAccounts();
+    if (accounts.length > 0) {
+      return {
+        uid: accounts[0].email,
+        displayName: accounts[0].displayName,
+        email: accounts[0].email,
+        photoURL: accounts[0].photoURL,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveGoogleUserProfile(user: GoogleUserProfile | null) {
+  try {
+    if (user) {
+      localStorage.setItem(STORAGE_USER_PROFILE_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(STORAGE_USER_PROFILE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
 export function getConnectedGoogleAccounts(): ConnectedGoogleAccount[] {
   try {
-    const raw = sessionStorage.getItem(SESSION_MULTI_ACCOUNTS_KEY);
+    const raw =
+      localStorage.getItem(STORAGE_MULTI_ACCOUNTS_KEY) ||
+      sessionStorage.getItem(LEGACY_SESSION_MULTI_ACCOUNTS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.map((a: Partial<ConnectedGoogleAccount>) => {
       const hex = a.corHex || a.colorHex || '#0284C7';
-      const isAtivo = a.ativo !== undefined ? a.ativo : a.active !== undefined ? a.active : true;
+      const isAtivo =
+        a.ativo !== undefined
+          ? a.ativo
+          : a.active !== undefined
+          ? a.active
+          : true;
       return {
         email: a.email || 'conta@gmail.com',
         displayName: a.displayName || a.email || 'Conta Google',
@@ -86,7 +135,8 @@ export function getConnectedGoogleAccounts(): ConnectedGoogleAccount[] {
 
 export function saveConnectedGoogleAccounts(accounts: ConnectedGoogleAccount[]) {
   try {
-    sessionStorage.setItem(SESSION_MULTI_ACCOUNTS_KEY, JSON.stringify(accounts));
+    localStorage.setItem(STORAGE_MULTI_ACCOUNTS_KEY, JSON.stringify(accounts));
+    sessionStorage.setItem(LEGACY_SESSION_MULTI_ACCOUNTS_KEY, JSON.stringify(accounts));
   } catch {
     // ignore
   }
@@ -185,13 +235,15 @@ function setCachedToken(token: string | null, hasCalendarScope = true) {
   cachedAccessToken = token;
   try {
     if (token) {
-      sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+      localStorage.setItem(STORAGE_TOKEN_KEY, token);
+      sessionStorage.setItem(LEGACY_SESSION_TOKEN_KEY, token);
       if (hasCalendarScope) {
-        sessionStorage.setItem(SESSION_CALENDAR_SCOPE_KEY, '1');
+        localStorage.setItem(STORAGE_CALENDAR_SCOPE_KEY, '1');
       }
     } else {
-      sessionStorage.removeItem(SESSION_TOKEN_KEY);
-      sessionStorage.removeItem(SESSION_CALENDAR_SCOPE_KEY);
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      localStorage.removeItem(STORAGE_CALENDAR_SCOPE_KEY);
+      sessionStorage.removeItem(LEGACY_SESSION_TOKEN_KEY);
     }
   } catch {
     // ignore storage errors
@@ -202,7 +254,7 @@ export function hasCalendarScopeGranted(): boolean {
   try {
     return (
       Boolean(cachedAccessToken) &&
-      sessionStorage.getItem(SESSION_CALENDAR_SCOPE_KEY) === '1'
+      localStorage.getItem(STORAGE_CALENDAR_SCOPE_KEY) === '1'
     );
   } catch {
     return Boolean(cachedAccessToken);
@@ -220,26 +272,38 @@ export const initAuth = (
   onAuthSuccess?: (user: GoogleUserProfile, token: string) => void,
   onAuthFailure?: () => void
 ) => {
+  // 1. Restore saved user immediately from localStorage so offline launch or page reload never requires re-login
+  const savedProfile = getSavedGoogleUser();
+  if (savedProfile && onAuthSuccess) {
+    onAuthSuccess(savedProfile, cachedAccessToken || '');
+  }
+
+  // 2. Listen to Firebase Auth state changes
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
+      const profile: GoogleUserProfile = {
+        uid: user.uid,
+        displayName: user.displayName,
+        email: user.email,
+        photoURL: user.photoURL,
+      };
+      saveGoogleUserProfile(profile);
       if (cachedAccessToken) {
-        const profile: GoogleUserProfile = {
-          uid: user.uid,
-          displayName: user.displayName,
-          email: user.email,
-          photoURL: user.photoURL,
-        };
         upsertConnectedGoogleAccount(profile, cachedAccessToken);
-        if (onAuthSuccess) {
-          onAuthSuccess(profile, cachedAccessToken);
-        }
-      } else if (!isSigningIn) {
-        setCachedToken(null);
-        if (onAuthFailure) onAuthFailure();
+      }
+      if (onAuthSuccess) {
+        onAuthSuccess(profile, cachedAccessToken || '');
       }
     } else {
-      setCachedToken(null);
-      if (onAuthFailure) onAuthFailure();
+      // Only treat as logged out if there is no saved offline profile and not currently signing in
+      const fallbackSaved = getSavedGoogleUser();
+      if (fallbackSaved) {
+        if (onAuthSuccess) {
+          onAuthSuccess(fallbackSaved, cachedAccessToken || '');
+        }
+      } else if (!isSigningIn) {
+        if (onAuthFailure) onAuthFailure();
+      }
     }
   });
 };
@@ -276,6 +340,7 @@ export const googleSignIn = async (
       photoURL: result.user.photoURL,
     };
 
+    saveGoogleUserProfile(userProfile);
     if (!cachedAccessToken || !selectAccount) {
       setCachedToken(credential.accessToken, true);
     }
@@ -365,13 +430,15 @@ export const signInWithCustomGISClient = (
           return;
         }
         setCachedToken(response.access_token, true);
+        const gisUser: GoogleUserProfile = {
+          uid: 'gis-user',
+          displayName: 'Conta Google Conectada (GIS)',
+          email: null,
+          photoURL: null,
+        };
+        saveGoogleUserProfile(gisUser);
         resolve({
-          user: {
-            uid: 'gis-user',
-            displayName: 'Conta Google Conectada (GIS)',
-            email: null,
-            photoURL: null,
-          },
+          user: gisUser,
           accessToken: response.access_token,
         });
       },
@@ -382,7 +449,25 @@ export const signInWithCustomGISClient = (
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  if (cachedAccessToken) return cachedAccessToken;
+  try {
+    const stored =
+      localStorage.getItem(STORAGE_TOKEN_KEY) ||
+      sessionStorage.getItem(LEGACY_SESSION_TOKEN_KEY);
+    if (stored) {
+      cachedAccessToken = stored;
+      return stored;
+    }
+    const accounts = getConnectedGoogleAccounts();
+    const firstWithToken = accounts.find((a) => a.ativo && a.accessToken);
+    if (firstWithToken?.accessToken) {
+      cachedAccessToken = firstWithToken.accessToken;
+      return firstWithToken.accessToken;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 };
 
 export const clearCachedAccessToken = () => {
@@ -395,7 +480,14 @@ export const logoutGoogleDrive = async () => {
   } catch {
     // ignore if signed in via custom GIS
   }
+  saveGoogleUserProfile(null);
   setCachedToken(null);
+  try {
+    localStorage.removeItem(STORAGE_MULTI_ACCOUNTS_KEY);
+    sessionStorage.removeItem(LEGACY_SESSION_MULTI_ACCOUNTS_KEY);
+  } catch {
+    // ignore
+  }
 };
 
 export interface DriveBackupFileMeta {
