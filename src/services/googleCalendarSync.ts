@@ -5,6 +5,8 @@
 import {
   getAccessToken,
   getConnectedGoogleAccounts,
+  invalidateExpiredToken,
+  trySilentTokenRefresh,
 } from './googleDriveSync';
 
 export interface CustomCalendarSource {
@@ -429,7 +431,7 @@ export async function listarEventosGoogleCalendarMes(
   await Promise.all(
     targets.map(async (target) => {
       try {
-        const res = await fetch(
+        let res = await fetch(
           `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
             target.calendarId
           )}/events?${params.toString()}`,
@@ -441,6 +443,27 @@ export async function listarEventosGoogleCalendarMes(
         );
 
         if (res.status === 401 || res.status === 403) {
+          invalidateExpiredToken(target.token);
+          const renewed = await trySilentTokenRefresh(
+            target.contaEmail !== 'primary' ? target.contaEmail : undefined
+          );
+          if (renewed) {
+            target.token = renewed;
+            res = await fetch(
+              `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+                target.calendarId
+              )}/events?${params.toString()}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${renewed}`,
+                },
+              }
+            );
+          }
+        }
+
+        if (res.status === 401 || res.status === 403) {
+          invalidateExpiredToken(target.token);
           let detail = '';
           try {
             const errJson = await res.json();
@@ -685,6 +708,7 @@ export async function criarEventoGoogleCalendar(
   );
 
   if (res.status === 401 || res.status === 403) {
+    invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }
 
@@ -734,6 +758,7 @@ export async function atualizarEventoGoogleCalendar(
   );
 
   if (res.status === 401 || res.status === 403) {
+    invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }
 
@@ -758,10 +783,11 @@ export async function atualizarEventoGoogleCalendar(
 
 export async function excluirEventoGoogleCalendar(
   gcalId: string,
-  calendarIdOrAccount?: string
+  calendarIdOrAccount?: string,
+  contaEmail?: string
 ): Promise<void> {
   const target = await resolveCalendarAuthTarget(
-    calendarIdOrAccount,
+    contaEmail || calendarIdOrAccount,
     calendarIdOrAccount
   );
 
@@ -778,6 +804,7 @@ export async function excluirEventoGoogleCalendar(
   );
 
   if (res.status === 401 || res.status === 403) {
+    invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }
 

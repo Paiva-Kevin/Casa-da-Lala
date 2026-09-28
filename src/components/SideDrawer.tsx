@@ -610,14 +610,31 @@ export function SideDrawer({
                   <FileImportChooserCard
                     t={t}
                     anexo={anexoPendenteRepo}
-                    processando={processandoAnexoRepo}
-                    onCancel={() => setAnexoPendenteRepo(null)}
-                    onChooseGuardar={(anexo, area) =>
-                      handleGuardarApenasNoRepositorio(anexo, area)
-                    }
-                    onChooseInterpretar={(anexo, instrucao) =>
-                      handleInterpretarEPreencherApp(anexo, instrucao)
-                    }
+                    compact
+                    onClear={() => setAnexoPendenteRepo(null)}
+                    onSaveOnly={(pastaDestino, tituloCustom) => {
+                      if (tituloCustom) setNovoArquivoTitulo(tituloCustom);
+                      handleGuardarApenasNoRepositorio(
+                        anexoPendenteRepo,
+                        pastaDestino
+                      );
+                    }}
+                    onConfirmImport={(
+                      intencao,
+                      instrucao,
+                      pastaDestino,
+                      guardarCopia
+                    ) => {
+                      void handleInterpretarEPreencherApp(
+                        {
+                          ...anexoPendenteRepo,
+                          intencao,
+                          areaRepositorio: pastaDestino,
+                          guardarCopiaNoSegundoCerebro: guardarCopia,
+                        },
+                        instrucao
+                      );
+                    }}
                   />
                 )}
 

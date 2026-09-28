@@ -66,14 +66,14 @@ function detectarCategoriaAutomatica(
     s.includes("agua") ||
     s.includes("internet")
   )
-    return "Contas Fixas";
+    return "Moradia & Fixos";
   if (
     s.includes("acordo") ||
     s.includes("parcela") ||
     s.includes("fatura") ||
     s.includes("emprest")
   )
-    return "Dívidas & Acordos";
+    return "Dívida";
   if (
     s.includes("cinema") ||
     s.includes("bar") ||
@@ -83,7 +83,7 @@ function detectarCategoriaAutomatica(
     s.includes("ifood") ||
     s.includes("restaurante")
   )
-    return "Lazer";
+    return "Lazer & Outros";
   return "Mercado";
 }
 

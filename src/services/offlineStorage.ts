@@ -125,6 +125,7 @@ export async function idbSetRecord<T>(
             updatedAt: now,
             updatedAtISO: new Date(now).toISOString(),
             syncStatus: 'pending',
+            lastError: null,
           };
           metaStore.put(updatedMeta);
           try {
@@ -147,10 +148,26 @@ export async function idbSetRecord<T>(
 }
 
 export async function getSyncMetadata(): Promise<SyncMetadata> {
+  const sanitizeMeta = (m: SyncMetadata): SyncMetadata => {
+    if (
+      m.lastError &&
+      (m.lastError.toLowerCase().includes('expirado') ||
+        m.lastError.includes('AUTH_REQUIRED') ||
+        m.lastError.toLowerCase().includes('oauth'))
+    ) {
+      return {
+        ...m,
+        lastError: null,
+        syncStatus: m.lastSyncedAt ? 'synced' : 'pending',
+      };
+    }
+    return m;
+  };
+
   const fallbackMeta = (): SyncMetadata => {
     try {
       const raw = localStorage.getItem(STORAGE_PREFIX + '__sync_meta');
-      if (raw) return JSON.parse(raw) as SyncMetadata;
+      if (raw) return sanitizeMeta(JSON.parse(raw) as SyncMetadata);
     } catch {
       // ignore
     }
@@ -173,7 +190,7 @@ export async function getSyncMetadata(): Promise<SyncMetadata> {
       const req = store.get('meta');
       req.onsuccess = () => {
         if (req.result) {
-          resolve(req.result as SyncMetadata);
+          resolve(sanitizeMeta(req.result as SyncMetadata));
         } else {
           resolve(fallbackMeta());
         }

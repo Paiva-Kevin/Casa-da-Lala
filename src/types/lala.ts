@@ -57,6 +57,7 @@ export interface PerfilUsuarioCalibrado {
 
 export type IntencaoImportacaoArquivo =
   | "auto"
+  | "interpretar"
   | "calendario"
   | "tarefas"
   | "financas"
@@ -138,11 +139,12 @@ export interface AcaoGovernanta {
       titulo: string;
       hora: string;
       duracaoMin?: number;
-      diaMes?: number;
+       diaMes?: number;
       mes?: number;
       ano?: number;
       local?: string;
-      categoria?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal";
+      categoria?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal" | "radar" | "rotina";
+      categoriaCalendario?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal" | "radar" | "rotina";
       sincronizarGoogle?: boolean;
     }[];
     refeicoes?: {
@@ -174,14 +176,18 @@ export interface AcaoGovernanta {
       nome: string;
       faturaAtual: number;
       limiteTotal?: number;
+      fechamentoDia?: number;
       vencimentoDia?: number;
     }[];
     petsAjuste?: {
       nome: string;
       racao?: string;
+      racaoTipo?: string;
       estoqueSaches?: number;
       estoqueRacaoKg?: number;
+      metaRefeicoesDia?: number;
       proximaVet?: string;
+      proximaVacina?: string;
     }[];
     estoquePetsAjuste?: {
       estoqueSaches?: number;
@@ -204,8 +210,24 @@ export interface AcaoGovernanta {
       tarefa: string;
       prazo?: string;
       prioridade?: "alta" | "média" | "baixa";
+      progresso?: number;
+      subtarefas?: string[];
+    }[];
+    projetosTrabalho?: {
+      nome: string;
+      papel?: string;
+      tarefa: string;
+      prazo?: string;
+      prioridade?: "alta" | "média" | "baixa";
+      progresso?: number;
+      subtarefas?: string[];
     }[];
     habitos?: {
+      titulo: string;
+      categoria?: "Saúde" | "Estudos" | "Casa & Pets" | "Mente";
+      metaTexto?: string;
+    }[];
+    habitosLista?: {
       titulo: string;
       categoria?: "Saúde" | "Estudos" | "Casa & Pets" | "Mente";
       metaTexto?: string;
@@ -216,13 +238,50 @@ export interface AcaoGovernanta {
       prazo?: string;
       marcos?: string[];
     }[];
+    metasLista?: {
+      titulo: string;
+      categoria?: string;
+      prazo?: string;
+      horizonte?: string;
+      progresso?: number;
+      metaAlvoTexto?: string;
+      marcos?: string[];
+    }[];
+    radarLista?: {
+      titulo: string;
+      area?: "UERJ" | "Trabalho" | "Casa & Pets" | "Corpo" | "Finanças";
+      dataEvento?: string;
+      diasRestantes?: number;
+      etapas?: string[];
+    }[];
     perfilCheckin?: {
       nomeUsuario?: string;
       cursoUERJ?: string;
+      periodoUERJ?: string;
       frentesTrabalho?: string;
       horasSono?: number;
       energiaFisica?: number;
       focoMental?: number;
+      metaHorasSono?: number;
+      metaProteinaG?: number;
+      metaKcal?: number;
+    };
+    checkinAjuste?: {
+      horasSono?: number;
+      qualidadeSono?: number;
+      energiaFisica?: number;
+      energia?: number;
+      focoMental?: number;
+      dorMuscular?: number;
+      estresse?: number;
+      hidratacaoLitros?: number;
+    };
+    perfilAjuste?: {
+      nomeUsuario?: string;
+      cursoUERJ?: string;
+      periodoUERJ?: string;
+      frentesTrabalho?: string;
+      metaHorasSono?: number;
       metaProteinaG?: number;
       metaKcal?: number;
     };
@@ -249,6 +308,7 @@ export interface InteracaoGovernanta {
   acoesPropostas?: AcaoGovernanta[];
   matrizDecisao?: MatrizDecisaoLala;
   guardadoNoCofre?: boolean;
+  sugestoesResposta?: string[];
 }
 
 export type AbaTipo = TabId;
@@ -318,8 +378,11 @@ export interface Compromisso {
   concluido?: boolean;
   recorrencia?: RecorrenciaCompromisso;
   serieRecorrenciaId?: string;
+  recorrenciaSerieId?: string;
   excecoesDatas?: string[]; // Datas "YYYY-MM-DD" excluídas ou separadas desta série
+  datasExcluidasRecorrencia?: string[];
   dataFimRecorrencia?: string; // Data limite "YYYY-MM-DD" (inclusive) quando a série foi dividida em "este e os seguintes"
+  recorrenciaAteData?: string;
 }
 
 // ---------- NO RADAR (7 A 14 DIAS) ----------

@@ -26,6 +26,11 @@ export interface LalaContextSnapshot {
   instrucoesPersonalizadasLala?: string;
   horarioAcordar?: string;
   horarioDormir?: string;
+  historicoConversa?: {
+    usuario: string;
+    lala: string;
+    dataHora?: string;
+  }[];
 }
 
 export async function lerArquivoParaAnexo(
@@ -286,14 +291,22 @@ export function detectarIntencaoNatural(
     return "orientacao";
   }
 
-  // 4. Consulta de status
+  // 4. Consulta de status ou saudação / bate-papo
   if (
+    /^(oi|olá|ola|opa|bom dia|boa tarde|boa noite|e aí|e ai|tudo bem|como vai|hey)\b/i.test(
+      lower.trim()
+    ) ||
     lower.includes("como está") ||
     lower.includes("como ta") ||
     lower.includes("resumo") ||
     lower.includes("briefing") ||
     lower.includes("quantos sachês") ||
-    lower.includes("quanto posso gastar")
+    lower.includes("quanto posso gastar") ||
+    lower.includes("bater papo") ||
+    lower.includes("conversar") ||
+    lower.includes("me conta") ||
+    lower.includes("quem é você") ||
+    lower.includes("o que você faz")
   ) {
     return "informacao";
   }
@@ -993,8 +1006,13 @@ export function processarMensagemLocalLala(
       tituloCard: "Acolhimento & Redução de Pressão",
       tags: ["Desabafo", "Cuidado", "Acolhimento"],
       guardadoNoCofre: true,
-      respostaLala: `Respira fundo, estou aqui com você. É totalmente compreensível você se sentir assim — olha o tanto de coisa que você carrega entre UERJ, trabalho no CDT/RCR, treinos e casa! Hoje sua prontidão física está em ${ctx.prontidaoScore}%. Não se cobre dar conta de tudo agora: se quiser, toque no botão abaixo para eu adiar todas as tarefas secundárias de hoje para a Semana, deixando apenas "${ctx.prioridade1}" (ou tire a próxima hora só para descansar).`,
+      respostaLala: `Respira fundo, estou aqui com você. É totalmente compreensível você se sentir assim — olha o tanto de coisa que você carrega entre UERJ, trabalho no CDT/RCR, treinos e casa! Hoje sua prontidão física está em ${ctx.prontidaoScore}%. Não se cobre dar conta de tudo agora: se quiser, toque no botão abaixo para eu adiar todas as tarefas secundárias de hoje para a Semana, deixando apenas "${ctx.prioridade1}" (ou me conta mais sobre o que está te pesando agora).`,
       acoesPropostas: acoes,
+      sugestoesResposta: [
+        "Alivia minha agenda de hoje, por favor",
+        "Quero só conversar um pouco sobre meu dia",
+        "Qual é a única coisa que não posso esquecer hoje?",
+      ],
     };
   }
 
@@ -1033,22 +1051,40 @@ export function processarMensagemLocalLala(
         ctx.tarefasHojeCount
       } tarefas na fila. Aqui está minha recomendação prática:`,
       acoesPropostas: acoes,
+      sugestoesResposta: [
+        "Vamos pelo Caminho A então!",
+        "Prefiro ir mais leve hoje",
+        "E como estão minhas finanças de hoje?",
+      ],
     };
   }
 
   if (modo === "informacao") {
+    const ehSaudacao = /^(oi|olá|ola|opa|bom dia|boa tarde|boa noite|e aí|e ai|tudo bem|como vai|hey)\b/i.test(
+      lower.trim()
+    );
+    const nome = ctx.nomeUsuario ? `, ${ctx.nomeUsuario}` : "";
     return {
       modo: "informacao",
       nomeAnexo: anexo?.nome,
       anexo,
-      tituloCard: "Panorama Atual da Casa da Lala",
-      tags: ["Resumo", "Panorama 360°"],
-      respostaLala: `Aqui está como estamos agora:\n• Corpo & Energia: Prontidão em ${ctx.prontidaoScore}% (${ctx.horasSono}h de sono).\n• Finanças: R$ ${ctx.dinheiroLivreHoje
-        .toFixed(2)
-        .replace(".", ",")} livres hoje.\n• Nina & Tobias: ${
-        ctx.sachesRestantes
-      } sachês Urinary no estoque.\n• Prioridade #1 de Hoje: "${ctx.prioridade1}".`,
+      tituloCard: ehSaudacao ? "Bate-papo com a Lala" : "Panorama Atual da Casa da Lala",
+      tags: ehSaudacao ? ["Bate-Papo", "Lala"] : ["Resumo", "Panorama 360°"],
+      respostaLala: ehSaudacao
+        ? `Oi${nome}! Que bom falar com você! Estou de olho em tudo por aqui: sua prontidão hoje está em ${ctx.prontidaoScore}% (${ctx.horasSono}h de sono), seu dinheiro livre hoje é R$ ${ctx.dinheiroLivreHoje
+            .toFixed(2)
+            .replace(".", ",")} e temos ${ctx.sachesRestantes} sachês para a Nina e o Tobias.\n\nSobre o que você quer conversar ou organizar agora? Pode me contar como está seu dia, planejar a semana, lançar gastos, agendar compromissos ou mandar arquivos!`
+        : `Aqui está como estamos agora:\n• Corpo & Energia: Prontidão em ${ctx.prontidaoScore}% (${ctx.horasSono}h de sono).\n• Finanças: R$ ${ctx.dinheiroLivreHoje
+            .toFixed(2)
+            .replace(".", ",")} livres hoje.\n• Nina & Tobias: ${
+            ctx.sachesRestantes
+          } sachês Urinary no estoque.\n• Prioridade #1 de Hoje: "${ctx.prioridade1}".\n\nQuer ajustar algum desses pontos comigo?`,
       acoesPropostas: acoes,
+      sugestoesResposta: [
+        "Me ajuda a organizar meu dia de hoje",
+        "Quero registrar um gasto que fiz agora",
+        "Estou meio cansada hoje, o que sugere?",
+      ],
     };
   }
 
@@ -1083,11 +1119,16 @@ export function processarMensagemLocalLala(
       modo: "devaneio",
       nomeAnexo: anexo?.nome,
       anexo,
-      tituloCard: `Ideia capturada: "${texto.slice(0, 36)}"`,
-      tags: ["Devaneio", "Ideia", "Memória"],
+      tituloCard: `Conversa & Ideia`,
+      tags: ["Bate-Papo", "Ideia", "Memória"],
       guardadoNoCofre: true,
-      respostaLala: `Anotei esse pensamento para você não perder! Se quiser amadurecer depois, guarde no Segundo Cérebro com 1 toque abaixo, ou já transforme em uma tarefa prática para hoje.`,
+      respostaLala: `Adorei você compartilhar isso comigo! Se quiser transformar esse pensamento em algo prático hoje ou guardar no Segundo Cérebro para não esquecer, já deixei os atalhos prontos aqui embaixo — ou pode continuar me contando mais que estou te ouvindo!`,
       acoesPropostas: acoes,
+      sugestoesResposta: [
+        "Guarda isso no Segundo Cérebro",
+        "Como encaixo isso na minha rotina da semana?",
+        "Me dá ideias de próximos passos pra isso",
+      ],
     };
   }
 
@@ -1111,8 +1152,13 @@ export function processarMensagemLocalLala(
     tags: anexo ? ["Arquivo", "Ação Rápida"] : ["Acesso Rápido", "Execução"],
     respostaLala: anexo
       ? `Analisei o arquivo "${anexo.nome}" e deixei as ações prontas abaixo para você confirmar com 1 toque.`
-      : `Prontinho! Identifiquei o que você precisa e deixei a ação engatilhada abaixo.`,
+      : `Prontinho! Identifiquei o que você precisa e deixei a ação engatilhada. Quer aproveitar e ajustar mais alguma coisa?`,
     acoesPropostas: acoes,
+    sugestoesResposta: [
+      "Como ficou meu resumo de hoje?",
+      "Agendar um compromisso na agenda",
+      "Dei sachê pra Nina e pro Tobias",
+    ],
   };
 }
 
@@ -1134,6 +1180,7 @@ export async function consultarLalaUnificada(
         body: JSON.stringify({
           mensagem: texto,
           contextoApp: ctx,
+          historicoConversa: ctx.historicoConversa,
           anexo,
         }),
       });
@@ -1212,6 +1259,9 @@ export async function consultarLalaUnificada(
             tags: data.tags || ["Lala"],
             respostaLala: data.respostaLala,
             matrizDecisao: data.matrizDecisao,
+            sugestoesResposta: Array.isArray(data.sugestoesResposta)
+              ? data.sugestoesResposta
+              : undefined,
             guardadoNoCofre:
               Boolean(anexo) ||
               modoDetectado === "devaneio" ||

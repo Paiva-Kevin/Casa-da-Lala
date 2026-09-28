@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   X,
   Mic,
@@ -10,12 +10,8 @@ import {
   ArrowRight,
   ExternalLink,
   Paperclip,
-  FileText,
-  FolderOpen,
-  Utensils,
-  GraduationCap,
-  Dumbbell,
   SlidersHorizontal,
+  MessageCircle,
 } from "lucide-react";
 import {
   AcaoGovernanta,
@@ -108,10 +104,10 @@ export function SmartBrainModal({
   const [gravandoVoz, setGravandoVoz] = useState(false);
   const [processando, setProcessando] = useState(false);
   const [anexoAtual, setAnexoAtual] = useState<AnexoLala | null>(null);
-  const [pastaGuardar] =
-    useState<ArquivoRepositorio["area"]>("Pessoal");
+  const [pastaGuardar] = useState<ArquivoRepositorio["area"]>("Pessoal");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const miniChatScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Campos manuais rápidos para Gasto
   const [gastoValor, setGastoValor] = useState("");
@@ -127,6 +123,15 @@ export function SmartBrainModal({
   const [tarefaCategoria, setTarefaCategoria] =
     useState<Exclude<TaskCategoryFilter, "todas">>("uerj");
   const [tarefaTravaP1, setTarefaTravaP1] = useState(false);
+
+  useEffect(() => {
+    if (open && abaRapida === "lala" && miniChatScrollRef.current) {
+      miniChatScrollRef.current.scrollTo({
+        top: miniChatScrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [open, abaRapida, interacoesLala.length, processando]);
 
   if (!open) return null;
 
@@ -146,7 +151,9 @@ export function SmartBrainModal({
     try {
       const lido = await lerArquivoParaAnexo(file, "auto", pastaGuardar);
       setAnexoAtual(lido);
-      showToast(`Arquivo "${file.name}" carregado! Escolha o que deseja fazer com ele.`);
+      showToast(
+        `Arquivo "${file.name}" carregado! Escolha o que deseja fazer com ele.`
+      );
     } catch {
       showToast("Não foi possível ler este arquivo.");
     } finally {
@@ -168,7 +175,7 @@ export function SmartBrainModal({
       tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
       urlOuConteudo:
         anexoAtual.textoExtraido?.slice(0, 240) ||
-        `Arquivo anexado (${formatarTamanhoBytes(anexoAtual.tamanhoBytes)}) — salvo via Acesso Rápido da Lala`,
+        `Arquivo anexado (${formatarTamanhoBytes(anexoAtual.tamanhoBytes)}) — salvo via Bate-Papo Rápido da Lala`,
       dataCriacao: "Hoje (via Lala)",
       fixado: true,
       statusLeitura: "Para Ler",
@@ -204,7 +211,9 @@ export function SmartBrainModal({
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         recognition.onresult = (event: any) => {
           const transcript = event.results?.[0]?.[0]?.transcript || "";
-          setTextoLivre((prev) => (prev ? `${prev} ${transcript}` : transcript));
+          setTextoLivre((prev) =>
+            prev ? `${prev} ${transcript}` : transcript
+          );
           setGravandoVoz(false);
         };
         recognition.onerror = () => {
@@ -303,6 +312,15 @@ export function SmartBrainModal({
       }
     }
 
+    const historicoConversa = [...interacoesLala]
+      .slice(0, 8)
+      .reverse()
+      .map((it) => ({
+        usuario: it.mensagemUsuario,
+        lala: it.respostaLala,
+        dataHora: it.dataHora,
+      }));
+
     const ctx = {
       nomeUsuario: perfilCalibrado?.nomeUsuario,
       prontidaoScore,
@@ -315,9 +333,11 @@ export function SmartBrainModal({
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
       tomLala: perfilCalibrado?.tomLala,
       autonomiaLala: perfilCalibrado?.autonomiaLala,
-      instrucoesPersonalizadasLala: perfilCalibrado?.instrucoesPersonalizadasLala,
+      instrucoesPersonalizadasLala:
+        perfilCalibrado?.instrucoesPersonalizadasLala,
       horarioAcordar: perfilCalibrado?.horarioAcordar,
       horarioDormir: perfilCalibrado?.horarioDormir,
+      historicoConversa,
     };
 
     try {
@@ -437,7 +457,18 @@ export function SmartBrainModal({
     onClose();
   };
 
+  const ultimasMensagensChat = [...interacoesLala.slice(0, 5)].reverse();
   const ultimaInteracao = interacoesLala[0];
+  const sugestoesRapidas =
+    ultimaInteracao?.sugestoesResposta &&
+    ultimaInteracao.sugestoesResposta.length > 0
+      ? ultimaInteracao.sugestoesResposta
+      : [
+          "Oi Lala! Como está meu dia hoje?",
+          "18,50 padaria no Pix",
+          "Agendar reunião amanhã às 14h",
+          "Tô cansada hoje, alivia meu dia?",
+        ];
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
@@ -448,27 +479,36 @@ export function SmartBrainModal({
       />
 
       <div
-        className="relative w-full max-w-[480px] rounded-t-[30px] p-5 pb-8 shadow-2xl space-y-3.5 max-h-[90vh] overflow-y-auto"
+        className="relative w-full max-w-[500px] rounded-t-[30px] p-5 pb-8 shadow-2xl space-y-3.5 max-h-[92vh] overflow-y-auto"
         style={{ background: t.card, color: t.text }}
       >
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-center gap-3">
-            <div
-              style={{
-                background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-                color: "#fff",
-              }}
-              className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
-            >
-              <Sparkles size={18} />
+            <div className="relative">
+              <div
+                style={{
+                  background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                  color: "#fff",
+                }}
+                className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
+              >
+                <Sparkles size={18} />
+              </div>
+              <span
+                className="w-2.5 h-2.5 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
+                style={{
+                  backgroundColor: "#22c55e",
+                  borderColor: t.card,
+                }}
+              />
             </div>
             <div>
               <h2 className="text-base font-bold leading-tight">
-                Lala · Acesso Rápido
+                Bate-Papo Rápido com a Lala
               </h2>
               <p style={{ color: t.textSoft }} className="text-[11px] mt-0.5">
-                Voz, texto, upload de arquivos/fotos (dieta, grade, notas) e
-                comandos
+                Converse por voz ou texto, tire dúvidas, lance comandos ou suba
+                arquivos
               </p>
             </div>
           </div>
@@ -494,14 +534,14 @@ export function SmartBrainModal({
           </div>
         </div>
 
-        {/* Abas Rápidas: Falar com a Lala (padrão) ou atalhos diretos */}
+        {/* Abas Rápidas: Bate-Papo com a Lala (padrão) ou atalhos diretos */}
         <div
           className="grid grid-cols-4 gap-1 p-1 rounded-2xl"
           style={{ background: t.cardSubtle }}
         >
           {(
             [
-              { id: "lala", label: "Lala (IA/Arq)", icon: Sparkles },
+              { id: "lala", label: "Bate-Papo", icon: MessageCircle },
               { id: "gasto", label: "+ Gasto", icon: Wallet },
               { id: "tarefa", label: "+ Tarefa", icon: CheckCircle2 },
               { id: "pets", label: "Nina/Tobias", icon: PawPrint },
@@ -524,6 +564,136 @@ export function SmartBrainModal({
 
         {abaRapida === "lala" && (
           <div className="space-y-3">
+            {/* MINI JANELA DE BATE-PAPO AO VIVO */}
+            <div
+              ref={miniChatScrollRef}
+              style={{ backgroundColor: t.bg, borderColor: t.border }}
+              className="p-3 rounded-2xl border space-y-3 max-h-[270px] overflow-y-auto"
+            >
+              {ultimasMensagensChat.map((item) => (
+                <div key={item.id} className="space-y-2">
+                  {/* Balão Usuária */}
+                  <div className="flex justify-end">
+                    <div
+                      style={{
+                        background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                        color: "#fff",
+                      }}
+                      className="max-w-[85%] rounded-2xl rounded-tr-xs px-3 py-2 text-xs leading-relaxed shadow-2xs"
+                    >
+                      <p>{item.mensagemUsuario}</p>
+                      <span className="block text-right text-[9px] font-mono opacity-80 mt-0.5">
+                        {item.dataHora}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Balão Lala */}
+                  <div className="flex items-start gap-2">
+                    <div
+                      style={{
+                        background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                        color: "#fff",
+                      }}
+                      className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0 text-[11px] font-bold mt-0.5"
+                    >
+                      L
+                    </div>
+                    <div
+                      style={{
+                        backgroundColor: t.card,
+                        borderColor: t.border,
+                        color: t.text,
+                      }}
+                      className="max-w-[88%] rounded-2xl rounded-tl-xs p-3 border space-y-2 shadow-2xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span
+                          style={{ color: t.primary }}
+                          className="text-[10px] font-bold flex items-center gap-1"
+                        >
+                          <Sparkles size={10} /> {item.tituloCard || "Lala"}
+                        </span>
+                        <span
+                          style={{ color: t.textSoft }}
+                          className="text-[9px] font-mono"
+                        >
+                          {item.dataHora}
+                        </span>
+                      </div>
+
+                      <p className="text-xs leading-relaxed whitespace-pre-line">
+                        {item.respostaLala}
+                      </p>
+
+                      {item.acoesPropostas &&
+                        item.acoesPropostas.length > 0 && (
+                          <div className="space-y-1.5 pt-1">
+                            {item.acoesPropostas.map((ac) => (
+                              <div
+                                key={ac.id}
+                                style={{
+                                  backgroundColor: t.cardSubtle,
+                                  borderColor: ac.executada
+                                    ? t.primary
+                                    : t.border,
+                                }}
+                                className="p-2 rounded-xl border flex items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <p className="text-[11px] font-bold truncate">
+                                    {ac.titulo}
+                                  </p>
+                                  <p
+                                    style={{ color: t.textSoft }}
+                                    className="text-[10px] truncate"
+                                  >
+                                    {ac.detalhe}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    executarAcaoDaLala(ac, item.id)
+                                  }
+                                  disabled={ac.executada}
+                                  style={{
+                                    backgroundColor: ac.executada
+                                      ? t.primary
+                                      : t.action,
+                                    color: "#fff",
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-80"
+                                >
+                                  {ac.executada ? (
+                                    <>
+                                      <CheckCircle2 size={11} /> Feito
+                                    </>
+                                  ) : (
+                                    <>
+                                      Confirmar <ArrowRight size={11} />
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {processando && (
+                <div className="flex items-center gap-2 text-xs animate-pulse px-2 py-1">
+                  <Sparkles size={13} style={{ color: t.primary }} />
+                  <span style={{ color: t.textSoft }}>
+                    A Lala está digitando...
+                  </span>
+                </div>
+              )}
+            </div>
+
             {/* Input oculto para qualquer arquivo ou foto */}
             <input
               ref={fileInputRef}
@@ -559,8 +729,10 @@ export function SmartBrainModal({
               />
             )}
 
+            {/* Barra de entrada do Bate-Papo */}
             <div className="flex gap-1.5 items-end">
               <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer border"
                 style={{
@@ -568,7 +740,7 @@ export function SmartBrainModal({
                   color: t.primary,
                   borderColor: anexoAtual ? t.primary : t.border,
                 }}
-                title="Anexar qualquer arquivo ou imagem (escolher importar ou guardar)"
+                title="Anexar qualquer arquivo ou imagem"
               >
                 <Paperclip size={18} />
               </button>
@@ -583,12 +755,13 @@ export function SmartBrainModal({
                     falarComALala();
                   }
                 }}
-                placeholder='Fale, digite ou anexe um arquivo no clipe 📎 para importar eventos, tarefas, gastos, compras ou guardar...'
+                placeholder="Bata um papo com a Lala, tire dúvidas, peça ações ou anexe no clipe 📎..."
                 className="flex-1 p-3 rounded-2xl text-xs outline-none resize-none leading-relaxed"
                 style={{ background: t.cardSubtle, color: t.text }}
               />
 
               <button
+                type="button"
                 onClick={iniciarReconhecimentoVoz}
                 className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer"
                 style={{
@@ -601,6 +774,7 @@ export function SmartBrainModal({
               </button>
 
               <button
+                type="button"
                 onClick={() => falarComALala()}
                 disabled={processando || (!textoLivre.trim() && !anexoAtual)}
                 className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
@@ -608,7 +782,7 @@ export function SmartBrainModal({
                   background: t.primary,
                   color: "#fff",
                 }}
-                title="Enviar para a Lala"
+                title="Enviar mensagem para a Lala"
               >
                 <Send size={17} />
               </button>
@@ -624,9 +798,10 @@ export function SmartBrainModal({
               </div>
             )}
 
-            {/* Barra rápida de Upload e Sugestões */}
+            {/* Sugestões Rápidas Clicáveis para Continuar o Bate-Papo */}
             <div className="flex flex-wrap gap-1.5">
               <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 cursor-pointer border"
                 style={{
@@ -635,17 +810,15 @@ export function SmartBrainModal({
                   borderColor: `${t.primary}35`,
                 }}
               >
-                <Paperclip size={11} /> Subir Arquivo / Foto (Importar ou Guardar)
+                <Paperclip size={11} /> Subir Arquivo / Foto
               </button>
-              {[
-                "18,50 padaria no Pix",
-                "Agendar reunião amanhã às 14h",
-                "Tô cansada hoje, alivia meu dia?",
-              ].map((sug) => (
+              {sugestoesRapidas.map((sug) => (
                 <button
                   key={sug}
-                  onClick={() => setTextoLivre(sug)}
-                  className="text-[11px] px-2.5 py-1 rounded-full cursor-pointer"
+                  type="button"
+                  disabled={processando}
+                  onClick={() => falarComALala(undefined, sug)}
+                  className="text-[11px] px-2.5 py-1 rounded-full cursor-pointer hover:opacity-90"
                   style={{ background: t.cardSubtle, color: t.textSoft }}
                 >
                   "{sug}"
@@ -653,97 +826,8 @@ export function SmartBrainModal({
               ))}
             </div>
 
-            {/* Resposta Imediata da Lala + Ações 1-Toque */}
-            {ultimaInteracao && (
-              <div
-                style={{ background: t.cardSubtle, borderColor: t.border }}
-                className="p-3.5 rounded-2xl border space-y-2.5"
-              >
-                <div className="flex items-center justify-between">
-                  <span
-                    style={{ color: t.primary }}
-                    className="text-[11px] font-bold flex items-center gap-1.5"
-                  >
-                    <Sparkles size={12} /> {ultimaInteracao.tituloCard || "Lala"}
-                  </span>
-                  <span
-                    style={{ color: t.textSoft }}
-                    className="text-[10px] font-mono"
-                  >
-                    {ultimaInteracao.dataHora}
-                  </span>
-                </div>
-
-                {ultimaInteracao.nomeAnexo && (
-                  <div
-                    style={{ backgroundColor: t.card, borderColor: t.border }}
-                    className="px-2.5 py-1.5 rounded-xl border text-[11px] flex items-center gap-1.5"
-                  >
-                    <Paperclip size={12} style={{ color: t.primary }} />
-                    <span className="font-semibold truncate">
-                      {ultimaInteracao.nomeAnexo}
-                    </span>
-                  </div>
-                )}
-
-                <p className="text-xs leading-relaxed whitespace-pre-line">
-                  {ultimaInteracao.respostaLala}
-                </p>
-
-                {ultimaInteracao.acoesPropostas &&
-                  ultimaInteracao.acoesPropostas.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      {ultimaInteracao.acoesPropostas.map((ac) => (
-                        <div
-                          key={ac.id}
-                          style={{
-                            backgroundColor: t.card,
-                            borderColor: ac.executada ? t.primary : t.border,
-                          }}
-                          className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-xs font-bold truncate">
-                              {ac.titulo}
-                            </p>
-                            <p
-                              style={{ color: t.textSoft }}
-                              className="text-[10px] truncate"
-                            >
-                              {ac.detalhe}
-                            </p>
-                          </div>
-                          <button
-                            onClick={() =>
-                              executarAcaoDaLala(ac, ultimaInteracao.id)
-                            }
-                            disabled={ac.executada}
-                            style={{
-                              backgroundColor: ac.executada
-                                ? t.primary
-                                : t.action,
-                              color: "#fff",
-                            }}
-                            className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-80"
-                          >
-                            {ac.executada ? (
-                              <>
-                                <CheckCircle2 size={12} /> Feito
-                              </>
-                            ) : (
-                              <>
-                                Confirmar <ArrowRight size={12} />
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-              </div>
-            )}
-
             <button
+              type="button"
               onClick={() => {
                 onClose();
                 irParaLalaCompleta();
@@ -755,7 +839,7 @@ export function SmartBrainModal({
               }}
               className="w-full py-2.5 rounded-2xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              <span>Abrir Histórico & Espaço Completo da Lala</span>
+              <span>Abrir Bate-Papo em Tela Cheia na Aba da Lala</span>
               <ExternalLink size={13} />
             </button>
           </div>

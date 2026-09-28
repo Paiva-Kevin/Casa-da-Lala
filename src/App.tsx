@@ -443,13 +443,21 @@ export default function App() {
         return;
       }
 
-      const token = await getAccessToken();
+      let token = await getAccessToken();
       if (!token) {
         if (!silentIfNoChanges) {
-          setNeedsAuth(true);
-          setSyncModalOpen(true);
+          const reauth = await googleSignIn(false, false);
+          if (reauth?.accessToken) {
+            token = reauth.accessToken;
+            setGoogleUser(reauth.user);
+            setNeedsAuth(false);
+          } else {
+            setSyncModalOpen(true);
+            return;
+          }
+        } else {
+          return;
         }
-        return;
       }
 
       try {
@@ -460,7 +468,25 @@ export default function App() {
         setSyncMeta(syncingState);
 
         const localPayload = await exportFullBackupPayload();
-        const remoteFile = await findDriveBackupFile(useAppDataFolder);
+        let remoteFile;
+        try {
+          remoteFile = await findDriveBackupFile(useAppDataFolder);
+        } catch (firstErr: unknown) {
+          const firstMsg =
+            firstErr instanceof Error ? firstErr.message : String(firstErr);
+          if (firstMsg === "AUTH_REQUIRED" && !silentIfNoChanges) {
+            const reauth = await googleSignIn(false, false);
+            if (reauth?.accessToken) {
+              setGoogleUser(reauth.user);
+              setNeedsAuth(false);
+              remoteFile = await findDriveBackupFile(useAppDataFolder);
+            } else {
+              throw firstErr;
+            }
+          } else {
+            throw firstErr;
+          }
+        }
 
         // If app_data.json does not exist yet on Drive, create it directly
         if (!remoteFile) {
@@ -501,6 +527,7 @@ export default function App() {
           const pendingState = await updateSyncMetadata({
             syncStatus: "pending",
             driveFileId: remoteFile.id,
+            lastError: null,
           });
           setSyncMeta(pendingState);
           setPendingConfirmation({
@@ -516,6 +543,7 @@ export default function App() {
           const pendingState = await updateSyncMetadata({
             syncStatus: "pending",
             driveFileId: remoteFile.id,
+            lastError: null,
           });
           setSyncMeta(pendingState);
           setPendingConfirmation({
@@ -540,21 +568,20 @@ export default function App() {
         const msg =
           err instanceof Error ? err.message : "Falha na comunicação com o Drive";
         if (msg === "AUTH_REQUIRED") {
-          if (!silentIfNoChanges) {
-            setNeedsAuth(true);
-          }
-          const errState = await updateSyncMetadata({
+          const cleanState = await updateSyncMetadata({
             syncStatus: "pending",
-            lastError: "Token OAuth expirado. Reconecte quando quiser sincronizar com o Drive.",
+            lastError: null,
           });
-          setSyncMeta(errState);
+          setSyncMeta(cleanState);
         } else {
           const errState = await updateSyncMetadata({
             syncStatus: "error",
             lastError: msg,
           });
           setSyncMeta(errState);
-          showToast("Erro ao sincronizar com Google Drive");
+          if (!silentIfNoChanges) {
+            showToast("Erro ao sincronizar com Google Drive");
+          }
         }
       }
     },
@@ -637,14 +664,38 @@ export default function App() {
   };
 
   const handleForcePushRequest = async () => {
-    const token = await getAccessToken();
+    let token = await getAccessToken();
     if (!token) {
-      setNeedsAuth(true);
-      return;
+      const reauth = await googleSignIn(false, false);
+      if (reauth?.accessToken) {
+        token = reauth.accessToken;
+        setGoogleUser(reauth.user);
+        setNeedsAuth(false);
+      } else {
+        return;
+      }
     }
     try {
       const localPayload = await exportFullBackupPayload();
-      const remoteFile = await findDriveBackupFile(useAppDataFolder);
+      let remoteFile;
+      try {
+        remoteFile = await findDriveBackupFile(useAppDataFolder);
+      } catch (firstErr: unknown) {
+        const firstMsg =
+          firstErr instanceof Error ? firstErr.message : String(firstErr);
+        if (firstMsg === "AUTH_REQUIRED") {
+          const reauth = await googleSignIn(false, false);
+          if (reauth?.accessToken) {
+            setGoogleUser(reauth.user);
+            setNeedsAuth(false);
+            remoteFile = await findDriveBackupFile(useAppDataFolder);
+          } else {
+            return;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
       if (!remoteFile) {
         const uploaded = await uploadDriveBackupContent(
           localPayload,
@@ -672,6 +723,7 @@ export default function App() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erro ao preparar envio";
+      if (msg === "AUTH_REQUIRED") return;
       const errState = await updateSyncMetadata({
         syncStatus: "error",
         lastError: msg,
@@ -681,14 +733,38 @@ export default function App() {
   };
 
   const handleForcePullRequest = async () => {
-    const token = await getAccessToken();
+    let token = await getAccessToken();
     if (!token) {
-      setNeedsAuth(true);
-      return;
+      const reauth = await googleSignIn(false, false);
+      if (reauth?.accessToken) {
+        token = reauth.accessToken;
+        setGoogleUser(reauth.user);
+        setNeedsAuth(false);
+      } else {
+        return;
+      }
     }
     try {
       const localPayload = await exportFullBackupPayload();
-      const remoteFile = await findDriveBackupFile(useAppDataFolder);
+      let remoteFile;
+      try {
+        remoteFile = await findDriveBackupFile(useAppDataFolder);
+      } catch (firstErr: unknown) {
+        const firstMsg =
+          firstErr instanceof Error ? firstErr.message : String(firstErr);
+        if (firstMsg === "AUTH_REQUIRED") {
+          const reauth = await googleSignIn(false, false);
+          if (reauth?.accessToken) {
+            setGoogleUser(reauth.user);
+            setNeedsAuth(false);
+            remoteFile = await findDriveBackupFile(useAppDataFolder);
+          } else {
+            return;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
       if (!remoteFile) {
         showToast("Nenhum arquivo app_data.json encontrado no Google Drive.");
         return;
@@ -704,6 +780,7 @@ export default function App() {
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erro ao buscar backup";
+      if (msg === "AUTH_REQUIRED") return;
       const errState = await updateSyncMetadata({
         syncStatus: "error",
         lastError: msg,
@@ -1597,7 +1674,7 @@ export default function App() {
                 copia.push({
                   id: Date.now() + Math.floor(Math.random() * 1000),
                   nome: aj.nome,
-                  tipo: "Conta Corrente",
+                  tipo: "Corrente / Pix",
                   saldoAtual: aj.saldoAtual,
                   cor: "primary",
                 });
@@ -1629,21 +1706,21 @@ export default function App() {
                   faturaAtual: aj.faturaAtual,
                   fechamentoDia: aj.fechamentoDia || 20,
                   vencimentoDia: aj.vencimentoDia || 28,
-                  cor: "alert",
+                  statusFatura: "aberta",
                 });
               }
             }
             return copia;
           });
         }
-        showToast(" Finanças e saldos atualizados pela Lala!");
+        showToast("Finanças e saldos atualizados pela Lala!");
         break;
       }
       case "REGISTRAR_RECEITA": {
         const val = acao.payload?.valor || 100;
         adicionarLancamento(
           val,
-          "Renda & Bolsa",
+          "Lazer & Outros",
           acao.payload?.texto || acao.titulo,
           "Conta / Pix",
           "realizado",
@@ -1666,7 +1743,25 @@ export default function App() {
             const ano = c.ano || hoje.getFullYear();
             const dataObj = new Date(ano, mes - 1, diaMes);
             const diaSemanaIdx = (dataObj.getDay() + 6) % 7;
-            const cat = c.categoriaCalendario || "rotina";
+            const rawCat = c.categoria || c.categoriaCalendario || "pessoal";
+            const cat: NonNullable<Compromisso["categoriaCalendario"]> =
+              rawCat === "uerj" ||
+              rawCat === "trabalho" ||
+              rawCat === "pets" ||
+              rawCat === "financas" ||
+              rawCat === "saude"
+                ? rawCat
+                : "pessoal";
+            const abaMapeada: Exclude<TabId, "inicio"> =
+              cat === "uerj" || cat === "trabalho"
+                ? "estudos_trabalho"
+                : cat === "pets"
+                ? "casa_rotinas"
+                : cat === "financas"
+                ? "financas"
+                : cat === "saude"
+                ? "saude_pets"
+                : "calendario";
             return {
               id: Date.now() + idx,
               hora: c.hora || "09:00",
@@ -1680,17 +1775,10 @@ export default function App() {
                   ? "action"
                   : cat === "financas"
                   ? "finance"
-                  : cat === "radar"
+                  : rawCat === "radar"
                   ? "alert"
                   : "primary",
-              aba:
-                cat === "uerj"
-                  ? "estudos_trabalho"
-                  : cat === "pets"
-                  ? "casa_rotinas"
-                  : cat === "financas"
-                  ? "financas"
-                  : "inicio",
+              aba: abaMapeada,
               diaMes,
               mes,
               ano,
@@ -1736,11 +1824,16 @@ export default function App() {
       case "ATUALIZAR_PETS": {
         if (acao.payload?.estoquePetsAjuste) {
           const saches = acao.payload.estoquePetsAjuste.estoqueSaches;
-          if (typeof saches === "number") {
-            setPetsPerfil((prev) =>
-              prev.map((p) => ({ ...p, estoqueSaches: saches }))
-            );
-          }
+          const racaoKg = acao.payload.estoquePetsAjuste.estoqueRacaoKg;
+          setPetsPerfil((prev) =>
+            prev.map((p) => ({
+              ...p,
+              estoqueSaches:
+                typeof saches === "number" ? saches : p.estoqueSaches,
+              estoqueRacaoKg:
+                typeof racaoKg === "number" ? racaoKg : p.estoqueRacaoKg,
+            }))
+          );
         }
         if (acao.payload?.petsAjuste && acao.payload.petsAjuste.length > 0) {
           setPetsPerfil((prev) => {
@@ -1752,28 +1845,31 @@ export default function App() {
               if (idx >= 0) {
                 copia[idx] = {
                   ...copia[idx],
-                  racaoTipo: pj.racaoTipo ?? copia[idx].racaoTipo,
+                  racao: pj.racao ?? pj.racaoTipo ?? copia[idx].racao,
                   estoqueSaches: pj.estoqueSaches ?? copia[idx].estoqueSaches,
+                  estoqueRacaoKg:
+                    pj.estoqueRacaoKg ?? copia[idx].estoqueRacaoKg,
                   metaRefeicoesDia:
                     pj.metaRefeicoesDia ?? copia[idx].metaRefeicoesDia,
-                  proximaVacina: pj.proximaVacina ?? copia[idx].proximaVacina,
+                  proximaVet:
+                    pj.proximaVet ?? pj.proximaVacina ?? copia[idx].proximaVet,
                 };
               } else {
                 copia.push({
                   id: Date.now() + Math.floor(Math.random() * 1000),
                   nome: pj.nome,
-                  especie: "Gato(a)",
-                  pesoKg: 4.2,
-                  racaoTipo: pj.racaoTipo || "Ração Super Premium",
-                  metaRefeicoesDia: pj.metaRefeicoesDia || 3,
+                  racao: pj.racao || pj.racaoTipo || "Ração Super Premium",
+                  consumoRacaoGramasDia: 65,
+                  consumoSachesDia: 1,
+                  proximaVet: pj.proximaVet || pj.proximaVacina || "Em dia",
+                  estoqueSaches: pj.estoqueSaches ?? 10,
+                  estoqueRacaoKg: pj.estoqueRacaoKg ?? 3,
                   alimentadoHojeRefeicoes: 0,
                   sachesDadosHoje: 0,
-                  metaSachesDia: 1,
-                  estoqueSaches: pj.estoqueSaches ?? 10,
-                  estoqueRacaoKg: 3,
-                  EstoqueAreiaKg: 4,
-                  proximaVacina: pj.proximaVacina || "Em dia",
-                  notasSaude: "Cadastrado via Lala",
+                  metaRefeicoesDia: pj.metaRefeicoesDia || 3,
+                  historicoPeso: [{ data: "Hoje", pesoKg: 4.2 }],
+                  cuidados: [],
+                  observacoes: "Cadastrado via Lala",
                 });
               }
             }
@@ -1817,26 +1913,24 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_PROJETOS_TRABALHO": {
-        if (
-          acao.payload?.projetosTrabalho &&
-          acao.payload.projetosTrabalho.length > 0
-        ) {
-          const novosProjs: ProjetoTrabalho[] =
-            acao.payload.projetosTrabalho.map((p, idx) => ({
-              id: Date.now() + idx,
-              nome: p.nome,
-              papel: p.papel || "Responsável",
-              tarefa: p.tarefa,
-              status: "Em andamento",
-              prazo: p.prazo || "Esta semana",
-              progresso: p.progresso ?? 20,
-              subtarefas: (p.subtarefas || [p.tarefa]).map((st, sIdx) => ({
-                id: Date.now() + idx * 20 + sIdx,
-                texto: st,
-                feito: false,
-              })),
-              anotacoes: "Criado conversando com a Lala",
-            }));
+        const listaProjs =
+          acao.payload?.projetos || acao.payload?.projetosTrabalho || [];
+        if (listaProjs.length > 0) {
+          const novosProjs: ProjetoTrabalho[] = listaProjs.map((p, idx) => ({
+            id: Date.now() + idx,
+            nome: p.nome,
+            papel: p.papel || "Responsável",
+            tarefa: p.tarefa,
+            prioridade: p.prioridade || "alta",
+            statusProjeto: "Em Produção",
+            prazo: p.prazo || "Esta semana",
+            subtarefas: (p.subtarefas || [p.tarefa]).map((st, sIdx) => ({
+              id: Date.now() + idx * 20 + sIdx,
+              texto: st,
+              feito: false,
+            })),
+            notas: "Criado conversando com a Lala",
+          }));
           setProjetos((prev) =>
             acao.payload?.substituirExistentes
               ? novosProjs
@@ -1847,24 +1941,21 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_HABITOS": {
-        if (
-          acao.payload?.habitosLista &&
-          acao.payload.habitosLista.length > 0
-        ) {
-          const novosHabitos: HabitoDiario[] = acao.payload.habitosLista.map(
-            (h, idx) => ({
-              id: Date.now() + idx,
-              titulo: h.titulo,
-              icone: "sparkles",
-              categoria: h.categoria || "Rotina",
-              cor: "primary",
-              feitoHoje: false,
-              streakAtual: 0,
-              melhorStreak: 0,
-              historicoSemana: [false, false, false, false, false, false, false],
-              metaTexto: h.metaTexto || "Diário",
-            })
-          );
+        const listaHabitos =
+          acao.payload?.habitos || acao.payload?.habitosLista || [];
+        if (listaHabitos.length > 0) {
+          const novosHabitos: HabitoDiario[] = listaHabitos.map((h, idx) => ({
+            id: Date.now() + idx,
+            titulo: h.titulo,
+            icone: "sparkles",
+            categoria: h.categoria || "Saúde",
+            cor: "primary",
+            feitoHoje: false,
+            streakAtual: 0,
+            melhorStreak: 0,
+            historicoSemana: [false, false, false, false, false, false, false],
+            metaTexto: h.metaTexto || "Diário",
+          }));
           setHabitos((prev) =>
             acao.payload?.substituirExistentes
               ? novosHabitos
@@ -1875,17 +1966,23 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_METAS_RADAR": {
-        if (acao.payload?.metasLista && acao.payload.metasLista.length > 0) {
-          const novasMetas: MetaItem[] = acao.payload.metasLista.map(
-            (m, idx) => ({
-              id: Date.now() + idx,
-              titulo: m.titulo,
-              horizonte: m.horizonte || "mes",
-              progresso: m.progresso ?? 10,
-              metaAlvoTexto: m.metaAlvoTexto || "Concluir objetivo",
-              cor: "primary",
-            })
-          );
+        const listaMetas =
+          acao.payload?.metas || acao.payload?.metasLista || [];
+        if (listaMetas.length > 0) {
+          const novasMetas: MetaItem[] = listaMetas.map((m, idx) => ({
+            id: Date.now() + idx,
+            titulo: m.titulo,
+            categoria: m.categoria || "Pessoal",
+            prazo: m.prazo || "Este semestre",
+            cor: "primary",
+            marcos: (m.marcos || ["Definir primeira entrega", "Concluir etapa final"]).map(
+              (mc, mIdx) => ({
+                id: Date.now() + idx * 10 + mIdx,
+                texto: mc,
+                concluido: false,
+              })
+            ),
+          }));
           setMetas((prev) => [...novasMetas, ...prev]);
         }
         if (acao.payload?.radarLista && acao.payload.radarLista.length > 0) {
@@ -1893,14 +1990,16 @@ export default function App() {
             (r, idx) => ({
               id: Date.now() + 200 + idx,
               titulo: r.titulo,
-              area: r.area || "Pessoal",
+              area: r.area || "UERJ",
               dataEvento: r.dataEvento || "Em breve",
               diasRestantes: r.diasRestantes ?? 7,
               cor: "alert",
               etapas: (r.etapas || ["Preparar entrega"]).map((et, eIdx) => ({
                 id: Date.now() + idx * 20 + eIdx,
+                diasAntes: 3,
+                rotuloTempo: "D-3",
                 acao: et,
-                quando: "Esta semana",
+                concluida: false,
                 enviadaParaHoje: false,
               })),
             })
@@ -1912,19 +2011,24 @@ export default function App() {
       }
       case "ATUALIZAR_PERFIL_CHECKIN":
       case "ATUALIZAR_CHECKIN_SAUDE": {
-        if (acao.payload?.checkinAjuste) {
-          const cj = acao.payload.checkinAjuste;
+        const pc = acao.payload?.perfilCheckin;
+        const cj = acao.payload?.checkinAjuste;
+        if (pc || cj) {
           setCheckin((prev) => ({
             ...prev,
-            horasSono: cj.horasSono ?? prev.horasSono,
-            energia: cj.energia ?? prev.energia,
-            dorMuscular: cj.dorMuscular ?? prev.dorMuscular,
-            estresse: cj.estresse ?? prev.estresse,
-            hidratacaoLitros: cj.hidratacaoLitros ?? prev.hidratacaoLitros,
+            horasSono: pc?.horasSono ?? cj?.horasSono ?? prev.horasSono,
+            qualidadeSono: cj?.qualidadeSono ?? prev.qualidadeSono,
+            energiaFisica:
+              pc?.energiaFisica ??
+              cj?.energiaFisica ??
+              cj?.energia ??
+              prev.energiaFisica,
+            focoMental: pc?.focoMental ?? cj?.focoMental ?? prev.focoMental,
+            realizadoHoje: true,
           }));
         }
-        if (acao.payload?.perfilAjuste) {
-          const pf = acao.payload.perfilAjuste;
+        const pf = acao.payload?.perfilAjuste || acao.payload?.perfilCheckin;
+        if (pf) {
           setPerfilCalibrado((prev) => ({
             ...prev,
             nomeUsuario: pf.nomeUsuario ?? prev.nomeUsuario,
@@ -1941,8 +2045,8 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_PERFIL": {
-        if (acao.payload?.perfilAjuste) {
-          const pf = acao.payload.perfilAjuste;
+        const pf = acao.payload?.perfilAjuste || acao.payload?.perfilCheckin;
+        if (pf) {
           setPerfilCalibrado((prev) => ({
             ...prev,
             nomeUsuario: pf.nomeUsuario ?? prev.nomeUsuario,
@@ -2533,6 +2637,7 @@ export default function App() {
                 checkin={checkin}
                 disciplinas={disciplinas}
                 projetos={projetos}
+                perfilCalibrado={perfilCalibrado}
                 executarAcaoDaLala={executarAcaoDaLala}
                 onOpenCalibracao={() => setCalibracaoOpen(true)}
                 showToast={showToast}
@@ -2798,6 +2903,7 @@ export default function App() {
         checkin={checkin}
         disciplinas={disciplinas}
         projetos={projetos}
+        perfilCalibrado={perfilCalibrado}
         themeMode={themeMode}
         setThemeMode={setThemeMode}
         irParaLalaCompleta={() => setActiveTab("governanta_lala")}

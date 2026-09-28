@@ -28,6 +28,7 @@ SCOPES.forEach((scope) => provider.addScope(scope));
 
 // Persistent storage keys (localStorage) so closing/reopening the app or using it offline keeps the user logged in
 const STORAGE_TOKEN_KEY = 'casa_lala_oauth_access_token_v3';
+const STORAGE_TOKEN_EXPIRES_AT_KEY = 'casa_lala_oauth_token_expires_at_v1';
 const STORAGE_CALENDAR_SCOPE_KEY = 'casa_lala_oauth_calendar_scope_v3';
 const STORAGE_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v2';
 const STORAGE_USER_PROFILE_KEY = 'casa_lala_google_user_profile_v1';
@@ -37,11 +38,15 @@ const STORAGE_EXPLICIT_LOGOUT_KEY = 'casa_lala_explicit_logout_v1';
 const LEGACY_SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
 const LEGACY_SESSION_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v1';
 
+// Google OAuth2 access tokens last 3600s (60 min); we treat 54 min as fresh
+const TOKEN_TTL_MS = 54 * 60 * 1000;
+
 export interface ConnectedGoogleAccount {
   email: string;
   displayName: string;
   photoURL: string | null;
   accessToken: string;
+  expiresAt?: number;
   corHex: string;
   colorHex: string;
   ativo: boolean;
@@ -68,8 +73,27 @@ export function cancelOngoingSignIn() {
   }
 }
 
+function isStoredTokenExpired(): boolean {
+  try {
+    const expRaw = localStorage.getItem(STORAGE_TOKEN_EXPIRES_AT_KEY);
+    if (!expRaw) return false;
+    const exp = Number(expRaw);
+    if (!isNaN(exp) && exp > 0 && Date.now() > exp) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 let cachedAccessToken: string | null = (() => {
   try {
+    if (isStoredTokenExpired()) {
+      localStorage.removeItem(STORAGE_TOKEN_KEY);
+      sessionStorage.removeItem(LEGACY_SESSION_TOKEN_KEY);
+      return null;
+    }
     return (
       localStorage.getItem(STORAGE_TOKEN_KEY) ||
       sessionStorage.getItem(LEGACY_SESSION_TOKEN_KEY) ||
@@ -276,31 +300,153 @@ export async function connectAdditionalGoogleAccount(): Promise<{
   }
 }
 
-function setCachedToken(token: string | null, hasCalendarScope = true) {
+function setCachedToken(
+  token: string | null,
+  hasCalendarScope = true,
+  clearScopeFlag = false
+) {
   cachedAccessToken = token;
   try {
     if (token) {
+      const expiresAt = Date.now() + TOKEN_TTL_MS;
       localStorage.setItem(STORAGE_TOKEN_KEY, token);
+      localStorage.setItem(STORAGE_TOKEN_EXPIRES_AT_KEY, String(expiresAt));
       sessionStorage.setItem(LEGACY_SESSION_TOKEN_KEY, token);
       if (hasCalendarScope) {
         localStorage.setItem(STORAGE_CALENDAR_SCOPE_KEY, '1');
       }
     } else {
       localStorage.removeItem(STORAGE_TOKEN_KEY);
-      localStorage.removeItem(STORAGE_CALENDAR_SCOPE_KEY);
+      localStorage.removeItem(STORAGE_TOKEN_EXPIRES_AT_KEY);
       sessionStorage.removeItem(LEGACY_SESSION_TOKEN_KEY);
+      if (clearScopeFlag) {
+        localStorage.removeItem(STORAGE_CALENDAR_SCOPE_KEY);
+      }
     }
   } catch {
     // ignore storage errors
   }
 }
 
+export function invalidateExpiredToken(expiredToken?: string | null) {
+  if (!expiredToken || cachedAccessToken === expiredToken) {
+    setCachedToken(null, true, false);
+  }
+  try {
+    const accounts = getConnectedGoogleAccounts();
+    if (accounts.length > 0) {
+      const updated = accounts.map((a) =>
+        !expiredToken || a.accessToken === expiredToken
+          ? { ...a, accessToken: '' }
+          : a
+      );
+      saveConnectedGoogleAccounts(updated);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+let silentRefreshPromise: Promise<string | null> | null = null;
+
+// Attempts a silent (zero-popup) token renewal via Google Identity Services if available
+export function trySilentTokenRefresh(
+  hintEmail?: string | null
+): Promise<string | null> {
+  if (silentRefreshPromise) return silentRefreshPromise;
+
+  silentRefreshPromise = new Promise<string | null>((resolve) => {
+    try {
+      const win = window as unknown as {
+        google?: {
+          accounts?: {
+            oauth2?: {
+              initTokenClient: (config: {
+                client_id: string;
+                scope: string;
+                hint?: string;
+                prompt?: string;
+                callback: (resp: {
+                  access_token?: string;
+                  error?: string;
+                }) => void;
+                error_callback?: () => void;
+              }) => { requestAccessToken: (opts?: { prompt?: string; hint?: string }) => void };
+            };
+          };
+        };
+      };
+
+      const customClientId = (() => {
+        try {
+          return localStorage.getItem('casa_lala_custom_gis_client_id') || '';
+        } catch {
+          return '';
+        }
+      })();
+      const clientId =
+        customClientId.trim() ||
+        (firebaseConfig as { oAuthClientId?: string }).oAuthClientId ||
+        '';
+
+      if (!win.google?.accounts?.oauth2 || !clientId) {
+        resolve(null);
+        return;
+      }
+
+      const emailHint =
+        hintEmail ||
+        auth.currentUser?.email ||
+        getSavedGoogleUser()?.email ||
+        undefined;
+
+      let settled = false;
+      const finish = (tok: string | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(tok);
+      };
+
+      const timer = window.setTimeout(() => finish(null), 2800);
+
+      const tokenClient = win.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: SCOPES.join(' '),
+        hint: emailHint,
+        prompt: '',
+        callback: (resp) => {
+          window.clearTimeout(timer);
+          if (resp?.access_token && !resp.error) {
+            setCachedToken(resp.access_token, true);
+            const saved = getSavedGoogleUser();
+            if (saved) {
+              upsertConnectedGoogleAccount(saved, resp.access_token);
+            }
+            finish(resp.access_token);
+          } else {
+            finish(null);
+          }
+        },
+        error_callback: () => {
+          window.clearTimeout(timer);
+          finish(null);
+        },
+      });
+
+      tokenClient.requestAccessToken({ prompt: '', hint: emailHint });
+    } catch {
+      resolve(null);
+    }
+  }).finally(() => {
+    silentRefreshPromise = null;
+  });
+
+  return silentRefreshPromise;
+}
+
 export function hasCalendarScopeGranted(): boolean {
   try {
-    return (
-      Boolean(cachedAccessToken) &&
-      localStorage.getItem(STORAGE_CALENDAR_SCOPE_KEY) === '1'
-    );
+    return localStorage.getItem(STORAGE_CALENDAR_SCOPE_KEY) === '1';
   } catch {
     return Boolean(cachedAccessToken);
   }
@@ -335,6 +481,13 @@ export const initAuth = (
       saveGoogleUserProfile(profile);
       if (cachedAccessToken) {
         upsertConnectedGoogleAccount(profile, cachedAccessToken);
+      } else {
+        // Attempt silent token renewal in background without blocking or showing errors
+        trySilentTokenRefresh(user.email).then((renewed) => {
+          if (renewed) {
+            upsertConnectedGoogleAccount(profile, renewed);
+          }
+        });
       }
       if (onAuthSuccess) {
         onAuthSuccess(profile, cachedAccessToken || '');
@@ -365,10 +518,21 @@ export const googleSignIn = async (
     isSigningIn = true;
     const authProvider = new GoogleAuthProvider();
     SCOPES.forEach((scope) => authProvider.addScope(scope));
+    const savedEmail =
+      auth.currentUser?.email || getSavedGoogleUser()?.email || undefined;
+    const customParams: Record<string, string> = {};
     if (selectAccount) {
-      authProvider.setCustomParameters({ prompt: 'select_account consent' });
-    } else if (forceConsent || !hasCalendarScopeGranted()) {
-      authProvider.setCustomParameters({ prompt: 'consent' });
+      customParams.prompt = 'select_account consent';
+    } else {
+      if (savedEmail) {
+        customParams.login_hint = savedEmail;
+      }
+      if (forceConsent || !hasCalendarScopeGranted()) {
+        customParams.prompt = 'consent';
+      }
+    }
+    if (Object.keys(customParams).length > 0) {
+      authProvider.setCustomParameters(customParams);
     }
     const result = await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -494,6 +658,9 @@ export const signInWithCustomGISClient = (
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
+  if (isStoredTokenExpired()) {
+    invalidateExpiredToken(cachedAccessToken);
+  }
   if (cachedAccessToken) return cachedAccessToken;
   try {
     const stored =
@@ -512,21 +679,29 @@ export const getAccessToken = async (): Promise<string | null> => {
   } catch {
     // ignore
   }
+  // Attempt a non-interactive silent refresh before returning null
+  const refreshed = await trySilentTokenRefresh();
+  if (refreshed) return refreshed;
   return null;
 };
 
 export const clearCachedAccessToken = () => {
-  setCachedToken(null);
+  invalidateExpiredToken();
 };
 
 export const logoutGoogleDrive = async () => {
+  try {
+    localStorage.setItem(STORAGE_EXPLICIT_LOGOUT_KEY, '1');
+  } catch {
+    // ignore
+  }
   try {
     await auth.signOut();
   } catch {
     // ignore if signed in via custom GIS
   }
   saveGoogleUserProfile(null);
-  setCachedToken(null);
+  setCachedToken(null, false, true);
   try {
     localStorage.removeItem(STORAGE_MULTI_ACCOUNTS_KEY);
     sessionStorage.removeItem(LEGACY_SESSION_MULTI_ACCOUNTS_KEY);
@@ -546,7 +721,7 @@ export interface DriveBackupFileMeta {
 export async function findDriveBackupFile(
   useAppDataFolder = false
 ): Promise<DriveBackupFileMeta | null> {
-  const token = await getAccessToken();
+  let token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
   const spaces = useAppDataFolder ? 'appDataFolder' : 'drive';
@@ -555,15 +730,26 @@ export async function findDriveBackupFile(
   );
   const url = `https://www.googleapis.com/drive/v3/files?spaces=${spaces}&q=${query}&fields=files(id,name,modifiedTime,size)&orderBy=modifiedTime desc&pageSize=1`;
 
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
 
   if (res.status === 401 || res.status === 403) {
-    cachedAccessToken = null;
-    throw new Error('AUTH_REQUIRED');
+    invalidateExpiredToken(token);
+    token = await trySilentTokenRefresh();
+    if (token) {
+      res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    }
+    if (!token || res.status === 401 || res.status === 403) {
+      invalidateExpiredToken(token);
+      throw new Error('AUTH_REQUIRED');
+    }
   }
 
   if (!res.ok) {
@@ -579,19 +765,30 @@ export async function findDriveBackupFile(
 export async function downloadDriveBackupContent(
   fileId: string
 ): Promise<AppBackupPayload> {
-  const token = await getAccessToken();
+  let token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
     },
   });
 
   if (res.status === 401 || res.status === 403) {
-    cachedAccessToken = null;
-    throw new Error('AUTH_REQUIRED');
+    invalidateExpiredToken(token);
+    token = await trySilentTokenRefresh();
+    if (token) {
+      res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    }
+    if (!token || res.status === 401 || res.status === 403) {
+      invalidateExpiredToken(token);
+      throw new Error('AUTH_REQUIRED');
+    }
   }
 
   if (!res.ok) {
@@ -608,7 +805,7 @@ export async function uploadDriveBackupContent(
   existingFileId?: string | null,
   useAppDataFolder = false
 ): Promise<DriveBackupFileMeta> {
-  const token = await getAccessToken();
+  let token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
   const metadata: Record<string, unknown> = {
@@ -641,7 +838,7 @@ export async function uploadDriveBackupContent(
 
   const method = existingFileId ? 'PATCH' : 'POST';
 
-  const res = await fetch(endpoint, {
+  let res = await fetch(endpoint, {
     method,
     headers: {
       Authorization: `Bearer ${token}`,
@@ -651,8 +848,22 @@ export async function uploadDriveBackupContent(
   });
 
   if (res.status === 401 || res.status === 403) {
-    cachedAccessToken = null;
-    throw new Error('AUTH_REQUIRED');
+    invalidateExpiredToken(token);
+    token = await trySilentTokenRefresh();
+    if (token) {
+      res = await fetch(endpoint, {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body,
+      });
+    }
+    if (!token || res.status === 401 || res.status === 403) {
+      invalidateExpiredToken(token);
+      throw new Error('AUTH_REQUIRED');
+    }
   }
 
   if (!res.ok) {

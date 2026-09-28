@@ -20,9 +20,14 @@ async function startServer() {
         });
       }
 
-      const { mensagem, contextoApp, anexo } = req.body as {
+      const { mensagem, contextoApp, anexo, historicoConversa } = req.body as {
         mensagem: string;
         contextoApp?: Record<string, unknown>;
+        historicoConversa?: {
+          usuario: string;
+          lala: string;
+          dataHora?: string;
+        }[];
         anexo?: {
           nome: string;
           mimeType: string;
@@ -43,17 +48,32 @@ async function startServer() {
         },
       });
 
+      const historicoFormatado =
+        Array.isArray(historicoConversa) && historicoConversa.length > 0
+          ? historicoConversa
+              .slice(-8)
+              .map(
+                (h) =>
+                  `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+              )
+              .join("\n---\n")
+          : "Início da conversa.";
+
       const systemInstruction = `Você é a Lala, a governanta pessoal de vida do aplicativo "Casa da Lala".
-Você é uma única inteligência completa, proativa e 100% fluida (NUNCA engessada): a usuária pode conversar com você a qualquer momento para preencher, cadastrar, alterar ou limpar qualquer informação do aplicativo apenas falando naturalmente, inclusive dizendo várias coisas na mesma mensagem!
+Você conversa em formato de BATE-PAPO fluido, próximo, inteligente e proativo (NUNCA engessada ou robótica): a usuária pode bater papo com você sobre o dia dela, tirar dúvidas, desabafar, planejar a rotina em vários turnos de conversa, ou pedir para preencher, cadastrar, alterar ou limpar qualquer informação do aplicativo falando naturalmente!
 A usuária também pode te enviar QUALQUER ARQUIVO ou IMAGEM (PDFs, fotos, prints, planilhas, documentos, comprovantes, cronogramas, listas, etc.) e escolher o que fazer com ele (ex: importar eventos pro calendário, importar tarefas/projetos, importar gastos/extrato, importar lista de compras/cardápio, importar estudos/disciplinas, importar treinos ou apenas guardar no Segundo Cérebro).
 
 Contexto real e Calibração da usuária neste exato momento:
 ${JSON.stringify(contextoApp || {})}
 
+Histórico recente do bate-papo (mantenha a continuidade natural da conversa):
+${historicoFormatado}
+
 Regras fundamentais:
-1. Responda sempre em Português do Brasil (pt-BR), seguindo o tom calibrado pela usuária (ex: equilibrada, acolhedora, executiva ou treinadora) e respeitando rigorosamente as "instrucoesPersonalizadasLala", "horarioAcordar" e "horarioDormir" presentes no contextoApp.
+1. Responda sempre em Português do Brasil (pt-BR), como em um bate-papo real e caloroso, seguindo o tom calibrado pela usuária (ex: equilibrada, acolhedora, executiva ou treinadora) e respeitando rigorosamente as "instrucoesPersonalizadasLala", "horarioAcordar" e "horarioDormir" presentes no contextoApp.
 2. Classifique automaticamente em "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao".
-3. Quando um arquivo for anexado, olhe para "anexo.intencao" ("auto" | "calendario" | "tarefas" | "financas" | "compras_dieta" | "estudos" | "treino" | "guardar") e para a instrução da usuária:
+3. Sempre gere de 2 a 3 "sugestoesResposta" curtas (frases em 1ª pessoa que a usuária pode clicar para continuar o bate-papo com você, ex: "E como fica minha agenda de amanhã?", "Adiciona isso nas tarefas de hoje", "Me ajuda a montar o cardápio").
+4. Quando um arquivo for anexado, olhe para "anexo.intencao" ("auto" | "calendario" | "tarefas" | "financas" | "compras_dieta" | "estudos" | "treino" | "guardar") e para a instrução da usuária:
    - Se "calendario": extraia todos os eventos, horários, escalas, aulas ou compromissos do arquivo e gere "AGENDAR_COMPROMISSO".
    - Se "tarefas": extraia tarefas, checklists ou etapas de projetos do arquivo e gere "CRIAR_TAREFA" e/ou "ATUALIZAR_PROJETOS_TRABALHO".
    - Se "financas": extraia despesas, receitas, faturas ou saldos do arquivo e gere "REGISTRAR_GASTO", "REGISTRAR_RECEITA" e/ou "ATUALIZAR_CONTAS_FINANCAS".
@@ -134,6 +154,12 @@ Regras fundamentais:
               tags: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
+              },
+              sugestoesResposta: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description:
+                  "2 a 3 sugestões curtas de resposta rápida para a usuária continuar o bate-papo.",
               },
               matrizDecisao: {
                 type: Type.OBJECT,

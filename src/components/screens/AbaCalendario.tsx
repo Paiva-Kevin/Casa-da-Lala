@@ -338,7 +338,29 @@ export function AbaCalendario({
           );
         }
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
         if (!silencioso) {
+          if (msg === "AUTH_REQUIRED" || msg === "SCOPE_REQUIRED") {
+            try {
+              await onConnectGoogle();
+              const listaRetry = await listarEventosGoogleCalendarMes(
+                anoAtivo,
+                mesAtivo
+              );
+              setEventosGoogle(listaRetry);
+              setContasGoogle(getConnectedGoogleAccounts());
+              setUltimaSyncGCal(
+                new Date().toLocaleTimeString("pt-BR", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              );
+              return;
+            } catch {
+              // ignore if user closed popup
+              return;
+            }
+          }
           showToast(
             err instanceof Error
               ? err.message
@@ -2818,11 +2840,15 @@ export function AbaCalendario({
                         </span>
                         <div className="flex items-center gap-1">
                           {evsDia.some((x) => x.origem === "gcal") && (
-                            <Cloud
-                              size={11}
-                              style={{ color: t.action }}
+                            <span
                               title="Sincronizado com Google Agenda"
-                            />
+                              className="inline-flex items-center"
+                            >
+                              <Cloud
+                                size={11}
+                                style={{ color: t.action }}
+                              />
+                            </span>
                           )}
                           <button
                             type="button"

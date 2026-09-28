@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   Mic,
@@ -12,13 +12,12 @@ import {
   Compass,
   Plus,
   Paperclip,
-  FileText,
   Utensils,
-  GraduationCap,
-  Dumbbell,
   SlidersHorizontal,
-  X,
   Download,
+  MessageCircle,
+  LayoutList,
+  Trash2,
 } from "lucide-react";
 import {
   AcaoGovernanta,
@@ -96,13 +95,17 @@ export function AbaGovernantaLala({
   const [gravandoVoz, setGravandoVoz] = useState<boolean>(false);
   const [processando, setProcessando] = useState<boolean>(false);
   const [anexoAtual, setAnexoAtual] = useState<AnexoLala | null>(null);
-  const [pastaGuardar] =
-    useState<ArquivoRepositorio["area"]>("Pessoal");
+  const [pastaGuardar] = useState<ArquivoRepositorio["area"]>("Pessoal");
   const [filtroHistorico, setFiltroHistorico] = useState<
     "tudo" | "devaneio" | "desabafo" | "orientacao" | "comando"
   >("tudo");
+  const [modoVisualizacao, setModoVisualizacao] = useState<"chat" | "cards">(
+    "chat"
+  );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const tarefasHojePendentes = tarefas.filter(
     (tk) => !tk.feito && tk.horizonte === "hoje"
@@ -111,6 +114,16 @@ export function AbaGovernantaLala({
     tarefasHojePendentes.find((tk) => tk.manualLock === "p1") ||
     tarefasHojePendentes[0];
   const sachesRestantes = petsPerfil[0]?.estoqueSaches ?? 0;
+
+  // Rola suavemente para a última mensagem do bate-papo sempre que chega nova interação ou está digitando
+  useEffect(() => {
+    if (modoVisualizacao === "chat" && chatScrollRef.current) {
+      chatScrollRef.current.scrollTo({
+        top: chatScrollRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [interacoes.length, processando, modoVisualizacao]);
 
   const handleSelecionarArquivo = async (
     e: React.ChangeEvent<HTMLInputElement>
@@ -170,8 +183,12 @@ export function AbaGovernantaLala({
         tituloCustom ||
         mensagem.trim() ||
         `Guardar "${anexoAtual.nome}" em ${pastaAlvo}`,
-      respostaLala: `Guardei o arquivo "${anexoAtual.nome}" diretamente na pasta **${pastaAlvo}** do seu Segundo Cérebro! Você pode visualizá-lo ou baixá-lo a qualquer momento pelo menu lateral ou aqui na linha do tempo.`,
+      respostaLala: `Guardei o arquivo "${anexoAtual.nome}" diretamente na pasta **${pastaAlvo}** do seu Segundo Cérebro! Você pode visualizá-lo ou baixá-lo a qualquer momento pelo menu lateral ou aqui no nosso bate-papo.`,
       guardadoNoCofre: true,
+      sugestoesResposta: [
+        "Também quero extrair tarefas desse arquivo",
+        "Como está minha agenda de hoje?",
+      ],
     };
     setInteracoes((prev) => [novaInteracao, ...prev]);
 
@@ -238,6 +255,15 @@ export function AbaGovernantaLala({
     if (!textoCustom) setMensagem("");
     setAnexoAtual(null);
 
+    const historicoConversa = [...interacoes]
+      .slice(0, 8)
+      .reverse()
+      .map((it) => ({
+        usuario: it.mensagemUsuario,
+        lala: it.respostaLala,
+        dataHora: it.dataHora,
+      }));
+
     const ctx = {
       nomeUsuario: perfilCalibrado?.nomeUsuario,
       prontidaoScore,
@@ -250,9 +276,11 @@ export function AbaGovernantaLala({
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
       tomLala: perfilCalibrado?.tomLala,
       autonomiaLala: perfilCalibrado?.autonomiaLala,
-      instrucoesPersonalizadasLala: perfilCalibrado?.instrucoesPersonalizadasLala,
+      instrucoesPersonalizadasLala:
+        perfilCalibrado?.instrucoesPersonalizadasLala,
       horarioAcordar: perfilCalibrado?.horarioAcordar,
       horarioDormir: perfilCalibrado?.horarioDormir,
+      historicoConversa,
     };
 
     try {
@@ -319,31 +347,57 @@ export function AbaGovernantaLala({
     filtroHistorico === "tudo" ? true : i.modo === filtroHistorico
   );
 
+  // No modo bate-papo, mostramos em ordem cronológica (mais antigas em cima, mais novas embaixo)
+  const mensagensChatCronologicas = [...interacoesFiltradas].reverse();
+  const ultimaInteracao = interacoes[0];
+
+  const sugestoesAtivas =
+    ultimaInteracao?.sugestoesResposta &&
+    ultimaInteracao.sugestoesResposta.length > 0
+      ? ultimaInteracao.sugestoesResposta
+      : [
+          "Oi Lala! Como está meu resumo de hoje?",
+          "Me ajuda a organizar minhas prioridades de agora",
+          "Estou cansada hoje, alivia minha agenda?",
+          "Dei sachê pra Nina e pro Tobias",
+        ];
+
   return (
-    <div className="space-y-5">
-      {/* CARD UNIFICADO DA LALA: PULSO DA VIDA + UPLOAD + ENTRADA ÚNICA */}
+    <div className="space-y-4">
+      {/* CABEÇALHO + PULSO VIVO + JANELA INTEGRADA DE BATE-PAPO COM A LALA */}
       <div
         style={{ backgroundColor: t.card, borderColor: t.border }}
-        className="p-5 rounded-3xl border shadow-xs space-y-4"
+        className="p-4 sm:p-5 rounded-3xl border shadow-xs space-y-4"
       >
+        {/* Top Header da Lala */}
         <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-start gap-3.5">
-            <div
-              style={{
-                background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-                color: "#fff",
-              }}
-              className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm font-bold text-lg"
-            >
-              L
+          <div className="flex items-center gap-3.5">
+            <div className="relative">
+              <div
+                style={{
+                  background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                  color: "#fff",
+                }}
+                className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm font-bold text-lg"
+              >
+                L
+              </div>
+              <span
+                className="w-3 h-3 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
+                style={{
+                  backgroundColor: "#22c55e",
+                  borderColor: t.card,
+                }}
+                title="Lala Online"
+              />
             </div>
             <div>
               <div className="flex items-center gap-2 flex-wrap">
                 <h1
-                  className="text-lg sm:text-xl font-bold tracking-tight"
+                  className="text-base sm:text-lg font-bold tracking-tight"
                   style={{ color: t.text }}
                 >
-                  Lala
+                  Bate-Papo com a Lala
                 </h1>
                 <span
                   style={{
@@ -362,26 +416,60 @@ export function AbaGovernantaLala({
                 style={{ color: t.textSoft }}
                 className="text-xs mt-0.5 leading-relaxed"
               >
-                Sua governanta pessoal. Converse livremente ou suba qualquer
-                arquivo/foto para escolher o que importar (eventos, tarefas,
-                finanças, compras, estudos, treinos) ou guardar no Segundo
-                Cérebro.
+                Converse naturalmente como no WhatsApp: troque ideias, desabafe,
+                planeje o dia, lance gastos ou envie qualquer arquivo/foto.
               </p>
             </div>
           </div>
 
-          <button
-            onClick={onOpenCalibracao}
-            style={{
-              backgroundColor: `${t.primary}15`,
-              color: t.primary,
-              borderColor: `${t.primary}35`,
-            }}
-            className="px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
-          >
-            <SlidersHorizontal size={14} />
-            <span>Calibrar Lala & Rotina</span>
-          </button>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {/* Alternador Visão Chat vs Visão Cards */}
+            <div
+              className="flex items-center p-1 rounded-xl border"
+              style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
+            >
+              <button
+                type="button"
+                onClick={() => setModoVisualizacao("chat")}
+                style={{
+                  backgroundColor:
+                    modoVisualizacao === "chat" ? t.primary : "transparent",
+                  color: modoVisualizacao === "chat" ? "#fff" : t.textSoft,
+                }}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <MessageCircle size={12} />
+                <span>Bate-Papo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setModoVisualizacao("cards")}
+                style={{
+                  backgroundColor:
+                    modoVisualizacao === "cards" ? t.primary : "transparent",
+                  color: modoVisualizacao === "cards" ? "#fff" : t.textSoft,
+                }}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <LayoutList size={12} />
+                <span>Cards</span>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={onOpenCalibracao}
+              style={{
+                backgroundColor: `${t.primary}15`,
+                color: t.primary,
+                borderColor: `${t.primary}35`,
+              }}
+              className="px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <SlidersHorizontal size={13} />
+              <span>Calibrar</span>
+            </button>
+          </div>
         </div>
 
         {/* Pulso Vivo em 1 Linha */}
@@ -453,6 +541,441 @@ export function AbaGovernantaLala({
           </div>
         </div>
 
+        {/* Filtros Rápidos do Bate-Papo */}
+        <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {(
+              [
+                { id: "tudo", label: "Toda a Conversa" },
+                { id: "comando", label: "Comandos & Arquivos" },
+                { id: "orientacao", label: "Orientações" },
+                { id: "devaneio", label: "Ideias" },
+                { id: "desabafo", label: "Acolhimento" },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFiltroHistorico(f.id)}
+                style={{
+                  backgroundColor:
+                    filtroHistorico === f.id ? t.primary : t.cardSubtle,
+                  color: filtroHistorico === f.id ? "#fff" : t.textSoft,
+                  borderColor: t.border,
+                }}
+                className="px-2.5 py-1 rounded-xl border text-[11px] font-bold cursor-pointer transition-colors"
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {interacoes.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
+                setInteracoes((prev) => prev.slice(0, 1));
+                showToast("Histórico anterior do bate-papo limpo!");
+              }}
+              style={{ color: t.textSoft }}
+              className="text-[11px] font-semibold flex items-center gap-1 hover:opacity-80 cursor-pointer"
+              title="Manter apenas a mensagem mais recente"
+            >
+              <Trash2 size={12} /> Limpar histórico antigo
+            </button>
+          )}
+        </div>
+
+        {/* JANELA DE MENSAGENS DO BATE-PAPO (VISÃO CHAT DIRETO NO CAMPO EXISTENTE) */}
+        {modoVisualizacao === "chat" && (
+          <div
+            ref={chatScrollRef}
+            style={{
+              backgroundColor: t.bg,
+              borderColor: t.border,
+            }}
+            className="rounded-3xl border p-3.5 sm:p-4 space-y-4 max-h-[460px] min-h-[280px] overflow-y-auto"
+          >
+            {mensagensChatCronologicas.length === 0 && (
+              <div className="py-12 text-center space-y-2">
+                <Sparkles
+                  size={24}
+                  style={{ color: t.primary }}
+                  className="mx-auto opacity-80"
+                />
+                <p className="text-xs font-bold" style={{ color: t.text }}>
+                  Comece um bate-papo com a Lala!
+                </p>
+                <p
+                  className="text-[11px] max-w-md mx-auto"
+                  style={{ color: t.textSoft }}
+                >
+                  Mande um "Oi Lala", conte como foi seu dia, peça ajuda para
+                  decidir algo ou envie qualquer comando/arquivo abaixo.
+                </p>
+              </div>
+            )}
+
+            {mensagensChatCronologicas.map((item) => (
+              <div key={item.id} className="space-y-2.5">
+                {/* BALÃO DA USUÁRIA (DIREITA) */}
+                <div className="flex justify-end">
+                  <div
+                    style={{
+                      background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                      color: "#fff",
+                    }}
+                    className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-xs px-3.5 py-2.5 shadow-xs space-y-2"
+                  >
+                    <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-line">
+                      {item.mensagemUsuario}
+                    </p>
+
+                    {(item.anexo || item.nomeAnexo) && (
+                      <div
+                        style={{
+                          backgroundColor: "rgba(255,255,255,0.16)",
+                          borderColor: "rgba(255,255,255,0.28)",
+                        }}
+                        className="p-2 rounded-xl border flex items-center justify-between gap-2 text-white"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          {item.anexo?.mimeType?.startsWith("image/") &&
+                          item.anexo.base64 ? (
+                            <img
+                              src={item.anexo.base64}
+                              alt={item.anexo.nome}
+                              className="w-10 h-10 rounded-lg object-cover shrink-0"
+                            />
+                          ) : (
+                            <Paperclip size={14} className="shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-bold truncate">
+                              {item.anexo?.nome || item.nomeAnexo}
+                            </p>
+                            {item.anexo?.tamanhoBytes && (
+                              <p className="text-[10px] opacity-80">
+                                {formatarTamanhoBytes(item.anexo.tamanhoBytes)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        {item.anexo?.base64 && (
+                          <a
+                            href={item.anexo.base64}
+                            download={item.anexo.nome}
+                            className="px-2 py-1 rounded-lg bg-white/20 text-[10px] font-bold flex items-center gap-1 shrink-0"
+                          >
+                            <Download size={11} /> Baixar
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end">
+                      <span className="text-[10px] font-mono opacity-80">
+                        {item.dataHora}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* BALÃO DA LALA (ESQUERDA) */}
+                <div className="flex items-start gap-2.5">
+                  <div
+                    style={{
+                      background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                      color: "#fff",
+                    }}
+                    className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs shadow-xs mt-0.5"
+                  >
+                    L
+                  </div>
+
+                  <div
+                    style={{
+                      backgroundColor: t.card,
+                      borderColor: t.border,
+                      color: t.text,
+                    }}
+                    className="max-w-[90%] sm:max-w-[82%] rounded-2xl rounded-tl-xs p-3.5 border shadow-xs space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          style={{
+                            backgroundColor: `${t.primary}15`,
+                            color: t.primary,
+                          }}
+                          className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full flex items-center gap-1"
+                        >
+                          <Sparkles size={10} />
+                          {item.tituloCard || "Lala"}
+                        </span>
+                        {item.tags?.slice(0, 3).map((tg) => (
+                          <span
+                            key={tg}
+                            style={{
+                              backgroundColor: t.cardSubtle,
+                              color: t.textSoft,
+                            }}
+                            className="text-[10px] font-medium px-1.5 py-0.5 rounded-md"
+                          >
+                            #{tg}
+                          </span>
+                        ))}
+                      </div>
+                      <span
+                        style={{ color: t.textSoft }}
+                        className="text-[10px] font-mono"
+                      >
+                        {item.dataHora}
+                      </span>
+                    </div>
+
+                    <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-line">
+                      {item.respostaLala}
+                    </p>
+
+                    {/* Matriz de Decisão dentro do balão do bate-papo */}
+                    {item.matrizDecisao && (
+                      <div
+                        style={{
+                          backgroundColor: `${t.action}10`,
+                          borderColor: `${t.action}40`,
+                        }}
+                        className="p-3 rounded-2xl border space-y-2"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <Scale size={13} style={{ color: t.action }} />
+                          <p
+                            style={{ color: t.action }}
+                            className="text-[11px] font-bold uppercase tracking-wider"
+                          >
+                            Balança de Decisão da Lala
+                          </p>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                          <div
+                            style={{
+                              backgroundColor: t.cardSubtle,
+                              borderColor: t.border,
+                            }}
+                            className="p-2.5 rounded-xl border"
+                          >
+                            <p
+                              style={{ color: t.primary }}
+                              className="text-[10px] font-bold uppercase"
+                            >
+                              Caminho A
+                            </p>
+                            <p className="mt-0.5">
+                              {item.matrizDecisao.cenarioA}
+                            </p>
+                          </div>
+                          <div
+                            style={{
+                              backgroundColor: t.cardSubtle,
+                              borderColor: t.border,
+                            }}
+                            className="p-2.5 rounded-xl border"
+                          >
+                            <p
+                              style={{ color: t.finance }}
+                              className="text-[10px] font-bold uppercase"
+                            >
+                              Caminho B
+                            </p>
+                            <p className="mt-0.5">
+                              {item.matrizDecisao.cenarioB}
+                            </p>
+                          </div>
+                        </div>
+                        <div
+                          style={{ backgroundColor: t.cardSubtle }}
+                          className="p-2.5 rounded-xl text-xs font-semibold"
+                        >
+                          ✨ <strong>Veredito:</strong>{" "}
+                          {item.matrizDecisao.vereditoLala}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Ações Propostas em 1-Toque dentro do balão */}
+                    {item.acoesPropostas && item.acoesPropostas.length > 0 && (
+                      <div className="space-y-1.5 pt-1">
+                        {item.acoesPropostas.map((acao) => (
+                          <div
+                            key={acao.id}
+                            style={{
+                              backgroundColor: acao.executada
+                                ? `${t.primary}12`
+                                : t.cardSubtle,
+                              borderColor: acao.executada
+                                ? t.primary
+                                : t.border,
+                            }}
+                            className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="text-xs font-bold truncate">
+                                {acao.titulo}
+                              </p>
+                              <p
+                                style={{ color: t.textSoft }}
+                                className="text-[10px] truncate"
+                              >
+                                {acao.detalhe}
+                              </p>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => executarAcaoDaLala(acao, item.id)}
+                              disabled={acao.executada}
+                              style={{
+                                backgroundColor: acao.executada
+                                  ? t.primary
+                                  : t.action,
+                                color: "#fff",
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-80"
+                            >
+                              {acao.executada ? (
+                                <>
+                                  <CheckCircle2 size={12} /> Feito
+                                </>
+                              ) : (
+                                <>
+                                  Executar <ArrowRight size={12} />
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Atalhos rápidos caso seja uma conversa livre */}
+                    {(!item.acoesPropostas ||
+                      item.acoesPropostas.length === 0) && (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nova: TaskItem = {
+                              id: Date.now(),
+                              texto: item.mensagemUsuario.slice(0, 65),
+                              aba: "estudos_trabalho",
+                              categoriaFiltro: "pessoal",
+                              cor: "action",
+                              feito: false,
+                              impacto: 8,
+                              urgencia: 7,
+                              facilidade: 8,
+                              retorno: 8,
+                              horizonte: "hoje",
+                              manualLock: "top3",
+                              duracaoMin: 20,
+                            };
+                            setTarefas((prev) => [nova, ...prev]);
+                            showToast("Transformado em Tarefa de Hoje!");
+                          }}
+                          style={{
+                            backgroundColor: t.cardSubtle,
+                            color: t.text,
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus size={11} /> Virar Tarefa Hoje
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRepositorio((prev) => [
+                              {
+                                id: Date.now(),
+                                titulo: item.tituloCard || "Nota do Bate-Papo",
+                                area: "Pessoal",
+                                tipo: "Nota Rápida",
+                                urlOuConteudo: `${item.mensagemUsuario} — ${item.respostaLala}`,
+                                dataCriacao: "Hoje",
+                                fixado: true,
+                                statusLeitura: "Para Ler",
+                              },
+                              ...prev,
+                            ]);
+                            showToast("Salvo no Segundo Cérebro!");
+                          }}
+                          style={{
+                            backgroundColor: `${t.action}16`,
+                            color: t.action,
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <FolderOpen size={11} /> Guardar no Segundo Cérebro
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {/* Indicador de "Lala está digitando..." no bate-papo */}
+            {processando && (
+              <div className="flex items-start gap-2.5 animate-pulse">
+                <div
+                  style={{
+                    background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                    color: "#fff",
+                  }}
+                  className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0 font-bold text-xs"
+                >
+                  L
+                </div>
+                <div
+                  style={{ backgroundColor: t.card, borderColor: t.border }}
+                  className="rounded-2xl rounded-tl-xs px-4 py-3 border text-xs font-medium flex items-center gap-2"
+                >
+                  <Sparkles size={13} style={{ color: t.primary }} />
+                  <span>A Lala está pensando e respondendo...</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Sugestões de Resposta Rápida para Continuar o Bate-Papo com 1 Toque */}
+        <div className="space-y-1.5">
+          <p
+            style={{ color: t.textSoft }}
+            className="text-[10px] font-bold uppercase tracking-wider px-1"
+          >
+            Continuar bate-papo (toque para enviar ou digite abaixo):
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {sugestoesAtivas.map((sug) => (
+              <button
+                key={sug}
+                type="button"
+                disabled={processando}
+                onClick={() => enviarParaLala(sug)}
+                style={{
+                  backgroundColor: `${t.primary}12`,
+                  borderColor: `${t.primary}35`,
+                  color: t.primary,
+                }}
+                className="px-3 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer hover:opacity-90 active:scale-98 transition-all disabled:opacity-50"
+              >
+                <MessageCircle size={11} />
+                <span>{sug}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Input oculto para qualquer arquivo ou foto */}
         <input
           ref={fileInputRef}
@@ -474,12 +997,7 @@ export function AbaGovernantaLala({
               pastaDestino,
               guardarCopia
             ) =>
-              enviarParaLala(
-                instrucao,
-                intencao,
-                pastaDestino,
-                guardarCopia
-              )
+              enviarParaLala(instrucao, intencao, pastaDestino, guardarCopia)
             }
             onSaveOnly={(pastaDestino, tituloCustom) =>
               guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
@@ -487,11 +1005,26 @@ export function AbaGovernantaLala({
           />
         )}
 
-        {/* Entrada Única e Fluida (Voz, Texto ou Arquivo/Imagem) */}
+        {/* CAMPO DE BATE-PAPO ATUALIZADO (Voz, Texto Fluido e Anexo Universal) */}
         <div className="space-y-2.5">
           <div className="flex gap-2 items-end">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                backgroundColor: anexoAtual ? `${t.primary}20` : t.cardSubtle,
+                color: t.primary,
+                borderColor: anexoAtual ? t.primary : t.border,
+              }}
+              className="w-11 h-12 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
+              title="Anexar Arquivo ou Foto no bate-papo"
+            >
+              <Paperclip size={18} />
+            </button>
+
             <textarea
-              rows={3}
+              ref={textareaRef}
+              rows={2}
               value={mensagem}
               onChange={(e) => setMensagem(e.target.value)}
               onKeyDown={(e) => {
@@ -500,59 +1033,56 @@ export function AbaGovernantaLala({
                   enviarParaLala();
                 }
               }}
-              placeholder='Converse com a Lala, dê comandos ou anexe qualquer arquivo no clipe 📎 para escolher o que importar (eventos, tarefas, gastos, compras, estudos, treinos) ou guardar...'
+              placeholder="Escreva sua mensagem para bater papo com a Lala (Enter envia, Shift+Enter quebra linha)..."
               style={{
                 backgroundColor: t.cardSubtle,
                 color: t.text,
                 borderColor: t.border,
               }}
-              className="flex-1 p-3.5 rounded-2xl border text-xs sm:text-sm outline-none resize-none leading-relaxed"
+              className="flex-1 p-3 rounded-2xl border text-xs sm:text-sm outline-none resize-none leading-relaxed"
             />
-            <div className="flex flex-col gap-1.5 shrink-0">
-              <div className="flex gap-1.5">
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    backgroundColor: anexoAtual
-                      ? `${t.primary}20`
-                      : t.cardSubtle,
-                    color: t.primary,
-                    borderColor: anexoAtual ? t.primary : t.border,
-                  }}
-                  className="w-11 h-11 rounded-2xl border flex items-center justify-center cursor-pointer"
-                  title="Subir Arquivo ou Foto (escolher o que importar ou guardar)"
-                >
-                  <Paperclip size={18} />
-                </button>
-                <button
-                  onClick={iniciarVoz}
-                  style={{
-                    backgroundColor: gravandoVoz ? t.danger : t.cardSubtle,
-                    color: gravandoVoz ? "#fff" : t.action,
-                    borderColor: t.border,
-                  }}
-                  className="w-11 h-11 rounded-2xl border flex items-center justify-center cursor-pointer"
-                  title="Falar por áudio com a Lala"
-                >
-                  <Mic size={18} />
-                </button>
-              </div>
-              <button
-                onClick={() => enviarParaLala()}
-                disabled={processando || (!mensagem.trim() && !anexoAtual)}
-                style={{ backgroundColor: t.primary, color: "#fff" }}
-                className="w-full h-11 rounded-2xl flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer disabled:opacity-50"
-                title="Enviar para a Lala"
-              >
-                <Send size={15} />
-                <span>Enviar</span>
-              </button>
-            </div>
+
+            <button
+              type="button"
+              onClick={iniciarVoz}
+              style={{
+                backgroundColor: gravandoVoz ? t.danger : t.cardSubtle,
+                color: gravandoVoz ? "#fff" : t.action,
+                borderColor: t.border,
+              }}
+              className="w-11 h-12 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
+              title="Falar por áudio com a Lala"
+            >
+              <Mic size={18} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => enviarParaLala()}
+              disabled={processando || (!mensagem.trim() && !anexoAtual)}
+              style={{ backgroundColor: t.primary, color: "#fff" }}
+              className="px-4 h-12 rounded-2xl flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shrink-0 disabled:opacity-50 transition-transform active:scale-95"
+              title="Enviar mensagem para a Lala"
+            >
+              <Send size={15} />
+              <span className="hidden sm:inline">Enviar</span>
+            </button>
           </div>
 
-          {/* Atalhos Rápidos de 1-Toque (Upload Universal, Calibração, Desabafo, Orientação) */}
+          {gravandoVoz && (
+            <div
+              className="p-2.5 rounded-xl flex items-center justify-between text-xs animate-pulse"
+              style={{ background: t.cardSubtle, color: t.action }}
+            >
+              <span>🎙️ A Lala está te ouvindo no bate-papo... fale naturalmente</span>
+              <span className="font-mono">PT-BR</span>
+            </div>
+          )}
+
+          {/* Atalhos Rápidos de Ação & Conversa */}
           <div className="flex flex-wrap gap-1.5">
             <button
+              type="button"
               onClick={() => fileInputRef.current?.click()}
               style={{
                 backgroundColor: `${t.primary}14`,
@@ -562,19 +1092,11 @@ export function AbaGovernantaLala({
               className="px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
             >
               <Paperclip size={13} />
-              Subir Arquivo / Foto (Escolher o que fazer ou importar)
+              Subir Arquivo / Foto
             </button>
 
             <button
-              onClick={onOpenCalibracao}
-              style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
-            >
-              <SlidersHorizontal size={13} style={{ color: t.action }} />
-              Calibrar Personalidade & Regras da Lala
-            </button>
-
-            <button
+              type="button"
               onClick={() =>
                 enviarParaLala(
                   "Lala, analisa minha dieta atual e gera automaticamente a Lista de Compras de mercado com os ingredientes da semana!",
@@ -585,10 +1107,11 @@ export function AbaGovernantaLala({
               className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
             >
               <Utensils size={13} style={{ color: t.primary }} />
-              Dieta → Gerar Lista de Compras
+              Dieta → Lista de Compras
             </button>
 
             <button
+              type="button"
               onClick={() =>
                 enviarParaLala(
                   "Lala, hoje estou sobrecarregada e cansada. Me acolhe e alivia minha agenda mantendo só o essencial."
@@ -602,6 +1125,7 @@ export function AbaGovernantaLala({
             </button>
 
             <button
+              type="button"
               onClick={() =>
                 enviarParaLala(
                   "Estou travada sem saber por onde começar agora. Me ajuda a decidir entre minhas prioridades?"
@@ -615,6 +1139,7 @@ export function AbaGovernantaLala({
             </button>
 
             <button
+              type="button"
               onClick={() =>
                 enviarParaLala("Alimentei a Nina e o Tobias agora com sachê")
               }
@@ -628,318 +1153,173 @@ export function AbaGovernantaLala({
         </div>
       </div>
 
-      {/* FILTRO LEVE DO FLUXO DE MEMÓRIA DA LALA */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <p
-          className="text-xs font-bold uppercase tracking-wider"
-          style={{ color: t.textSoft }}
-        >
-          Linha do Tempo com a Lala
-        </p>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {(
-            [
-              { id: "tudo", label: "Tudo" },
-              { id: "comando", label: "Comandos & Arquivos" },
-              { id: "devaneio", label: "Devaneios" },
-              { id: "desabafo", label: "Desabafos" },
-              { id: "orientacao", label: "Orientações" },
-            ] as const
-          ).map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFiltroHistorico(f.id)}
-              style={{
-                backgroundColor:
-                  filtroHistorico === f.id ? t.primary : t.card,
-                color: filtroHistorico === f.id ? "#fff" : t.textSoft,
-                borderColor: t.border,
-              }}
-              className="px-2.5 py-1 rounded-xl border text-[11px] font-bold cursor-pointer"
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* FLUXO UNIFICADO DE RESPOSTAS, ARQUIVOS, DECISÕES E AÇÕES DA LALA */}
-      <div className="space-y-3">
-        {interacoesFiltradas.map((item) => (
-          <div
-            key={item.id}
-            style={{ backgroundColor: t.card, borderColor: t.border }}
-            className="p-4 sm:p-5 rounded-3xl border shadow-xs space-y-3.5"
-          >
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span
-                  style={{
-                    backgroundColor: `${t.primary}15`,
-                    color: t.primary,
-                  }}
-                  className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full flex items-center gap-1"
-                >
-                  <Sparkles size={11} />
-                  {item.tituloCard || "Lala"}
-                </span>
-                {item.tags?.map((tg) => (
-                  <span
-                    key={tg}
-                    style={{
-                      backgroundColor: t.cardSubtle,
-                      color: t.textSoft,
-                    }}
-                    className="text-[10px] font-medium px-2 py-0.5 rounded-md"
-                  >
-                    #{tg}
-                  </span>
-                ))}
-              </div>
-              <span
-                style={{ color: t.textSoft }}
-                className="text-[11px] font-mono"
-              >
-                {item.dataHora}
-              </span>
-            </div>
-
+      {/* VISÃO ALTERNATIVA EM CARDS (CASO A USUÁRIA PREFIRA VER EM LISTA DE CARDS) */}
+      {modoVisualizacao === "cards" && (
+        <div className="space-y-3">
+          {interacoesFiltradas.map((item) => (
             <div
-              style={{
-                backgroundColor: t.cardSubtle,
-                borderColor: t.border,
-              }}
-              className="p-3 rounded-2xl border text-xs space-y-2"
+              key={item.id}
+              style={{ backgroundColor: t.card, borderColor: t.border }}
+              className="p-4 sm:p-5 rounded-3xl border shadow-xs space-y-3.5"
             >
-              <p className="font-medium leading-relaxed">
-                "{item.mensagemUsuario}"
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    style={{
+                      backgroundColor: `${t.primary}15`,
+                      color: t.primary,
+                    }}
+                    className="text-[10px] font-bold uppercase px-2.5 py-0.5 rounded-full flex items-center gap-1"
+                  >
+                    <Sparkles size={11} />
+                    {item.tituloCard || "Lala"}
+                  </span>
+                  {item.tags?.map((tg) => (
+                    <span
+                      key={tg}
+                      style={{
+                        backgroundColor: t.cardSubtle,
+                        color: t.textSoft,
+                      }}
+                      className="text-[10px] font-medium px-2 py-0.5 rounded-md"
+                    >
+                      #{tg}
+                    </span>
+                  ))}
+                </div>
+                <span
+                  style={{ color: t.textSoft }}
+                  className="text-[11px] font-mono"
+                >
+                  {item.dataHora}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  backgroundColor: t.cardSubtle,
+                  borderColor: t.border,
+                }}
+                className="p-3 rounded-2xl border text-xs space-y-2"
+              >
+                <p className="font-medium leading-relaxed">
+                  "{item.mensagemUsuario}"
+                </p>
+
+                {(item.anexo || item.nomeAnexo) && (
+                  <div
+                    style={{ backgroundColor: t.card, borderColor: t.border }}
+                    className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {item.anexo?.mimeType?.startsWith("image/") &&
+                      item.anexo.base64 ? (
+                        <img
+                          src={item.anexo.base64}
+                          alt={item.anexo.nome}
+                          className="w-12 h-12 rounded-lg object-cover border shrink-0"
+                          style={{ borderColor: t.border }}
+                        />
+                      ) : (
+                        <Paperclip
+                          size={15}
+                          style={{ color: t.primary }}
+                          className="shrink-0"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate">
+                          {item.anexo?.nome || item.nomeAnexo}
+                        </p>
+                        {item.anexo?.tamanhoBytes && (
+                          <p
+                            style={{ color: t.textSoft }}
+                            className="text-[10px]"
+                          >
+                            {formatarTamanhoBytes(item.anexo.tamanhoBytes)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {item.anexo?.base64 && (
+                      <a
+                        href={item.anexo.base64}
+                        download={item.anexo.nome}
+                        style={{
+                          backgroundColor: `${t.primary}15`,
+                          color: t.primary,
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0"
+                      >
+                        <Download size={12} /> Baixar
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <p
+                style={{ color: t.text }}
+                className="text-xs sm:text-sm leading-relaxed whitespace-pre-line"
+              >
+                {item.respostaLala}
               </p>
 
-              {/* Exibe preview do anexo caso tenha sido enviado */}
-              {(item.anexo || item.nomeAnexo) && (
-                <div
-                  style={{ backgroundColor: t.card, borderColor: t.border }}
-                  className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {item.anexo?.mimeType?.startsWith("image/") &&
-                    item.anexo.base64 ? (
-                      <img
-                        src={item.anexo.base64}
-                        alt={item.anexo.nome}
-                        className="w-12 h-12 rounded-lg object-cover border shrink-0"
-                        style={{ borderColor: t.border }}
-                      />
-                    ) : (
-                      <Paperclip
-                        size={15}
-                        style={{ color: t.primary }}
-                        className="shrink-0"
-                      />
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold truncate">
-                        {item.anexo?.nome || item.nomeAnexo}
-                      </p>
-                      {item.anexo?.tamanhoBytes && (
-                        <p style={{ color: t.textSoft }} className="text-[10px]">
-                          {formatarTamanhoBytes(item.anexo.tamanhoBytes)}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  {item.anexo?.base64 && (
-                    <a
-                      href={item.anexo.base64}
-                      download={item.anexo.nome}
+              {item.acoesPropostas && item.acoesPropostas.length > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                  {item.acoesPropostas.map((acao) => (
+                    <div
+                      key={acao.id}
                       style={{
-                        backgroundColor: `${t.primary}15`,
-                        color: t.primary,
+                        backgroundColor: acao.executada
+                          ? `${t.primary}12`
+                          : t.cardSubtle,
+                        borderColor: acao.executada ? t.primary : t.border,
                       }}
-                      className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0"
+                      className="p-3 rounded-2xl border flex items-center justify-between gap-2.5"
                     >
-                      <Download size={12} /> Baixar
-                    </a>
-                  )}
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold truncate">
+                          {acao.titulo}
+                        </p>
+                        <p
+                          style={{ color: t.textSoft }}
+                          className="text-[11px] truncate"
+                        >
+                          {acao.detalhe}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => executarAcaoDaLala(acao, item.id)}
+                        disabled={acao.executada}
+                        style={{
+                          backgroundColor: acao.executada
+                            ? t.primary
+                            : t.action,
+                          color: "#fff",
+                        }}
+                        className="px-3 py-1.5 rounded-xl text-[11px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-75"
+                      >
+                        {acao.executada ? (
+                          <>
+                            <CheckCircle2 size={12} /> Feito
+                          </>
+                        ) : (
+                          <>
+                            Executar <ArrowRight size={12} />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-
-            <p
-              style={{ color: t.text }}
-              className="text-xs sm:text-sm leading-relaxed whitespace-pre-line"
-            >
-              {item.respostaLala}
-            </p>
-
-            {/* Matriz de Decisão automática */}
-            {item.matrizDecisao && (
-              <div
-                style={{
-                  backgroundColor: `${t.action}10`,
-                  borderColor: `${t.action}40`,
-                }}
-                className="p-3.5 rounded-2xl border space-y-2.5"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Scale size={14} style={{ color: t.action }} />
-                  <p
-                    style={{ color: t.action }}
-                    className="text-xs font-bold uppercase tracking-wider"
-                  >
-                    Balança de Decisão da Lala
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                  <div
-                    style={{
-                      backgroundColor: t.card,
-                      borderColor: t.border,
-                    }}
-                    className="p-2.5 rounded-xl border"
-                  >
-                    <p
-                      style={{ color: t.primary }}
-                      className="text-[10px] font-bold uppercase"
-                    >
-                      Caminho A
-                    </p>
-                    <p className="mt-0.5">{item.matrizDecisao.cenarioA}</p>
-                  </div>
-                  <div
-                    style={{
-                      backgroundColor: t.card,
-                      borderColor: t.border,
-                    }}
-                    className="p-2.5 rounded-xl border"
-                  >
-                    <p
-                      style={{ color: t.finance }}
-                      className="text-[10px] font-bold uppercase"
-                    >
-                      Caminho B
-                    </p>
-                    <p className="mt-0.5">{item.matrizDecisao.cenarioB}</p>
-                  </div>
-                </div>
-                <div
-                  style={{ backgroundColor: t.card }}
-                  className="p-2.5 rounded-xl text-xs font-semibold"
-                >
-                  ✨ <strong>Recomendação da Lala:</strong>{" "}
-                  {item.matrizDecisao.vereditoLala}
-                </div>
-              </div>
-            )}
-
-            {/* Botões de Ação em 1-Toque gerados pela Lala */}
-            {item.acoesPropostas && item.acoesPropostas.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                {item.acoesPropostas.map((acao) => (
-                  <div
-                    key={acao.id}
-                    style={{
-                      backgroundColor: acao.executada
-                        ? `${t.primary}12`
-                        : t.cardSubtle,
-                      borderColor: acao.executada ? t.primary : t.border,
-                    }}
-                    className="p-3 rounded-2xl border flex items-center justify-between gap-2.5"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold truncate">
-                        {acao.titulo}
-                      </p>
-                      <p
-                        style={{ color: t.textSoft }}
-                        className="text-[11px] truncate"
-                      >
-                        {acao.detalhe}
-                      </p>
-                    </div>
-
-                    <button
-                      onClick={() => executarAcaoDaLala(acao, item.id)}
-                      disabled={acao.executada}
-                      style={{
-                        backgroundColor: acao.executada ? t.primary : t.action,
-                        color: "#fff",
-                      }}
-                      className="px-3 py-1.5 rounded-xl text-[11px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-75"
-                    >
-                      {acao.executada ? (
-                        <>
-                          <CheckCircle2 size={12} /> Feito
-                        </>
-                      ) : (
-                        <>
-                          Executar <ArrowRight size={12} />
-                        </>
-                      )}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Atalhos para transformar qualquer devaneio/conversa em Tarefa ou Nota do Segundo Cérebro */}
-            {(!item.acoesPropostas || item.acoesPropostas.length === 0) && (
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  onClick={() => {
-                    const nova: TaskItem = {
-                      id: Date.now(),
-                      texto: item.mensagemUsuario.slice(0, 65),
-                      aba: "estudos_trabalho",
-                      categoriaFiltro: "pessoal",
-                      cor: "action",
-                      feito: false,
-                      impacto: 8,
-                      urgencia: 7,
-                      facilidade: 8,
-                      retorno: 8,
-                      horizonte: "hoje",
-                      manualLock: "top3",
-                      duracaoMin: 20,
-                    };
-                    setTarefas((prev) => [nova, ...prev]);
-                    showToast("Transformado em Tarefa de Hoje!");
-                  }}
-                  style={{ backgroundColor: t.cardSubtle, color: t.text }}
-                  className="px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus size={12} /> Virar Tarefa Hoje
-                </button>
-                <button
-                  onClick={() => {
-                    setRepositorio((prev) => [
-                      {
-                        id: Date.now(),
-                        titulo: item.tituloCard || "Nota da Lala",
-                        area: "Pessoal",
-                        tipo: "Nota Rápida",
-                        urlOuConteudo: `${item.mensagemUsuario} — ${item.respostaLala}`,
-                        dataCriacao: "Hoje",
-                        fixado: true,
-                        statusLeitura: "Para Ler",
-                      },
-                      ...prev,
-                    ]);
-                    showToast("Salvo no Segundo Cérebro!");
-                  }}
-                  style={{
-                    backgroundColor: `${t.action}16`,
-                    color: t.action,
-                  }}
-                  className="px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <FolderOpen size={12} /> Guardar no Segundo Cérebro
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
