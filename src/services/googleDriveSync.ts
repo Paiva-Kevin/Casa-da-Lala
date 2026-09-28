@@ -25,9 +25,189 @@ const auth = getAuth(app);
 const provider = new GoogleAuthProvider();
 SCOPES.forEach((scope) => provider.addScope(scope));
 
-// In-memory access token cache (NEVER persisted to localStorage or sessionStorage per security guidelines)
+// Session-scoped access token cache so page reloads keep Google Calendar & Drive active
+const SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
+const SESSION_CALENDAR_SCOPE_KEY = 'casa_lala_oauth_calendar_scope_v2';
+const SESSION_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v1';
+
+export interface ConnectedGoogleAccount {
+  email: string;
+  displayName: string;
+  photoURL: string | null;
+  accessToken: string;
+  corHex: string;
+  colorHex: string;
+  ativo: boolean;
+  active: boolean;
+}
+
+const DEFAULT_ACCOUNT_COLORS = [
+  '#0284C7',
+  '#E11D48',
+  '#7C3AED',
+  '#059669',
+  '#D97706',
+  '#2E6F5E',
+];
+
 let isSigningIn = false;
-let cachedAccessToken: string | null = null;
+let cachedAccessToken: string | null = (() => {
+  try {
+    return sessionStorage.getItem(SESSION_TOKEN_KEY);
+  } catch {
+    return null;
+  }
+})();
+
+export function getConnectedGoogleAccounts(): ConnectedGoogleAccount[] {
+  try {
+    const raw = sessionStorage.getItem(SESSION_MULTI_ACCOUNTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((a: Partial<ConnectedGoogleAccount>) => {
+      const hex = a.corHex || a.colorHex || '#0284C7';
+      const isAtivo = a.ativo !== undefined ? a.ativo : a.active !== undefined ? a.active : true;
+      return {
+        email: a.email || 'conta@gmail.com',
+        displayName: a.displayName || a.email || 'Conta Google',
+        photoURL: a.photoURL || null,
+        accessToken: a.accessToken || '',
+        corHex: hex,
+        colorHex: hex,
+        ativo: isAtivo,
+        active: isAtivo,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function saveConnectedGoogleAccounts(accounts: ConnectedGoogleAccount[]) {
+  try {
+    sessionStorage.setItem(SESSION_MULTI_ACCOUNTS_KEY, JSON.stringify(accounts));
+  } catch {
+    // ignore
+  }
+}
+
+export function upsertConnectedGoogleAccount(
+  user: GoogleUserProfile,
+  accessToken: string,
+  corHex?: string
+): ConnectedGoogleAccount[] {
+  const emailKey = (user.email || user.displayName || 'conta1@gmail.com').toLowerCase();
+  const list = getConnectedGoogleAccounts();
+  const idx = list.findIndex((a) => a.email.toLowerCase() === emailKey);
+  if (idx >= 0) {
+    const chosenHex = corHex || list[idx].corHex || list[idx].colorHex || '#0284C7';
+    list[idx] = {
+      ...list[idx],
+      displayName: user.displayName || list[idx].displayName,
+      photoURL: user.photoURL || list[idx].photoURL,
+      accessToken,
+      corHex: chosenHex,
+      colorHex: chosenHex,
+    };
+  } else {
+    const chosenHex =
+      corHex ||
+      DEFAULT_ACCOUNT_COLORS[list.length % DEFAULT_ACCOUNT_COLORS.length];
+    list.push({
+      email: user.email || emailKey,
+      displayName: user.displayName || user.email || 'Conta Google',
+      photoURL: user.photoURL,
+      accessToken,
+      corHex: chosenHex,
+      colorHex: chosenHex,
+      ativo: true,
+      active: true,
+    });
+  }
+  saveConnectedGoogleAccounts(list);
+  return list;
+}
+
+export function toggleConnectedGoogleAccount(email: string): ConnectedGoogleAccount[] {
+  const list = getConnectedGoogleAccounts().map((a) => {
+    if (a.email.toLowerCase() === email.toLowerCase()) {
+      const next = !a.ativo;
+      return { ...a, ativo: next, active: next };
+    }
+    return a;
+  });
+  saveConnectedGoogleAccounts(list);
+  return list;
+}
+
+export function updateConnectedGoogleAccountColor(
+  email: string,
+  corHex: string
+): ConnectedGoogleAccount[] {
+  const list = getConnectedGoogleAccounts().map((a) =>
+    a.email.toLowerCase() === email.toLowerCase()
+      ? { ...a, corHex, colorHex: corHex }
+      : a
+  );
+  saveConnectedGoogleAccounts(list);
+  return list;
+}
+
+export function removeConnectedGoogleAccount(email: string): ConnectedGoogleAccount[] {
+  const list = getConnectedGoogleAccounts().filter(
+    (a) => a.email.toLowerCase() !== email.toLowerCase()
+  );
+  saveConnectedGoogleAccounts(list);
+  return list;
+}
+
+export async function connectAdditionalGoogleAccount(): Promise<{
+  user?: GoogleUserProfile;
+  accessToken?: string;
+  error?: string;
+}> {
+  try {
+    const res = await googleSignIn(true, true);
+    if (!res) return {};
+    return { user: res.user, accessToken: res.accessToken };
+  } catch (err) {
+    return {
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Não foi possível conectar outra conta Google.',
+    };
+  }
+}
+
+function setCachedToken(token: string | null, hasCalendarScope = true) {
+  cachedAccessToken = token;
+  try {
+    if (token) {
+      sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+      if (hasCalendarScope) {
+        sessionStorage.setItem(SESSION_CALENDAR_SCOPE_KEY, '1');
+      }
+    } else {
+      sessionStorage.removeItem(SESSION_TOKEN_KEY);
+      sessionStorage.removeItem(SESSION_CALENDAR_SCOPE_KEY);
+    }
+  } catch {
+    // ignore storage errors
+  }
+}
+
+export function hasCalendarScopeGranted(): boolean {
+  try {
+    return (
+      Boolean(cachedAccessToken) &&
+      sessionStorage.getItem(SESSION_CALENDAR_SCOPE_KEY) === '1'
+    );
+  } catch {
+    return Boolean(cachedAccessToken);
+  }
+}
 
 export interface GoogleUserProfile {
   uid: string;
@@ -43,23 +223,22 @@ export const initAuth = (
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
       if (cachedAccessToken) {
+        const profile: GoogleUserProfile = {
+          uid: user.uid,
+          displayName: user.displayName,
+          email: user.email,
+          photoURL: user.photoURL,
+        };
+        upsertConnectedGoogleAccount(profile, cachedAccessToken);
         if (onAuthSuccess) {
-          onAuthSuccess(
-            {
-              uid: user.uid,
-              displayName: user.displayName,
-              email: user.email,
-              photoURL: user.photoURL,
-            },
-            cachedAccessToken
-          );
+          onAuthSuccess(profile, cachedAccessToken);
         }
       } else if (!isSigningIn) {
-        cachedAccessToken = null;
+        setCachedToken(null);
         if (onAuthFailure) onAuthFailure();
       }
     } else {
-      cachedAccessToken = null;
+      setCachedToken(null);
       if (onAuthFailure) onAuthFailure();
     }
   });
@@ -67,7 +246,8 @@ export const initAuth = (
 
 // Sign in using Firebase Auth Popup (pre-configured in AI Studio)
 export const googleSignIn = async (
-  forceConsent = false
+  forceConsent = false,
+  selectAccount = false
 ): Promise<{
   user: GoogleUserProfile;
   accessToken: string;
@@ -76,26 +256,34 @@ export const googleSignIn = async (
     isSigningIn = true;
     const authProvider = new GoogleAuthProvider();
     SCOPES.forEach((scope) => authProvider.addScope(scope));
-    if (forceConsent) {
+    if (selectAccount) {
+      authProvider.setCustomParameters({ prompt: 'select_account consent' });
+    } else if (forceConsent || !hasCalendarScopeGranted()) {
       authProvider.setCustomParameters({ prompt: 'consent' });
     }
     const result = await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error(
-        'Não foi possível obter o token OAuth do Google Drive. Tente novamente.'
+        'Não foi possível obter o token OAuth do Google. Tente novamente.'
       );
     }
 
-    cachedAccessToken = credential.accessToken;
+    const userProfile: GoogleUserProfile = {
+      uid: result.user.uid,
+      displayName: result.user.displayName,
+      email: result.user.email,
+      photoURL: result.user.photoURL,
+    };
+
+    if (!cachedAccessToken || !selectAccount) {
+      setCachedToken(credential.accessToken, true);
+    }
+    upsertConnectedGoogleAccount(userProfile, credential.accessToken);
+
     return {
-      user: {
-        uid: result.user.uid,
-        displayName: result.user.displayName,
-        email: result.user.email,
-        photoURL: result.user.photoURL,
-      },
-      accessToken: cachedAccessToken,
+      user: userProfile,
+      accessToken: credential.accessToken,
     };
   } catch (error: unknown) {
     const errCode = (error as { code?: string })?.code || '';
@@ -176,7 +364,7 @@ export const signInWithCustomGISClient = (
           );
           return;
         }
-        cachedAccessToken = response.access_token;
+        setCachedToken(response.access_token, true);
         resolve({
           user: {
             uid: 'gis-user',
@@ -184,7 +372,7 @@ export const signInWithCustomGISClient = (
             email: null,
             photoURL: null,
           },
-          accessToken: cachedAccessToken,
+          accessToken: response.access_token,
         });
       },
     });
@@ -198,7 +386,7 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const clearCachedAccessToken = () => {
-  cachedAccessToken = null;
+  setCachedToken(null);
 };
 
 export const logoutGoogleDrive = async () => {
@@ -207,7 +395,7 @@ export const logoutGoogleDrive = async () => {
   } catch {
     // ignore if signed in via custom GIS
   }
-  cachedAccessToken = null;
+  setCachedToken(null);
 };
 
 export interface DriveBackupFileMeta {

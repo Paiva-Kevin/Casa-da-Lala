@@ -42,12 +42,25 @@ import {
 import {
   CategoriaCalendarioApp,
   criarEventoGoogleCalendar,
+  atualizarEventoGoogleCalendar,
   excluirEventoGoogleCalendar,
   GoogleCalendarEventMapped,
   listarEventosGoogleCalendarMes,
   NovoEventoGoogleInput,
+  CustomCalendarSource,
+  getCustomCalendars,
+  addCustomCalendar,
+  toggleCustomCalendar,
+  removeCustomCalendar,
 } from "../../services/googleCalendarSync";
-import { getAccessToken } from "../../services/googleDriveSync";
+import {
+  getAccessToken,
+  getConnectedGoogleAccounts,
+  connectAdditionalGoogleAccount,
+  toggleConnectedGoogleAccount,
+  removeConnectedGoogleAccount,
+  ConnectedGoogleAccount,
+} from "../../services/googleDriveSync";
 
 export type CategoriaEventoCalendario = "todas" | CategoriaCalendarioApp;
 
@@ -61,12 +74,18 @@ export interface EventoCalendarioUnificado {
   duracaoMin: number;
   titulo: string;
   subtitulo: string;
+  descricao?: string;
   local?: string;
   categoria: CategoriaCalendarioApp;
   cor: ColorTokenKey;
+  corCustomHex?: string;
   concluido?: boolean;
+  ehTarefa?: boolean;
   origem: "app" | "gcal" | "modulo";
   gcalId?: string;
+  calendarId?: string;
+  contaEmail?: string;
+  nomeCalendario?: string;
   htmlLink?: string;
   compromissoId?: number;
   payloadSheet?: BottomSheetPayload;
@@ -169,15 +188,39 @@ export function AbaCalendario({
   const [executandoConfirmacao, setExecutandoConfirmacao] =
     useState<boolean>(false);
 
-  // Formulário rápido para novo evento no dia selecionado
+  // Formulário rápido para novo evento no dia selecionado e Modal Nativo estilo Google Agenda
   const [novoTitulo, setNovoTitulo] = useState("");
   const [novaHora, setNovaHora] = useState("14:00");
   const [novaDuracao, setNovaDuracao] = useState(60);
   const [novoLocal, setNovoLocal] = useState("");
+  const [novaDescricao, setNovaDescricao] = useState("");
   const [novaCat, setNovaCat] = useState<CategoriaCalendarioApp>("pessoal");
   const [enviarNovoParaGoogle, setEnviarNovoParaGoogle] = useState<boolean>(
     configCalendario.sincronizarAoCriarNoGoogle
   );
+
+  // Contas Google conectadas (múltiplos e-mails) e agendas extras por ID/e-mail
+  const [contasGoogle, setContasGoogle] = useState<ConnectedGoogleAccount[]>(
+    () => getConnectedGoogleAccounts()
+  );
+  const [calendariosExtras, setCalendariosExtras] = useState<
+    CustomCalendarSource[]
+  >(() => getCustomCalendars());
+  const [painelContasAberto, setPainelContasAberto] = useState<boolean>(false);
+  const [novoCalIdInput, setNovoCalIdInput] = useState("");
+  const [novoCalNomeInput, setNovoCalNomeInput] = useState("");
+  const [novoCalCorInput, setNovoCalCorInput] = useState("#0284C7");
+  const [contaDestinoCriacao, setContaDestinoCriacao] = useState<string>("");
+  const [filtroContaEmail, setFiltroContaEmail] = useState<string>("todas");
+
+  // Modal interativo estilo Google Agenda ao clicar em qualquer dia/horário
+  const [modalCriacaoAberto, setModalCriacaoAberto] = useState<boolean>(false);
+  const [tipoItemModal, setTipoItemModal] = useState<"evento" | "tarefa">(
+    "evento"
+  );
+  const [diaInteiroModal, setDiaInteiroModal] = useState<boolean>(false);
+  const [eventoEditando, setEventoEditando] =
+    useState<EventoCalendarioUnificado | null>(null);
 
   const diasNoMesCount = useMemo(
     () => new Date(anoAtivo, mesAtivo, 0).getDate(),
@@ -195,13 +238,18 @@ export function AbaCalendario({
     [diasNoMesCount]
   );
 
-  // Carrega eventos do Google Calendar para o mês ativo
+  // Carrega eventos do Google Calendar para o mês ativo (todas as contas conectadas + agendas extras)
   const sincronizarEventosDoMesGoogle = useCallback(
     async (silencioso = false) => {
+      const contasAtuais = getConnectedGoogleAccounts();
+      setContasGoogle(contasAtuais);
+      setCalendariosExtras(getCustomCalendars());
+
       const token = await getAccessToken();
-      if (!token) {
+      if (!token && contasAtuais.length === 0) {
         if (!silencioso) {
           await onConnectGoogle();
+          setContasGoogle(getConnectedGoogleAccounts());
         }
         return;
       }
@@ -210,6 +258,7 @@ export function AbaCalendario({
       try {
         const lista = await listarEventosGoogleCalendarMes(anoAtivo, mesAtivo);
         setEventosGoogle(lista);
+        setContasGoogle(getConnectedGoogleAccounts());
         setUltimaSyncGCal(
           new Date().toLocaleTimeString("pt-BR", {
             hour: "2-digit",
@@ -217,8 +266,9 @@ export function AbaCalendario({
           })
         );
         if (!silencioso) {
+          const totalContas = Math.max(1, getConnectedGoogleAccounts().filter((a) => a.active).length);
           showToast(
-            `Google Agenda sincronizado: ${lista.length} evento(s) carregados em ${
+            `Google Agenda sincronizado: ${lista.length} evento(s) de ${totalContas} conta(s) em ${
               NOMES_MESES[mesAtivo - 1]
             }!`
           );
@@ -238,9 +288,14 @@ export function AbaCalendario({
     [anoAtivo, mesAtivo, onConnectGoogle, showToast]
   );
 
+  // Sincroniza ao abrir a aba ou trocar mês/ano, mesmo se já houver token em sessão
   useEffect(() => {
-    if (googleConnected && configCalendario.mostrarGoogleAgenda) {
-      sincronizarEventosDoMesGoogle(true);
+    if (configCalendario.mostrarGoogleAgenda) {
+      const hasAnyToken =
+        googleConnected || getConnectedGoogleAccounts().length > 0;
+      if (hasAnyToken) {
+        sincronizarEventosDoMesGoogle(true);
+      }
     }
   }, [
     googleConnected,
@@ -334,15 +389,25 @@ export function AbaCalendario({
       });
     });
 
-    // 2. Eventos vindos diretamente do Google Agenda
+    // 2. Eventos vindos diretamente do Google Agenda (de todas as contas e agendas conectadas)
     if (configCalendario.mostrarGoogleAgenda) {
       eventosGoogle.forEach((eg) => {
         if (eg.ano !== anoAtivo || eg.mes !== mesAtivo) return;
         if (gcalIdsJaNosCompromissos.has(eg.gcalId)) return;
 
+        const labelOrigem = eg.nomeCalendario
+          ? eg.nomeCalendario
+          : eg.contaEmail
+          ? eg.contaEmail
+          : "Google Agenda";
+
         lista.push({
-          id: `gcal-${eg.gcalId}`,
+          id: `gcal-${eg.calendarId || "primary"}-${eg.gcalId}`,
           gcalId: eg.gcalId,
+          calendarId: eg.calendarId || "primary",
+          contaEmail: eg.contaEmail,
+          nomeCalendario: labelOrigem,
+          corCustomHex: eg.corCalendarioHex,
           diaMes: eg.diaMes,
           mes: eg.mes,
           ano: eg.ano,
@@ -350,9 +415,11 @@ export function AbaCalendario({
           horaFim: eg.horaFim,
           duracaoMin: eg.duracaoMin,
           titulo: eg.titulo,
+          descricao: eg.descricao,
+          ehTarefa: eg.titulo.startsWith("[Tarefa]") || eg.titulo.startsWith("☑"),
           subtitulo: eg.diaInteiro
-            ? `Dia inteiro · Google Agenda${eg.local ? ` · ${eg.local}` : ""}`
-            : `${eg.horaInicio}–${eg.horaFim} · Google Agenda${
+            ? `Dia inteiro · ${labelOrigem}${eg.local ? ` · ${eg.local}` : ""}`
+            : `${eg.horaInicio}–${eg.horaFim} · ${labelOrigem}${
                 eg.local ? ` · ${eg.local}` : ""
               }`,
           local: eg.local,
@@ -605,9 +672,23 @@ export function AbaCalendario({
   ]);
 
   const eventosFiltrados = useMemo(() => {
-    if (filtroCategoria === "todas") return todosEventosMes;
-    return todosEventosMes.filter((ev) => ev.categoria === filtroCategoria);
-  }, [todosEventosMes, filtroCategoria]);
+    return todosEventosMes.filter((ev) => {
+      if (filtroCategoria !== "todas" && ev.categoria !== filtroCategoria) {
+        return false;
+      }
+      if (filtroContaEmail !== "todas") {
+        if (ev.origem === "gcal") {
+          const idMatch =
+            ev.contaEmail?.toLowerCase() === filtroContaEmail.toLowerCase() ||
+            ev.calendarId?.toLowerCase() === filtroContaEmail.toLowerCase();
+          if (!idMatch) return false;
+        } else if (filtroContaEmail !== "app_local") {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [todosEventosMes, filtroCategoria, filtroContaEmail]);
 
   const eventosDoDiaSelecionado = useMemo(
     () => eventosFiltrados.filter((ev) => ev.diaMes === diaSelecionado),
@@ -629,8 +710,74 @@ export function AbaCalendario({
     return Array.from({ length: 23 - inicio + 1 }, (_, i) => inicio + i);
   }, [configCalendario.horaInicioGrade]);
 
-  const getCorHexCategoria = (cat: CategoriaCalendarioApp): string => {
+  const getCorHexCategoria = (
+    cat: CategoriaCalendarioApp,
+    corCustomHex?: string
+  ): string => {
+    if (corCustomHex) return corCustomHex;
     return configCalendario.coresCategorias?.[cat] || t.primary;
+  };
+
+  // Abre o modal de criação rápida estilo Google Agenda ao clicar num dia ou horário
+  const abrirModalCriacaoRapida = (
+    dia: number,
+    horaPadrao = "14:00",
+    tipoInicial: "evento" | "tarefa" = "evento"
+  ) => {
+    setDiaSelecionado(dia);
+    setNovaHora(horaPadrao);
+    setTipoItemModal(tipoInicial);
+    setDiaInteiroModal(false);
+    setEventoEditando(null);
+    setNovoTitulo("");
+    setNovoLocal("");
+    setNovaDescricao("");
+    setModalCriacaoAberto(true);
+  };
+
+  // Abre um evento/tarefa existente para visualização, conclusão ou edição
+  const abrirEventoNoCalendario = (ev: EventoCalendarioUnificado) => {
+    setDiaSelecionado(ev.diaMes);
+    if (ev.payloadSheet && ev.origem === "modulo") {
+      openCard(ev.payloadSheet);
+      return;
+    }
+    setEventoEditando(ev);
+    setTipoItemModal(ev.ehTarefa ? "tarefa" : "evento");
+    setNovoTitulo(ev.titulo.replace(/^(\[Tarefa\]\s*|☑\s*)/i, ""));
+    setNovaHora(ev.horario || "14:00");
+    setNovaDuracao(ev.duracaoMin || 60);
+    setNovoLocal(ev.local || "");
+    setNovaDescricao(ev.descricao || ev.subtitulo || "");
+    setNovaCat(ev.categoria);
+    setContaDestinoCriacao(ev.contaEmail || ev.calendarId || "");
+    setModalCriacaoAberto(true);
+  };
+
+  const handleConectarOutroEmailGoogle = async () => {
+    const res = await connectAdditionalGoogleAccount();
+    if (res.user) {
+      setContasGoogle(getConnectedGoogleAccounts());
+      showToast(`Conta ${res.user.email} vinculada ao seu Calendário Unificado!`);
+      await sincronizarEventosDoMesGoogle(true);
+    } else if (res.error) {
+      showToast(res.error);
+    }
+  };
+
+  const handleAdicionarCalendarioPorId = async () => {
+    if (!novoCalIdInput.trim()) return;
+    const lista = addCustomCalendar(
+      novoCalIdInput.trim(),
+      novoCalNomeInput.trim() || novoCalIdInput.trim(),
+      novoCalCorInput,
+      contasGoogle[0]?.email
+    );
+    setCalendariosExtras(lista);
+    setNovoCalIdInput("");
+    setNovoCalNomeInput("");
+    showToast("Agenda adicional vinculada! Sincronizando eventos...");
+    await sincronizarEventosDoMesGoogle(true);
   };
 
   const CATEGORIAS_FILTRO: {
@@ -700,7 +847,10 @@ export function AbaCalendario({
     setDiaSelecionado(agora.getDate());
   };
 
-  const salvarCompromissoLocal = (gcalEventIdCriado?: string) => {
+  const salvarCompromissoLocal = (
+    tituloFinal: string,
+    gcalEventIdCriado?: string
+  ) => {
     const abaMap: Record<CategoriaCalendarioApp, Compromisso["aba"]> = {
       uerj: "estudos_trabalho",
       trabalho: "estudos_trabalho",
@@ -713,11 +863,14 @@ export function AbaCalendario({
     const novo: Compromisso = {
       id: Date.now(),
       hora: novaHora,
-      duracaoMin: novaDuracao,
-      titulo: novoTitulo.trim(),
+      duracaoMin: tipoItemModal === "tarefa" ? 30 : novaDuracao,
+      titulo: tituloFinal,
       local:
-        novoLocal.trim() || `Calendário (${novaCat.toUpperCase()})`,
-      cor: "primary",
+        novoLocal.trim() ||
+        (novaDescricao.trim()
+          ? novaDescricao.trim()
+          : `Calendário (${novaCat.toUpperCase()})`),
+      cor: tipoItemModal === "tarefa" ? "action" : "primary",
       aba: abaMap[novaCat],
       diaMes: diaSelecionado,
       mes: mesAtivo,
@@ -731,62 +884,168 @@ export function AbaCalendario({
     setCompromissos((prev) => [...prev, novo]);
     setNovoTitulo("");
     setNovoLocal("");
+    setNovaDescricao("");
   };
 
   const handleAgendarCompromisso = async () => {
     if (!novoTitulo.trim()) return;
 
+    const tituloFormatado =
+      tipoItemModal === "tarefa" &&
+      !novoTitulo.trim().startsWith("[Tarefa]") &&
+      !novoTitulo.trim().startsWith("☑")
+        ? `[Tarefa] ${novoTitulo.trim()}`
+        : novoTitulo.trim();
+
+    // Se estiver editando um evento existente
+    if (eventoEditando) {
+      if (eventoEditando.compromissoId) {
+        setCompromissos((prev) =>
+          prev.map((c) =>
+            c.id === eventoEditando.compromissoId
+              ? {
+                  ...c,
+                  titulo: tituloFormatado,
+                  hora: novaHora,
+                  duracaoMin: novaDuracao,
+                  local: novoLocal.trim() || c.local,
+                  categoriaCalendario: novaCat,
+                  diaMes: diaSelecionado,
+                  mes: mesAtivo,
+                  ano: anoAtivo,
+                }
+              : c
+          )
+        );
+      }
+
+      if (eventoEditando.gcalId) {
+        try {
+          const atualizado = await atualizarEventoGoogleCalendar(
+            eventoEditando.gcalId,
+            {
+              titulo: tituloFormatado,
+              descricao: novaDescricao.trim(),
+              local: novoLocal.trim(),
+              ano: anoAtivo,
+              mes: mesAtivo,
+              diaMes: diaSelecionado,
+              horaInicio: novaHora,
+              duracaoMin: novaDuracao,
+              diaInteiro: diaInteiroModal,
+              categoria: novaCat,
+              targetAccountEmail:
+                contaDestinoCriacao || eventoEditando.contaEmail,
+              targetCalendarId: eventoEditando.calendarId || "primary",
+            }
+          );
+          setEventosGoogle((prev) =>
+            prev.map((x) =>
+              x.gcalId === eventoEditando.gcalId ? atualizado : x
+            )
+          );
+          showToast(`"${atualizado.titulo}" atualizado no Google Agenda!`);
+        } catch (err) {
+          showToast(
+            err instanceof Error
+              ? err.message
+              : "Atualizado localmente no app."
+          );
+        }
+      } else {
+        showToast(`"${tituloFormatado}" atualizado!`);
+      }
+
+      setModalCriacaoAberto(false);
+      setEventoEditando(null);
+      return;
+    }
+
     const token = await getAccessToken();
-    if (enviarNovoParaGoogle && token) {
+    const temContaAtiva = Boolean(token) || contasGoogle.length > 0;
+
+    if (enviarNovoParaGoogle && temContaAtiva) {
+      const contaAlvo =
+        contaDestinoCriacao || contasGoogle[0]?.email || undefined;
       const inputGCal: NovoEventoGoogleInput = {
-        titulo: novoTitulo.trim(),
+        titulo: tituloFormatado,
+        descricao: novaDescricao.trim(),
         local: novoLocal.trim(),
         ano: anoAtivo,
         mes: mesAtivo,
         diaMes: diaSelecionado,
         horaInicio: novaHora,
-        duracaoMin: novaDuracao,
+        duracaoMin: tipoItemModal === "tarefa" ? 30 : novaDuracao,
+        diaInteiro: diaInteiroModal,
         categoria: novaCat,
+        targetAccountEmail: contaAlvo,
       };
 
+      setModalCriacaoAberto(false);
       setConfirmacaoGCal({
         tipo: "criar",
-        tituloModal: "Confirmar criação no Google Agenda?",
-        descricaoModal:
-          "Este evento será salvo no Calendário do App e também adicionado à sua agenda principal do Google Calendar:",
+        tituloModal: `Confirmar criação de ${
+          tipoItemModal === "tarefa" ? "Tarefa" : "Evento"
+        } no Google Agenda?`,
+        descricaoModal: `Será salvo no App e adicionado à agenda Google (${
+          contaAlvo || "Conta Principal"
+        }):`,
         itensAfetados: [
           `${inputGCal.titulo} — ${String(diaSelecionado).padStart(
             2,
             "0"
-          )}/${String(mesAtivo).padStart(2, "0")}/${anoAtivo} às ${novaHora} (${novaDuracao} min)`,
+          )}/${String(mesAtivo).padStart(2, "0")}/${anoAtivo} ${
+            diaInteiroModal
+              ? "(Dia inteiro)"
+              : `às ${novaHora} (${inputGCal.duracaoMin} min)`
+          }`,
         ],
         onConfirmar: async () => {
           const criado = await criarEventoGoogleCalendar(inputGCal);
           setEventosGoogle((prev) => [...prev, criado]);
-          salvarCompromissoLocal(criado.gcalId);
+          salvarCompromissoLocal(tituloFormatado, criado.gcalId);
           showToast(
-            `Evento "${criado.titulo}" criado e sincronizado com o Google Agenda!`
+            `"${criado.titulo}" criado e sincronizado com o Google Agenda!`
           );
         },
       });
       return;
     }
 
-    salvarCompromissoLocal();
+    salvarCompromissoLocal(tituloFormatado);
+    setModalCriacaoAberto(false);
     showToast(
-      `Evento "${novoTitulo.trim()}" agendado em ${diaSelecionado}/${String(
+      `${
+        tipoItemModal === "tarefa" ? "Tarefa" : "Evento"
+      } "${tituloFormatado}" agendado em ${diaSelecionado}/${String(
         mesAtivo
       ).padStart(2, "0")} às ${novaHora}!`
     );
   };
 
+  const handleAlternarConclusaoEvento = (ev: EventoCalendarioUnificado) => {
+    if (ev.compromissoId) {
+      setCompromissos((prev) =>
+        prev.map((c) =>
+          c.id === ev.compromissoId ? { ...c, concluido: !c.concluido } : c
+        )
+      );
+      showToast(
+        ev.concluido
+          ? `Reaberto: "${ev.titulo}"`
+          : `Concluído: "${ev.titulo}" ✓`
+      );
+    }
+  };
+
   const handleSolicitarExclusaoEvento = (ev: EventoCalendarioUnificado) => {
+    setModalCriacaoAberto(false);
     if (ev.gcalId) {
       setConfirmacaoGCal({
         tipo: "excluir",
-        tituloModal: "Excluir evento do Google Agenda?",
+        tituloModal: "Excluir do Google Agenda?",
         descricaoModal:
-          "Tem certeza de que deseja remover este evento do seu Google Calendar? Esta ação altera sua agenda Google.",
+          "Tem certeza de que deseja remover este item do seu Google Calendar?",
         itensAfetados: [
           `${ev.titulo} (${ev.diaMes}/${String(ev.mes).padStart(
             2,
@@ -794,7 +1053,11 @@ export function AbaCalendario({
           )} às ${ev.horario})`,
         ],
         onConfirmar: async () => {
-          await excluirEventoGoogleCalendar(ev.gcalId!);
+          await excluirEventoGoogleCalendar(
+            ev.gcalId!,
+            ev.calendarId || "primary",
+            ev.contaEmail
+          );
           setEventosGoogle((prev) =>
             prev.filter((x) => x.gcalId !== ev.gcalId)
           );
@@ -803,7 +1066,7 @@ export function AbaCalendario({
               prev.filter((c) => c.id !== ev.compromissoId)
             );
           }
-          showToast(`Evento "${ev.titulo}" removido do Google Agenda.`);
+          showToast(`"${ev.titulo}" removido do Google Agenda.`);
         },
       });
       return;
@@ -811,7 +1074,7 @@ export function AbaCalendario({
 
     if (ev.compromissoId) {
       setCompromissos((prev) => prev.filter((c) => c.id !== ev.compromissoId));
-      showToast(`Compromisso "${ev.titulo}" removido.`);
+      showToast(`"${ev.titulo}" removido.`);
     }
   };
 
@@ -965,8 +1228,18 @@ export function AbaCalendario({
             </div>
           </div>
 
-          {/* Alternador de Visualização igual ao Google Agenda + Botão Sincronizar + Configurações */}
+          {/* Alternador de Visualização igual ao Google Agenda + Botão + Criar + Contas/Agendas + Sincronizar */}
           <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => abrirModalCriacaoRapida(diaSelecionado, "14:00", "evento")}
+              className="px-3.5 py-2 rounded-2xl text-xs font-bold text-white flex items-center gap-1.5 shadow-sm cursor-pointer"
+              style={{ background: t.action }}
+              title="Criar novo Evento ou Tarefa estilo Google Agenda"
+            >
+              <Plus size={15} />
+              <span>+ Criar Evento / Tarefa</span>
+            </button>
+
             <div
               className="grid grid-cols-4 gap-1 p-1 rounded-2xl border"
               style={{ background: t.bg, borderColor: t.border }}
@@ -1005,6 +1278,22 @@ export function AbaCalendario({
             </div>
 
             <button
+              onClick={() => setPainelContasAberto((v) => !v)}
+              className="px-3 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              style={{
+                background: painelContasAberto ? t.action : t.bg,
+                color: painelContasAberto ? "#fff" : t.text,
+                borderColor: painelContasAberto ? t.action : t.border,
+              }}
+              title="Conectar mais e-mails Google ou adicionar mais agendas"
+            >
+              <Cloud size={13} />
+              <span>
+                Contas & Agendas ({Math.max(googleConnected ? 1 : 0, contasGoogle.length) + calendariosExtras.length})
+              </span>
+            </button>
+
+            <button
               onClick={() => sincronizarEventosDoMesGoogle(false)}
               disabled={sincronizandoGCal}
               className="px-3 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer"
@@ -1013,7 +1302,7 @@ export function AbaCalendario({
                 color: googleConnected ? t.primary : "#fff",
                 borderColor: googleConnected ? `${t.primary}40` : t.action,
               }}
-              title="Sincronizar eventos com o Google Agenda"
+              title="Sincronizar eventos com todas as suas contas do Google Agenda"
             >
               <RefreshCw
                 size={13}
@@ -1022,9 +1311,9 @@ export function AbaCalendario({
               <span>
                 {sincronizandoGCal
                   ? "Sincronizando..."
-                  : googleConnected
-                  ? "Sync Google Agenda"
-                  : "Conectar Google Agenda"}
+                  : googleConnected || contasGoogle.length > 0
+                  ? "Sync Agendas"
+                  : "Conectar Google"}
               </span>
             </button>
 
@@ -1043,6 +1332,235 @@ export function AbaCalendario({
             </button>
           </div>
         </div>
+
+        {/* PAINEL DE MÚLTIPLOS E-MAILS GOOGLE E AGENDAS EXTRAS */}
+        {painelContasAberto && (
+          <div
+            className="p-4 rounded-2xl border space-y-4"
+            style={{ background: t.bg, borderColor: t.border }}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs sm:text-sm font-bold flex items-center gap-1.5" style={{ color: t.text }}>
+                  <Cloud size={15} style={{ color: t.action }} />
+                  Múltiplas Contas Google & Agendas Unificadas
+                </h3>
+                <p className="text-[11px]" style={{ color: t.textSoft }}>
+                  Conecte 2 ou mais e-mails do Google (ex: pessoal + trabalho/UERJ) ou adicione o ID/e-mail de outras agendas para ver tudo unificado aqui:
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleConectarOutroEmailGoogle}
+                  className="px-3 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer"
+                  style={{ background: t.action }}
+                >
+                  <Plus size={13} /> Conectar Outro E-mail Google
+                </button>
+                <button
+                  onClick={() => setPainelContasAberto(false)}
+                  className="p-1.5 rounded-lg cursor-pointer"
+                  style={{ color: t.textSoft }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+
+            {/* Lista de Contas Google OAuth Conectadas */}
+            <div className="space-y-2">
+              <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: t.textSoft }}>
+                E-mails Conectados via Login Google ({contasGoogle.length})
+              </p>
+              {contasGoogle.length === 0 ? (
+                <div className="p-3 rounded-xl border text-xs flex items-center justify-between" style={{ background: t.card, borderColor: t.border }}>
+                  <span style={{ color: t.textSoft }}>
+                    Nenhuma conta Google listada ainda. Clique em "Conectar Outro E-mail Google" para vincular suas contas.
+                  </span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {contasGoogle.map((acc) => (
+                    <div
+                      key={acc.email}
+                      className="p-3 rounded-xl border flex items-center justify-between gap-2"
+                      style={{ background: t.card, borderColor: acc.active ? acc.colorHex : t.border }}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span
+                          className="w-3 h-3 rounded-full shrink-0"
+                          style={{ background: acc.colorHex }}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold truncate" style={{ color: t.text }}>
+                            {acc.displayName || acc.email}
+                          </p>
+                          <p className="text-[11px] truncate" style={{ color: t.textSoft }}>
+                            {acc.email} · Todas as agendas da conta
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => {
+                            const list = toggleConnectedGoogleAccount(acc.email);
+                            setContasGoogle(list);
+                            sincronizarEventosDoMesGoogle(true);
+                          }}
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer"
+                          style={{
+                            background: acc.active ? `${t.primary}18` : t.bg,
+                            color: acc.active ? t.primary : t.textSoft,
+                            borderColor: acc.active ? t.primary : t.border,
+                          }}
+                        >
+                          {acc.active ? "Ativa" : "Pausada"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            const list = removeConnectedGoogleAccount(acc.email);
+                            setContasGoogle(list);
+                            sincronizarEventosDoMesGoogle(true);
+                          }}
+                          className="p-1 rounded-lg cursor-pointer"
+                          style={{ color: t.danger }}
+                          title="Remover conta"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Adicionar Agenda de Outro E-mail ou ID de Calendário Compartilhado */}
+            <div className="p-3 rounded-xl border space-y-2.5" style={{ background: t.card, borderColor: t.border }}>
+              <p className="text-xs font-bold" style={{ color: t.text }}>
+                Adicionar Agenda por E-mail ou ID do Google Calendar
+              </p>
+              <p className="text-[11px]" style={{ color: t.textSoft }}>
+                Se você compartilha a agenda de outro e-mail com sua conta principal, digite o e-mail (ex: <code className="font-mono">outroemail@gmail.com</code>) abaixo para sincronizar também:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                <input
+                  value={novoCalIdInput}
+                  onChange={(e) => setNovoCalIdInput(e.target.value)}
+                  placeholder="E-mail da agenda ou ID (ex: segundo.email@gmail.com)"
+                  className="sm:col-span-5 px-3 py-2 rounded-xl text-xs outline-none border"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                />
+                <input
+                  value={novoCalNomeInput}
+                  onChange={(e) => setNovoCalNomeInput(e.target.value)}
+                  placeholder="Apelido (ex: Agenda Trabalho, Pessoal 2)"
+                  className="sm:col-span-4 px-3 py-2 rounded-xl text-xs outline-none border"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                />
+                <div className="sm:col-span-3 flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={novoCalCorInput}
+                    onChange={(e) => setNovoCalCorInput(e.target.value)}
+                    className="w-9 h-9 rounded-xl border-0 cursor-pointer bg-transparent shrink-0"
+                  />
+                  <button
+                    onClick={handleAdicionarCalendarioPorId}
+                    className="flex-1 py-2 px-3 rounded-xl text-xs font-bold text-white cursor-pointer"
+                    style={{ background: t.primary }}
+                  >
+                    + Vincular
+                  </button>
+                </div>
+              </div>
+
+              {calendariosExtras.length > 0 && (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {calendariosExtras.map((cal) => (
+                    <div
+                      key={cal.id}
+                      className="px-2.5 py-1.5 rounded-xl border text-xs flex items-center gap-2"
+                      style={{ background: t.bg, borderColor: cal.ativo ? cal.corHex : t.border }}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-full" style={{ background: cal.corHex }} />
+                      <button
+                        onClick={() => {
+                          setCalendariosExtras(toggleCustomCalendar(cal.id));
+                          sincronizarEventosDoMesGoogle(true);
+                        }}
+                        className="font-semibold cursor-pointer"
+                        style={{ color: cal.ativo ? t.text : t.textSoft }}
+                      >
+                        {cal.nome} ({cal.id})
+                      </button>
+                      <button
+                        onClick={() => {
+                          setCalendariosExtras(removeCustomCalendar(cal.id));
+                          sincronizarEventosDoMesGoogle(true);
+                        }}
+                        className="cursor-pointer"
+                        style={{ color: t.danger }}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Filtro rápido por Conta/Agenda */}
+            {(contasGoogle.length > 0 || calendariosExtras.length > 0) && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                <span className="text-[11px] font-bold mr-1" style={{ color: t.textSoft }}>
+                  Filtrar por conta:
+                </span>
+                <button
+                  onClick={() => setFiltroContaEmail("todas")}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer"
+                  style={{
+                    background: filtroContaEmail === "todas" ? t.action : t.card,
+                    color: filtroContaEmail === "todas" ? "#fff" : t.textSoft,
+                    borderColor: t.border,
+                  }}
+                >
+                  Todas Unificadas
+                </button>
+                {contasGoogle.map((acc) => (
+                  <button
+                    key={acc.email}
+                    onClick={() => setFiltroContaEmail(acc.email)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold border flex items-center gap-1.5 cursor-pointer"
+                    style={{
+                      background: filtroContaEmail === acc.email ? `${acc.colorHex}22` : t.card,
+                      color: filtroContaEmail === acc.email ? acc.colorHex : t.textSoft,
+                      borderColor: filtroContaEmail === acc.email ? acc.colorHex : t.border,
+                    }}
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ background: acc.colorHex }} />
+                    {acc.email}
+                  </button>
+                ))}
+                {calendariosExtras.map((cal) => (
+                  <button
+                    key={cal.id}
+                    onClick={() => setFiltroContaEmail(cal.id)}
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold border flex items-center gap-1.5 cursor-pointer"
+                    style={{
+                      background: filtroContaEmail === cal.id ? `${cal.corHex}22` : t.card,
+                      color: filtroContaEmail === cal.id ? cal.corHex : t.textSoft,
+                      borderColor: filtroContaEmail === cal.id ? cal.corHex : t.border,
+                    }}
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ background: cal.corHex }} />
+                    {cal.nome}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* PAINEL EXPANSÍVEL DE CORES, CAMADAS E CONFIGURAÇÕES DO CALENDÁRIO DO APP */}
         {painelConfigAberto && (
@@ -1277,10 +1795,19 @@ export function AbaCalendario({
                   );
 
                   return (
-                    <button
+                    <div
                       key={dia}
-                      onClick={() => setDiaSelecionado(dia)}
-                      className="h-20 sm:h-28 p-1.5 sm:p-2 rounded-2xl border flex flex-col justify-between text-left transition-all cursor-pointer relative overflow-hidden"
+                      onClick={() => {
+                        if (dia === diaSelecionado) {
+                          abrirModalCriacaoRapida(dia, "14:00", "evento");
+                        } else {
+                          setDiaSelecionado(dia);
+                        }
+                      }}
+                      onDoubleClick={() =>
+                        abrirModalCriacaoRapida(dia, "14:00", "evento")
+                      }
+                      className="group h-24 sm:h-32 p-1.5 sm:p-2 rounded-2xl border flex flex-col justify-between text-left transition-all cursor-pointer relative overflow-hidden"
                       style={{
                         background: isSelecionado
                           ? `${t.action}14`
@@ -1293,6 +1820,7 @@ export function AbaCalendario({
                           ? t.primary
                           : t.border,
                       }}
+                      title="Clique para selecionar ou clique novamente no dia para criar Evento / Tarefa"
                     >
                       <div className="flex items-center justify-between w-full">
                         <span
@@ -1308,29 +1836,60 @@ export function AbaCalendario({
                         >
                           {dia}
                         </span>
-                        {evsDia.some((x) => x.origem === "gcal") && (
-                          <Cloud
-                            size={11}
-                            style={{ color: t.action }}
-                            title="Sincronizado com Google Agenda"
-                          />
-                        )}
+                        <div className="flex items-center gap-1">
+                          {evsDia.some((x) => x.origem === "gcal") && (
+                            <Cloud
+                              size={11}
+                              style={{ color: t.action }}
+                              title="Sincronizado com Google Agenda"
+                            />
+                          )}
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              abrirModalCriacaoRapida(dia, "14:00", "evento");
+                            }}
+                            className="w-5 h-5 rounded-lg flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            style={{
+                              background: `${t.action}20`,
+                              color: t.action,
+                            }}
+                            title={`Adicionar Evento ou Tarefa no dia ${dia}`}
+                          >
+                            <Plus size={12} />
+                          </button>
+                        </div>
                       </div>
 
                       {/* Pílulas de eventos estilo Google Calendar */}
                       <div className="space-y-1 w-full overflow-hidden">
                         {evsDia.slice(0, 3).map((ev) => {
-                          const corCat = getCorHexCategoria(ev.categoria);
+                          const corCat = getCorHexCategoria(
+                            ev.categoria,
+                            ev.corCustomHex
+                          );
                           return (
                             <div
                               key={ev.id}
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold truncate flex items-center gap-1"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                abrirEventoNoCalendario(ev);
+                              }}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold truncate flex items-center gap-1 hover:opacity-90"
                               style={{
                                 background: `${corCat}22`,
                                 color: corCat,
                                 borderLeft: `2.5px solid ${corCat}`,
+                                textDecoration: ev.concluido
+                                  ? "line-through"
+                                  : "none",
                               }}
-                              title={`${ev.horario} ${ev.titulo}`}
+                              title={`${ev.horario} ${ev.titulo}${
+                                ev.nomeCalendario
+                                  ? ` (${ev.nomeCalendario})`
+                                  : ""
+                              }`}
                             >
                               <span className="font-mono-num hidden sm:inline">
                                 {ev.horario}
@@ -1348,7 +1907,7 @@ export function AbaCalendario({
                           </p>
                         )}
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -1369,7 +1928,9 @@ export function AbaCalendario({
                     <button
                       key={idx}
                       disabled={!dia}
-                      onClick={() => dia && setDiaSelecionado(dia)}
+                      onClick={() =>
+                        dia && abrirModalCriacaoRapida(dia, "14:00", "evento")
+                      }
                       className="p-1.5 rounded-xl text-center transition-all cursor-pointer disabled:opacity-30"
                       style={{
                         background: isSel ? t.action : t.bg,
@@ -1423,27 +1984,33 @@ export function AbaCalendario({
                         return (
                           <div
                             key={cIdx}
-                            onClick={() => {
-                              setDiaSelecionado(dia);
-                              setNovaHora(`${prefixoHora}:00`);
-                            }}
-                            className="rounded-xl p-1 space-y-1 cursor-pointer transition-colors"
+                            onClick={() =>
+                              abrirModalCriacaoRapida(
+                                dia,
+                                `${prefixoHora}:00`,
+                                "evento"
+                              )
+                            }
+                            className="rounded-xl p-1 space-y-1 cursor-pointer transition-colors hover:opacity-90"
                             style={{
                               background:
                                 dia === diaSelecionado
                                   ? `${t.action}08`
                                   : t.bg,
                             }}
+                            title={`Clique para criar Evento ou Tarefa no dia ${dia} às ${prefixoHora}:00`}
                           >
                             {evsSlot.map((ev) => {
-                              const corCat = getCorHexCategoria(ev.categoria);
+                              const corCat = getCorHexCategoria(
+                                ev.categoria,
+                                ev.corCustomHex
+                              );
                               return (
                                 <div
                                   key={ev.id}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setDiaSelecionado(dia);
-                                    if (ev.payloadSheet) openCard(ev.payloadSheet);
+                                    abrirEventoNoCalendario(ev);
                                   }}
                                   className="p-1 rounded-lg text-[10px] font-bold leading-tight truncate"
                                   style={{
@@ -1498,7 +2065,13 @@ export function AbaCalendario({
                   return (
                     <div
                       key={hora}
-                      onClick={() => setNovaHora(`${prefixoHora}:00`)}
+                      onClick={() =>
+                        abrirModalCriacaoRapida(
+                          diaSelecionado,
+                          `${prefixoHora}:00`,
+                          "evento"
+                        )
+                      }
                       className="grid grid-cols-[60px_1fr] gap-3 items-start p-2 rounded-2xl border transition-colors cursor-pointer"
                       style={{
                         background: evsHora.length > 0 ? `${t.cardSubtle}` : t.bg,
@@ -1515,20 +2088,23 @@ export function AbaCalendario({
                       <div className="space-y-1.5">
                         {evsHora.length === 0 ? (
                           <p
-                            className="text-[11px] italic pt-1"
+                            className="text-[11px] italic pt-1 flex items-center gap-1"
                             style={{ color: `${t.textSoft}80` }}
                           >
-                            Clique para agendar às {prefixoHora}:00
+                            <Plus size={11} /> Clique para criar Evento ou Tarefa às {prefixoHora}:00
                           </p>
                         ) : (
                           evsHora.map((ev) => {
-                            const corCat = getCorHexCategoria(ev.categoria);
+                            const corCat = getCorHexCategoria(
+                              ev.categoria,
+                              ev.corCustomHex
+                            );
                             return (
                               <div
                                 key={ev.id}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (ev.payloadSheet) openCard(ev.payloadSheet);
+                                  abrirEventoNoCalendario(ev);
                                 }}
                                 className="p-2.5 rounded-xl flex items-center justify-between gap-2"
                                 style={{
@@ -1751,11 +2327,14 @@ export function AbaCalendario({
               </div>
             ) : (
               eventosDoDiaSelecionado.map((ev) => {
-                const corCat = getCorHexCategoria(ev.categoria);
+                const corCat = getCorHexCategoria(
+                  ev.categoria,
+                  ev.corCustomHex
+                );
                 return (
                   <div
                     key={ev.id}
-                    onClick={() => ev.payloadSheet && openCard(ev.payloadSheet)}
+                    onClick={() => abrirEventoNoCalendario(ev)}
                     className="p-3 rounded-2xl border flex items-start justify-between gap-2.5 transition-transform active:scale-[0.99] cursor-pointer"
                     style={{
                       background: t.bg,
@@ -1776,23 +2355,28 @@ export function AbaCalendario({
                           className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md"
                           style={{ background: `${corCat}18`, color: corCat }}
                         >
-                          {ev.categoria}
+                          {ev.ehTarefa ? "Tarefa" : ev.categoria}
                         </span>
                         {ev.origem === "gcal" && (
                           <span
-                            className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1"
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded-md flex items-center gap-1 truncate max-w-[160px]"
                             style={{
                               background: `${t.action}18`,
                               color: t.action,
                             }}
+                            title={ev.contaEmail || ev.nomeCalendario || "Google Agenda"}
                           >
-                            <Cloud size={10} /> Google Agenda
+                            <Cloud size={10} />{" "}
+                            {ev.nomeCalendario || ev.contaEmail || "Google Agenda"}
                           </span>
                         )}
                       </div>
                       <p
                         className="text-xs sm:text-sm font-bold truncate"
-                        style={{ color: t.text }}
+                        style={{
+                          color: t.text,
+                          textDecoration: ev.concluido ? "line-through" : "none",
+                        }}
                       >
                         {ev.titulo}
                       </p>
@@ -1805,6 +2389,21 @@ export function AbaCalendario({
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0 pt-0.5">
+                      {ev.compromissoId && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAlternarConclusaoEvento(ev);
+                          }}
+                          className="p-1.5 rounded-lg cursor-pointer"
+                          style={{
+                            color: ev.concluido ? t.primary : t.textSoft,
+                          }}
+                          title="Marcar como concluído"
+                        >
+                          <CheckCircle2 size={15} />
+                        </button>
+                      )}
                       {ev.htmlLink && (
                         <a
                           href={ev.htmlLink}
@@ -1831,11 +2430,6 @@ export function AbaCalendario({
                           <Trash2 size={14} />
                         </button>
                       )}
-                      {ev.concluido ? (
-                        <CheckCircle2 size={15} style={{ color: t.primary }} />
-                      ) : (
-                        <AlertCircle size={15} style={{ color: corCat }} />
-                      )}
                     </div>
                   </div>
                 );
@@ -1843,24 +2437,60 @@ export function AbaCalendario({
             )}
           </div>
 
-          {/* Formulário Rápido para Agendar Evento (App + Google Agenda) */}
+          {/* Formulário Rápido para Agendar Evento ou Tarefa (App + Google Agenda) */}
           <div
             className="p-4 rounded-2xl border space-y-3"
             style={{ background: t.bg, borderColor: t.border }}
           >
-            <p
-              className="text-xs font-bold flex items-center gap-1.5"
-              style={{ color: t.text }}
-            >
-              <Plus size={14} style={{ color: t.action }} /> Novo Evento em{" "}
-              {String(diaSelecionado).padStart(2, "0")}/
-              {String(mesAtivo).padStart(2, "0")}/{anoAtivo}
-            </p>
+            <div className="flex items-center justify-between gap-2">
+              <p
+                className="text-xs font-bold flex items-center gap-1.5"
+                style={{ color: t.text }}
+              >
+                <Plus size={14} style={{ color: t.action }} /> Adicionar em{" "}
+                {String(diaSelecionado).padStart(2, "0")}/
+                {String(mesAtivo).padStart(2, "0")}/{anoAtivo}
+              </p>
+              <div
+                className="flex gap-1 p-0.5 rounded-xl border"
+                style={{ background: t.card, borderColor: t.border }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setTipoItemModal("evento")}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
+                  style={{
+                    background:
+                      tipoItemModal === "evento" ? t.action : "transparent",
+                    color: tipoItemModal === "evento" ? "#fff" : t.textSoft,
+                  }}
+                >
+                  Evento
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTipoItemModal("tarefa")}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
+                  style={{
+                    background:
+                      tipoItemModal === "tarefa" ? t.primary : "transparent",
+                    color: tipoItemModal === "tarefa" ? "#fff" : t.textSoft,
+                  }}
+                >
+                  Tarefa
+                </button>
+              </div>
+            </div>
 
             <input
               value={novoTitulo}
               onChange={(e) => setNovoTitulo(e.target.value)}
-              placeholder="Título (ex: Aula UERJ, Reunião CDT, Vet Nina)..."
+              onKeyDown={(e) => e.key === "Enter" && handleAgendarCompromisso()}
+              placeholder={
+                tipoItemModal === "tarefa"
+                  ? "Título da tarefa (ex: Enviar relatório, Comprar ração)..."
+                  : "Título do evento (ex: Aula UERJ, Reunião CDT, Vet Nina)..."
+              }
               className="w-full px-3 py-2 rounded-xl text-xs outline-none border"
               style={{
                 background: t.card,
@@ -1872,7 +2502,7 @@ export function AbaCalendario({
             <input
               value={novoLocal}
               onChange={(e) => setNovoLocal(e.target.value)}
-              placeholder="Local ou link (opcional)..."
+              placeholder="Local, link Meet ou observação (opcional)..."
               className="w-full px-3 py-2 rounded-xl text-xs outline-none border"
               style={{
                 background: t.card,
@@ -1931,6 +2561,28 @@ export function AbaCalendario({
               </select>
             </div>
 
+            {contasGoogle.length > 1 && (
+              <select
+                value={contaDestinoCriacao}
+                onChange={(e) => setContaDestinoCriacao(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl text-xs outline-none border"
+                style={{
+                  background: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              >
+                <option value="">
+                  Agenda destino: {contasGoogle[0]?.email} (Principal)
+                </option>
+                {contasGoogle.map((acc) => (
+                  <option key={acc.email} value={acc.email}>
+                    Salvar em: {acc.email}
+                  </option>
+                ))}
+              </select>
+            )}
+
             <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -1939,7 +2591,7 @@ export function AbaCalendario({
                 className="rounded"
               />
               <span style={{ color: t.textSoft }}>
-                Sincronizar este evento com meu{" "}
+                Sincronizar com meu{" "}
                 <strong style={{ color: t.text }}>Google Agenda</strong>
               </span>
             </label>
@@ -1947,15 +2599,324 @@ export function AbaCalendario({
             <button
               onClick={handleAgendarCompromisso}
               className="w-full py-2.5 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 cursor-pointer"
-              style={{ background: t.action }}
+              style={{
+                background:
+                  tipoItemModal === "tarefa" ? t.primary : t.action,
+              }}
             >
-              <Plus size={14} /> Agendar em{" "}
+              <Plus size={14} /> Salvar{" "}
+              {tipoItemModal === "tarefa" ? "Tarefa" : "Evento"} em{" "}
               {String(diaSelecionado).padStart(2, "0")}/
               {String(mesAtivo).padStart(2, "0")}
             </button>
           </div>
         </section>
       </div>
+
+      {/* MODAL NATIVO ESTILO GOOGLE AGENDA (AO CLICAR EM QUALQUER DIA OU HORÁRIO DO CALENDÁRIO) */}
+      {modalCriacaoAberto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/55 backdrop-blur-xs"
+            onClick={() => {
+              setModalCriacaoAberto(false);
+              setEventoEditando(null);
+            }}
+          />
+          <div
+            className="relative z-10 w-full max-w-lg rounded-3xl border p-5 shadow-2xl space-y-4"
+            style={{
+              background: t.card,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          >
+            <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: t.border }}>
+              <div className="flex items-center gap-2">
+                <div
+                  className="flex gap-1 p-1 rounded-2xl border"
+                  style={{ background: t.bg, borderColor: t.border }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setTipoItemModal("evento")}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer"
+                    style={{
+                      background:
+                        tipoItemModal === "evento" ? t.action : "transparent",
+                      color: tipoItemModal === "evento" ? "#fff" : t.textSoft,
+                    }}
+                  >
+                    Evento
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTipoItemModal("tarefa")}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer"
+                    style={{
+                      background:
+                        tipoItemModal === "tarefa" ? t.primary : "transparent",
+                      color: tipoItemModal === "tarefa" ? "#fff" : t.textSoft,
+                    }}
+                  >
+                    Tarefa
+                  </button>
+                </div>
+                <span className="text-xs font-mono-num font-bold px-2.5 py-1 rounded-xl" style={{ background: t.cardSubtle, color: t.text }}>
+                  {String(diaSelecionado).padStart(2, "0")}/{String(mesAtivo).padStart(2, "0")}/{anoAtivo}
+                </span>
+              </div>
+
+              <button
+                onClick={() => {
+                  setModalCriacaoAberto(false);
+                  setEventoEditando(null);
+                }}
+                className="p-1.5 rounded-xl cursor-pointer"
+                style={{ color: t.textSoft }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <input
+                autoFocus
+                value={novoTitulo}
+                onChange={(e) => setNovoTitulo(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAgendarCompromisso()}
+                placeholder={
+                  tipoItemModal === "tarefa"
+                    ? "Adicionar título da tarefa..."
+                    : "Adicionar título e horário do evento..."
+                }
+                className="w-full px-3.5 py-3 rounded-2xl text-sm font-bold outline-none border"
+                style={{
+                  background: t.bg,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              />
+
+              {/* Data, Hora, Duração e Dia Inteiro */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Dia do Mês
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={diasNoMesCount}
+                    value={diaSelecionado}
+                    onChange={(e) =>
+                      setDiaSelecionado(
+                        Math.min(
+                          diasNoMesCount,
+                          Math.max(1, Number(e.target.value) || 1)
+                        )
+                      )
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Horário
+                  </label>
+                  <input
+                    type="time"
+                    disabled={diaInteiroModal}
+                    value={novaHora}
+                    onChange={(e) => setNovaHora(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num outline-none border disabled:opacity-40"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Duração
+                  </label>
+                  <select
+                    disabled={diaInteiroModal || tipoItemModal === "tarefa"}
+                    value={novaDuracao}
+                    onChange={(e) => setNovaDuracao(Number(e.target.value))}
+                    className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num outline-none border disabled:opacity-40"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  >
+                    <option value={15}>15 min</option>
+                    <option value={30}>30 min</option>
+                    <option value={45}>45 min</option>
+                    <option value={60}>1 hora</option>
+                    <option value={90}>1h 30m</option>
+                    <option value={120}>2 horas</option>
+                    <option value={180}>3 horas</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Categoria
+                  </label>
+                  <select
+                    value={novaCat}
+                    onChange={(e) =>
+                      setNovaCat(e.target.value as CategoriaCalendarioApp)
+                    }
+                    className="w-full px-2.5 py-2 rounded-xl text-xs font-bold outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  >
+                    <option value="pessoal">Pessoal</option>
+                    <option value="uerj">UERJ & Estudos</option>
+                    <option value="trabalho">Trabalho / CDT</option>
+                    <option value="pets">Pets</option>
+                    <option value="financas">Finanças</option>
+                    <option value="saude">Saúde & Treino</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 flex-wrap">
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={diaInteiroModal}
+                    onChange={(e) => setDiaInteiroModal(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span style={{ color: t.text }}>Dia inteiro</span>
+                </label>
+
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={enviarNovoParaGoogle}
+                    onChange={(e) => setEnviarNovoParaGoogle(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span style={{ color: t.text }}>
+                    Sincronizar no <strong>Google Agenda</strong>
+                  </span>
+                </label>
+              </div>
+
+              {/* Escolha de qual e-mail/agenda do Google receberá o evento */}
+              {(contasGoogle.length > 0 || calendariosExtras.length > 0) && (
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Conta / Agenda Google de Destino
+                  </label>
+                  <select
+                    value={contaDestinoCriacao}
+                    onChange={(e) => setContaDestinoCriacao(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  >
+                    {contasGoogle.map((acc) => (
+                      <option key={acc.email} value={acc.email}>
+                        Google Agenda: {acc.email} ({acc.displayName})
+                      </option>
+                    ))}
+                    {calendariosExtras.map((cal) => (
+                      <option key={cal.id} value={cal.id}>
+                        Agenda vinculada: {cal.nome} ({cal.id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <input
+                value={novoLocal}
+                onChange={(e) => setNovoLocal(e.target.value)}
+                placeholder="Adicionar local ou link de videochamada..."
+                className="w-full px-3 py-2.5 rounded-xl text-xs outline-none border"
+                style={{ background: t.bg, color: t.text, borderColor: t.border }}
+              />
+
+              <textarea
+                rows={2}
+                value={novaDescricao}
+                onChange={(e) => setNovaDescricao(e.target.value)}
+                placeholder="Adicionar descrição, pauta ou observações..."
+                className="w-full px-3 py-2 rounded-xl text-xs outline-none border resize-none"
+                style={{ background: t.bg, color: t.text, borderColor: t.border }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-2 border-t" style={{ borderColor: t.border }}>
+              {eventoEditando ? (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSolicitarExclusaoEvento(eventoEditando)}
+                    className="px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer border"
+                    style={{
+                      background: `${t.danger}15`,
+                      color: t.danger,
+                      borderColor: `${t.danger}40`,
+                    }}
+                  >
+                    <Trash2 size={13} /> Excluir
+                  </button>
+                  {eventoEditando.compromissoId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleAlternarConclusaoEvento(eventoEditando);
+                        setModalCriacaoAberto(false);
+                        setEventoEditando(null);
+                      }}
+                      className="px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer border"
+                      style={{
+                        background: `${t.primary}15`,
+                        color: t.primary,
+                        borderColor: `${t.primary}40`,
+                      }}
+                    >
+                      <CheckCircle2 size={13} />{" "}
+                      {eventoEditando.concluido ? "Reabrir" : "Concluir"}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <span className="text-[11px]" style={{ color: t.textSoft }}>
+                  Dica: Clique em qualquer dia ou horário da grade para abrir
+                </span>
+              )}
+
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setModalCriacaoAberto(false);
+                    setEventoEditando(null);
+                  }}
+                  className="px-4 py-2 rounded-xl border text-xs font-bold cursor-pointer"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAgendarCompromisso}
+                  className="px-5 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
+                  style={{
+                    background:
+                      tipoItemModal === "tarefa" ? t.primary : t.action,
+                  }}
+                >
+                  {eventoEditando
+                    ? "Salvar Alterações"
+                    : tipoItemModal === "tarefa"
+                    ? "Salvar Tarefa"
+                    : "Salvar Evento"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL DE CONFIRMAÇÃO EXPLÍCITA PARA OPERAÇÕES NO GOOGLE AGENDA */}
       {confirmacaoGCal && (

@@ -2,7 +2,110 @@
 // Supports listing (across primary & visible calendars), creating, updating, and deleting events
 // with full native Google Calendar fields (all-day, start/end time, recurrence, location, description, reminders).
 
-import { getAccessToken } from './googleDriveSync';
+import {
+  getAccessToken,
+  getConnectedGoogleAccounts,
+} from './googleDriveSync';
+
+export interface CustomCalendarSource {
+  id: string; // e.g., email or calendar ID
+  nome: string;
+  corHex: string;
+  ativo: boolean;
+  contaTokenEmail?: string; // which connected account token to use (optional)
+}
+
+const CUSTOM_CALENDARS_STORAGE_KEY = 'casa_lala_custom_gcal_sources_v1';
+
+export function getCustomCalendarSources(): CustomCalendarSource[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_CALENDARS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCustomCalendarSources(list: CustomCalendarSource[]) {
+  try {
+    localStorage.setItem(CUSTOM_CALENDARS_STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    // ignore
+  }
+}
+
+export function addCustomCalendarSource(
+  calendarIdOrEmail: string,
+  nome: string,
+  corHex: string,
+  contaTokenEmail?: string
+): CustomCalendarSource[] {
+  const cleanId = calendarIdOrEmail.trim();
+  if (!cleanId) return getCustomCalendarSources();
+  const list = getCustomCalendarSources();
+  const existingIdx = list.findIndex(
+    (c) => c.id.toLowerCase() === cleanId.toLowerCase()
+  );
+  if (existingIdx >= 0) {
+    list[existingIdx] = {
+      ...list[existingIdx],
+      nome: nome.trim() || cleanId,
+      corHex,
+      ativo: true,
+      contaTokenEmail: contaTokenEmail || list[existingIdx].contaTokenEmail,
+    };
+  } else {
+    list.push({
+      id: cleanId,
+      nome: nome.trim() || cleanId,
+      corHex,
+      ativo: true,
+      contaTokenEmail,
+    });
+  }
+  saveCustomCalendarSources(list);
+  return list;
+}
+
+export function toggleCustomCalendarSource(id: string): CustomCalendarSource[] {
+  const list = getCustomCalendarSources().map((c) =>
+    c.id.toLowerCase() === id.toLowerCase() ? { ...c, ativo: !c.ativo } : c
+  );
+  saveCustomCalendarSources(list);
+  return list;
+}
+
+export function removeCustomCalendarSource(id: string): CustomCalendarSource[] {
+  const list = getCustomCalendarSources().filter(
+    (c) => c.id.toLowerCase() !== id.toLowerCase()
+  );
+  saveCustomCalendarSources(list);
+  return list;
+}
+
+export const getCustomCalendars = getCustomCalendarSources;
+export function addCustomCalendar(
+  calendarIdOrEmail: string,
+  nome: string,
+  corHex: string,
+  contaTokenEmail?: string
+): CustomCalendarSource[] {
+  const list = addCustomCalendarSource(calendarIdOrEmail, nome, corHex);
+  if (contaTokenEmail) {
+    const updated = list.map((c) =>
+      c.id.toLowerCase() === calendarIdOrEmail.trim().toLowerCase()
+        ? { ...c, contaTokenEmail }
+        : c
+    );
+    saveCustomCalendarSources(updated);
+    return updated;
+  }
+  return list;
+}
+export const toggleCustomCalendar = toggleCustomCalendarSource;
+export const removeCustomCalendar = removeCustomCalendarSource;
 
 export type CategoriaCalendarioApp =
   | 'uerj'
@@ -46,6 +149,9 @@ export interface GoogleCalendarEventRaw {
 export interface GoogleCalendarEventMapped {
   gcalId: string;
   calendarId?: string;
+  contaEmail?: string;
+  nomeCalendario?: string;
+  corCalendarioHex?: string;
   titulo: string;
   descricao: string;
   local: string;
@@ -153,7 +259,10 @@ export function detectarCategoriaPorTexto(
 
 export function mapearEventoGoogle(
   ev: GoogleCalendarEventRaw,
-  calendarId = 'primary'
+  calendarId = 'primary',
+  contaEmail?: string,
+  nomeCalendario?: string,
+  corCalendarioHex?: string
 ): GoogleCalendarEventMapped | null {
   if (ev.status === 'cancelled') return null;
 
@@ -209,6 +318,9 @@ export function mapearEventoGoogle(
   return {
     gcalId: ev.id,
     calendarId,
+    contaEmail,
+    nomeCalendario: nomeCalendario || contaEmail || calendarId,
+    corCalendarioHex,
     titulo,
     descricao,
     local,
@@ -232,13 +344,20 @@ export function mapearEventoGoogle(
   };
 }
 
-// Lists events for a given month (plus adjacent days so week view across month boundaries works seamlessly)
+// Lists events for a given month across ALL connected Google accounts & custom calendars
 export async function listarEventosGoogleCalendarMes(
   ano: number,
   mes: number // 1..12
 ): Promise<GoogleCalendarEventMapped[]> {
-  const token = await getAccessToken();
-  if (!token) throw new Error('AUTH_REQUIRED');
+  const fallbackToken = await getAccessToken();
+  const connectedAccounts = getConnectedGoogleAccounts();
+  const activeAccounts = connectedAccounts.filter(
+    (a) => a.ativo && Boolean(a.accessToken)
+  );
+
+  if (!fallbackToken && activeAccounts.length === 0) {
+    throw new Error('AUTH_REQUIRED');
+  }
 
   // Query from 7 days before the 1st of the month to 7 days after the end of the month
   const startWindow = new Date(ano, mes - 1, -6, 0, 0, 0);
@@ -252,42 +371,125 @@ export async function listarEventosGoogleCalendarMes(
     maxResults: '500',
   });
 
-  const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }
+  interface FetchTarget {
+    calendarId: string;
+    token: string;
+    contaEmail: string;
+    nomeCalendario: string;
+    corHex?: string;
+  }
+
+  const targets: FetchTarget[] = [];
+
+  if (activeAccounts.length > 0) {
+    activeAccounts.forEach((acc) => {
+      targets.push({
+        calendarId: 'primary',
+        token: acc.accessToken,
+        contaEmail: acc.email,
+        nomeCalendario: acc.displayName || acc.email,
+        corHex: acc.corHex,
+      });
+    });
+  } else if (fallbackToken) {
+    targets.push({
+      calendarId: 'primary',
+      token: fallbackToken,
+      contaEmail: 'primary',
+      nomeCalendario: 'Agenda Principal',
+    });
+  }
+
+  // Also include any custom/shared email calendars added by the user
+  const primaryToken = activeAccounts[0]?.accessToken || fallbackToken;
+  if (primaryToken) {
+    const customSources = getCustomCalendarSources().filter((c) => c.ativo);
+    customSources.forEach((src) => {
+      // Avoid duplicating if the user already connected that exact email via OAuth
+      const alreadyOAuth = activeAccounts.some(
+        (a) => a.email.toLowerCase() === src.id.toLowerCase()
+      );
+      if (!alreadyOAuth) {
+        targets.push({
+          calendarId: src.id,
+          token: primaryToken,
+          contaEmail: src.id,
+          nomeCalendario: src.nome || src.id,
+          corHex: src.corHex,
+        });
+      }
+    });
+  }
+
+  const allMapped: GoogleCalendarEventMapped[] = [];
+  const seenKeys = new Set<string>();
+  let anySuccess = false;
+  let scopeError = false;
+
+  await Promise.all(
+    targets.map(async (target) => {
+      try {
+        const res = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+            target.calendarId
+          )}/events?${params.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${target.token}`,
+            },
+          }
+        );
+
+        if (res.status === 401 || res.status === 403) {
+          let detail = '';
+          try {
+            const errJson = await res.json();
+            detail = errJson?.error?.message || '';
+          } catch {
+            // ignore
+          }
+          if (
+            detail.toLowerCase().includes('insufficient authentication scopes') ||
+            detail.toLowerCase().includes('scope')
+          ) {
+            scopeError = true;
+          }
+          return;
+        }
+
+        if (!res.ok) return;
+
+        anySuccess = true;
+        const data = (await res.json()) as { items?: GoogleCalendarEventRaw[] };
+        const items = data.items || [];
+        items.forEach((item) => {
+          const mapped = mapearEventoGoogle(
+            item,
+            target.calendarId === 'primary' ? target.contaEmail : target.calendarId,
+            target.contaEmail,
+            target.nomeCalendario,
+            target.corHex
+          );
+          if (mapped) {
+            const dedupKey = `${mapped.gcalId}::${mapped.contaEmail || mapped.calendarId}`;
+            if (!seenKeys.has(dedupKey)) {
+              seenKeys.add(dedupKey);
+              allMapped.push(mapped);
+            }
+          }
+        });
+      } catch {
+        // ignore network error on individual calendar so others still load
+      }
+    })
   );
 
-  if (res.status === 401 || res.status === 403) {
-    let detail = '';
-    try {
-      const errJson = await res.json();
-      detail = errJson?.error?.message || '';
-    } catch {
-      // ignore
-    }
-    if (
-      detail.toLowerCase().includes('insufficient authentication scopes') ||
-      detail.toLowerCase().includes('scope')
-    ) {
-      throw new Error('SCOPE_REQUIRED');
-    }
+  if (!anySuccess && targets.length > 0) {
+    if (scopeError) throw new Error('SCOPE_REQUIRED');
     throw new Error('AUTH_REQUIRED');
   }
 
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Erro ao carregar Google Agenda: ${txt}`);
-  }
-
-  const data = (await res.json()) as { items?: GoogleCalendarEventRaw[] };
-  const items = data.items || [];
-  return items
-    .map((item) => mapearEventoGoogle(item, 'primary'))
-    .filter((x): x is GoogleCalendarEventMapped => x !== null);
+  return allMapped;
 }
 
 export interface NovoEventoGoogleInput {
@@ -304,6 +506,72 @@ export interface NovoEventoGoogleInput {
   recorrencia?: RecorrenciaGoogleCalendar;
   lembreteMin?: number;
   categoria: CategoriaCalendarioApp;
+  targetAccountEmail?: string;
+  targetCalendarId?: string;
+}
+
+async function resolveCalendarAuthTarget(
+  targetAccountEmail?: string,
+  targetCalendarId?: string
+): Promise<{
+  token: string;
+  calendarId: string;
+  contaEmail: string;
+  nomeCalendario: string;
+  corHex?: string;
+}> {
+  const accounts = getConnectedGoogleAccounts();
+  if (targetAccountEmail) {
+    const foundAcc = accounts.find(
+      (a) => a.email.toLowerCase() === targetAccountEmail.toLowerCase()
+    );
+    if (foundAcc?.accessToken) {
+      return {
+        token: foundAcc.accessToken,
+        calendarId: 'primary',
+        contaEmail: foundAcc.email,
+        nomeCalendario: foundAcc.displayName || foundAcc.email,
+        corHex: foundAcc.corHex,
+      };
+    }
+  }
+
+  const customSources = getCustomCalendarSources();
+  if (targetCalendarId && targetCalendarId !== 'primary') {
+    const foundCustom = customSources.find(
+      (c) => c.id.toLowerCase() === targetCalendarId.toLowerCase()
+    );
+    const primaryAcc = accounts.find((a) => a.ativo && a.accessToken);
+    const fallbackToken = primaryAcc?.accessToken || (await getAccessToken());
+    if (!fallbackToken) throw new Error('AUTH_REQUIRED');
+    return {
+      token: fallbackToken,
+      calendarId: targetCalendarId,
+      contaEmail: targetCalendarId,
+      nomeCalendario: foundCustom?.nome || targetCalendarId,
+      corHex: foundCustom?.corHex,
+    };
+  }
+
+  const firstAcc = accounts.find((a) => a.ativo && a.accessToken) || accounts[0];
+  if (firstAcc?.accessToken) {
+    return {
+      token: firstAcc.accessToken,
+      calendarId: 'primary',
+      contaEmail: firstAcc.email,
+      nomeCalendario: firstAcc.displayName || firstAcc.email,
+      corHex: firstAcc.corHex,
+    };
+  }
+
+  const fallbackToken = await getAccessToken();
+  if (!fallbackToken) throw new Error('AUTH_REQUIRED');
+  return {
+    token: fallbackToken,
+    calendarId: 'primary',
+    contaEmail: 'primary',
+    nomeCalendario: 'Agenda Principal',
+  };
 }
 
 function buildGoogleEventBody(input: NovoEventoGoogleInput) {
@@ -395,17 +663,21 @@ function buildGoogleEventBody(input: NovoEventoGoogleInput) {
 export async function criarEventoGoogleCalendar(
   input: NovoEventoGoogleInput
 ): Promise<GoogleCalendarEventMapped> {
-  const token = await getAccessToken();
-  if (!token) throw new Error('AUTH_REQUIRED');
+  const target = await resolveCalendarAuthTarget(
+    input.targetAccountEmail,
+    input.targetCalendarId
+  );
 
   const body = buildGoogleEventBody(input);
 
   const res = await fetch(
-    'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      target.calendarId
+    )}/events`,
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${target.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -422,7 +694,13 @@ export async function criarEventoGoogleCalendar(
   }
 
   const created = (await res.json()) as GoogleCalendarEventRaw;
-  const mapped = mapearEventoGoogle(created);
+  const mapped = mapearEventoGoogle(
+    created,
+    target.calendarId === 'primary' ? target.contaEmail : target.calendarId,
+    target.contaEmail,
+    target.nomeCalendario,
+    target.corHex
+  );
   if (!mapped) {
     throw new Error('Evento criado, mas não foi possível mapear o retorno.');
   }
@@ -431,21 +709,24 @@ export async function criarEventoGoogleCalendar(
 
 export async function atualizarEventoGoogleCalendar(
   gcalId: string,
-  input: NovoEventoGoogleInput
+  input: NovoEventoGoogleInput,
+  calendarIdOrAccount?: string
 ): Promise<GoogleCalendarEventMapped> {
-  const token = await getAccessToken();
-  if (!token) throw new Error('AUTH_REQUIRED');
+  const target = await resolveCalendarAuthTarget(
+    input.targetAccountEmail || calendarIdOrAccount,
+    input.targetCalendarId || calendarIdOrAccount
+  );
 
   const body = buildGoogleEventBody(input);
 
   const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(
-      gcalId
-    )}`,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      target.calendarId
+    )}/events/${encodeURIComponent(gcalId)}`,
     {
       method: 'PATCH',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${target.token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
@@ -462,7 +743,13 @@ export async function atualizarEventoGoogleCalendar(
   }
 
   const updated = (await res.json()) as GoogleCalendarEventRaw;
-  const mapped = mapearEventoGoogle(updated);
+  const mapped = mapearEventoGoogle(
+    updated,
+    target.calendarId === 'primary' ? target.contaEmail : target.calendarId,
+    target.contaEmail,
+    target.nomeCalendario,
+    target.corHex
+  );
   if (!mapped) {
     throw new Error('Erro ao mapear evento atualizado.');
   }
@@ -470,19 +757,22 @@ export async function atualizarEventoGoogleCalendar(
 }
 
 export async function excluirEventoGoogleCalendar(
-  gcalId: string
+  gcalId: string,
+  calendarIdOrAccount?: string
 ): Promise<void> {
-  const token = await getAccessToken();
-  if (!token) throw new Error('AUTH_REQUIRED');
+  const target = await resolveCalendarAuthTarget(
+    calendarIdOrAccount,
+    calendarIdOrAccount
+  );
 
   const res = await fetch(
-    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(
-      gcalId
-    )}`,
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
+      target.calendarId
+    )}/events/${encodeURIComponent(gcalId)}`,
     {
       method: 'DELETE',
       headers: {
-        Authorization: `Bearer ${token}`,
+        Authorization: `Bearer ${target.token}`,
       },
     }
   );
