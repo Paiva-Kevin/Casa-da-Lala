@@ -66,13 +66,20 @@ export const initAuth = (
 };
 
 // Sign in using Firebase Auth Popup (pre-configured in AI Studio)
-export const googleSignIn = async (): Promise<{
+export const googleSignIn = async (
+  forceConsent = false
+): Promise<{
   user: GoogleUserProfile;
   accessToken: string;
 } | null> => {
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const authProvider = new GoogleAuthProvider();
+    SCOPES.forEach((scope) => authProvider.addScope(scope));
+    if (forceConsent) {
+      authProvider.setCustomParameters({ prompt: 'consent' });
+    }
+    const result = await signInWithPopup(auth, authProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error(
@@ -188,6 +195,10 @@ export const signInWithCustomGISClient = (
 
 export const getAccessToken = async (): Promise<string | null> => {
   return cachedAccessToken;
+};
+
+export const clearCachedAccessToken = () => {
+  cachedAccessToken = null;
 };
 
 export const logoutGoogleDrive = async () => {

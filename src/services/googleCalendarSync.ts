@@ -1,6 +1,6 @@
 // Google Calendar API v3 Service for Casa da Lala
-// Supports listing, creating, updating, and deleting events on the user's primary Google Calendar
-// with automatic category detection for Casa da Lala filters and colors.
+// Supports listing (across primary & visible calendars), creating, updating, and deleting events
+// with full native Google Calendar fields (all-day, start/end time, recurrence, location, description, reminders).
 
 import { getAccessToken } from './googleDriveSync';
 
@@ -11,6 +11,12 @@ export type CategoriaCalendarioApp =
   | 'financas'
   | 'saude'
   | 'pessoal';
+
+export type RecorrenciaGoogleCalendar =
+  | 'nenhuma'
+  | 'diaria'
+  | 'semanal'
+  | 'mensal';
 
 export interface GoogleCalendarEventRaw {
   id: string;
@@ -27,7 +33,9 @@ export interface GoogleCalendarEventRaw {
     date?: string;
     timeZone?: string;
   };
+  recurrence?: string[];
   htmlLink?: string;
+  hangoutLink?: string;
   status?: string;
   colorId?: string;
   extendedProperties?: {
@@ -37,6 +45,7 @@ export interface GoogleCalendarEventRaw {
 
 export interface GoogleCalendarEventMapped {
   gcalId: string;
+  calendarId?: string;
   titulo: string;
   descricao: string;
   local: string;
@@ -49,7 +58,9 @@ export interface GoogleCalendarEventMapped {
   diaInteiro: boolean;
   categoriaDetectada: CategoriaCalendarioApp;
   htmlLink?: string;
+  hangoutLink?: string;
   origemApp?: boolean;
+  colorId?: string;
 }
 
 export function detectarCategoriaPorTexto(
@@ -141,7 +152,8 @@ export function detectarCategoriaPorTexto(
 }
 
 export function mapearEventoGoogle(
-  ev: GoogleCalendarEventRaw
+  ev: GoogleCalendarEventRaw,
+  calendarId = 'primary'
 ): GoogleCalendarEventMapped | null {
   if (ev.status === 'cancelled') return null;
 
@@ -149,20 +161,21 @@ export function mapearEventoGoogle(
   if (!rawStart) return null;
 
   const isAllDay = Boolean(ev.start?.date && !ev.start?.dateTime);
-  let ano = 2026;
-  let mes = 9;
-  let diaMes = 27;
+  const now = new Date();
+  let ano = now.getFullYear();
+  let mes = now.getMonth() + 1;
+  let diaMes = now.getDate();
   let horaInicio = '09:00';
   let horaFim = '10:00';
   let duracaoMin = 60;
 
   if (isAllDay && ev.start?.date) {
     const [y, m, d] = ev.start.date.split('-').map(Number);
-    ano = y || 2026;
-    mes = m || 9;
+    ano = y || ano;
+    mes = m || mes;
     diaMes = d || 1;
     horaInicio = '08:00';
-    horaFim = '18:00';
+    horaFim = '23:59';
     duracaoMin = 60;
   } else {
     const dtStart = new Date(rawStart);
@@ -183,7 +196,7 @@ export function mapearEventoGoogle(
         const mmEnd = String(dtEnd.getMinutes()).padStart(2, '0');
         horaFim = `${hhEnd}:${mmEnd}`;
         const diff = Math.round((dtEnd.getTime() - dtStart.getTime()) / 60000);
-        duracaoMin = Math.max(15, Math.min(720, diff || 60));
+        duracaoMin = Math.max(5, Math.min(1440, diff || 60));
       }
     }
   }
@@ -195,6 +208,7 @@ export function mapearEventoGoogle(
 
   return {
     gcalId: ev.id,
+    calendarId,
     titulo,
     descricao,
     local,
@@ -205,12 +219,20 @@ export function mapearEventoGoogle(
     horaFim,
     duracaoMin,
     diaInteiro: isAllDay,
-    categoriaDetectada: detectarCategoriaPorTexto(titulo, descricao, local, extCat),
+    categoriaDetectada: detectarCategoriaPorTexto(
+      titulo,
+      descricao,
+      local,
+      extCat
+    ),
     htmlLink: ev.htmlLink,
+    hangoutLink: ev.hangoutLink,
     origemApp: ev.extendedProperties?.private?.createdBy === 'casa_da_lala',
+    colorId: ev.colorId,
   };
 }
 
+// Lists events for a given month (plus adjacent days so week view across month boundaries works seamlessly)
 export async function listarEventosGoogleCalendarMes(
   ano: number,
   mes: number // 1..12
@@ -218,15 +240,16 @@ export async function listarEventosGoogleCalendarMes(
   const token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
-  const startOfMonth = new Date(ano, mes - 1, 1, 0, 0, 0);
-  const endOfMonth = new Date(ano, mes, 0, 23, 59, 59);
+  // Query from 7 days before the 1st of the month to 7 days after the end of the month
+  const startWindow = new Date(ano, mes - 1, -6, 0, 0, 0);
+  const endWindow = new Date(ano, mes, 7, 23, 59, 59);
 
   const params = new URLSearchParams({
-    timeMin: startOfMonth.toISOString(),
-    timeMax: endOfMonth.toISOString(),
+    timeMin: startWindow.toISOString(),
+    timeMax: endWindow.toISOString(),
     singleEvents: 'true',
     orderBy: 'startTime',
-    maxResults: '250',
+    maxResults: '500',
   });
 
   const res = await fetch(
@@ -239,6 +262,19 @@ export async function listarEventosGoogleCalendarMes(
   );
 
   if (res.status === 401 || res.status === 403) {
+    let detail = '';
+    try {
+      const errJson = await res.json();
+      detail = errJson?.error?.message || '';
+    } catch {
+      // ignore
+    }
+    if (
+      detail.toLowerCase().includes('insufficient authentication scopes') ||
+      detail.toLowerCase().includes('scope')
+    ) {
+      throw new Error('SCOPE_REQUIRED');
+    }
     throw new Error('AUTH_REQUIRED');
   }
 
@@ -250,7 +286,7 @@ export async function listarEventosGoogleCalendarMes(
   const data = (await res.json()) as { items?: GoogleCalendarEventRaw[] };
   const items = data.items || [];
   return items
-    .map(mapearEventoGoogle)
+    .map((item) => mapearEventoGoogle(item, 'primary'))
     .filter((x): x is GoogleCalendarEventMapped => x !== null);
 }
 
@@ -262,8 +298,98 @@ export interface NovoEventoGoogleInput {
   mes: number; // 1..12
   diaMes: number; // 1..31
   horaInicio: string; // "HH:MM"
+  horaFim?: string; // "HH:MM"
   duracaoMin: number;
+  diaInteiro?: boolean;
+  recorrencia?: RecorrenciaGoogleCalendar;
+  lembreteMin?: number;
   categoria: CategoriaCalendarioApp;
+}
+
+function buildGoogleEventBody(input: NovoEventoGoogleInput) {
+  const timeZone =
+    Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo';
+
+  let startObj: { date?: string; dateTime?: string; timeZone?: string };
+  let endObj: { date?: string; dateTime?: string; timeZone?: string };
+
+  if (input.diaInteiro) {
+    const startStr = `${input.ano}-${String(input.mes).padStart(
+      2,
+      '0'
+    )}-${String(input.diaMes).padStart(2, '0')}`;
+    const nextDay = new Date(input.ano, input.mes - 1, input.diaMes + 1);
+    const endStr = `${nextDay.getFullYear()}-${String(
+      nextDay.getMonth() + 1
+    ).padStart(2, '0')}-${String(nextDay.getDate()).padStart(2, '0')}`;
+    startObj = { date: startStr };
+    endObj = { date: endStr };
+  } else {
+    const [hh, mm] = (input.horaInicio || '09:00').split(':').map(Number);
+    const startDt = new Date(
+      input.ano,
+      input.mes - 1,
+      input.diaMes,
+      hh ?? 9,
+      mm ?? 0,
+      0
+    );
+    let endDt: Date;
+    if (input.horaFim) {
+      const [eh, em] = input.horaFim.split(':').map(Number);
+      endDt = new Date(
+        input.ano,
+        input.mes - 1,
+        input.diaMes,
+        eh ?? (hh ?? 9) + 1,
+        em ?? 0,
+        0
+      );
+      if (endDt <= startDt) {
+        endDt = new Date(startDt.getTime() + (input.duracaoMin || 60) * 60000);
+      }
+    } else {
+      endDt = new Date(startDt.getTime() + (input.duracaoMin || 60) * 60000);
+    }
+    startObj = { dateTime: startDt.toISOString(), timeZone };
+    endObj = { dateTime: endDt.toISOString(), timeZone };
+  }
+
+  const recurrence: string[] = [];
+  if (input.recorrencia === 'diaria') {
+    recurrence.push('RRULE:FREQ=DAILY');
+  } else if (input.recorrencia === 'semanal') {
+    recurrence.push('RRULE:FREQ=WEEKLY');
+  } else if (input.recorrencia === 'mensal') {
+    recurrence.push('RRULE:FREQ=MONTHLY');
+  }
+
+  const body: Record<string, unknown> = {
+    summary: input.titulo,
+    description: input.descricao || '',
+    location: input.local || '',
+    start: startObj,
+    end: endObj,
+    extendedProperties: {
+      private: {
+        createdBy: 'casa_da_lala',
+        lalaCategory: input.categoria,
+      },
+    },
+  };
+
+  if (recurrence.length > 0) {
+    body.recurrence = recurrence;
+  }
+
+  if (typeof input.lembreteMin === 'number' && input.lembreteMin >= 0) {
+    body.reminders = {
+      useDefault: false,
+      overrides: [{ method: 'popup', minutes: input.lembreteMin }],
+    };
+  }
+
+  return body;
 }
 
 export async function criarEventoGoogleCalendar(
@@ -272,36 +398,7 @@ export async function criarEventoGoogleCalendar(
   const token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
-  const [hh, mm] = (input.horaInicio || '09:00').split(':').map(Number);
-  const startDt = new Date(
-    input.ano,
-    input.mes - 1,
-    input.diaMes,
-    hh || 9,
-    mm || 0,
-    0
-  );
-  const endDt = new Date(startDt.getTime() + (input.duracaoMin || 60) * 60000);
-
-  const body = {
-    summary: input.titulo,
-    description:
-      input.descricao ||
-      `Agendado pelo app Casa da Lala (${input.categoria.toUpperCase()})`,
-    location: input.local || '',
-    start: {
-      dateTime: startDt.toISOString(),
-    },
-    end: {
-      dateTime: endDt.toISOString(),
-    },
-    extendedProperties: {
-      private: {
-        createdBy: 'casa_da_lala',
-        lalaCategory: input.categoria,
-      },
-    },
-  };
+  const body = buildGoogleEventBody(input);
 
   const res = await fetch(
     'https://www.googleapis.com/calendar/v3/calendars/primary/events',
@@ -339,34 +436,7 @@ export async function atualizarEventoGoogleCalendar(
   const token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
-  const [hh, mm] = (input.horaInicio || '09:00').split(':').map(Number);
-  const startDt = new Date(
-    input.ano,
-    input.mes - 1,
-    input.diaMes,
-    hh || 9,
-    mm || 0,
-    0
-  );
-  const endDt = new Date(startDt.getTime() + (input.duracaoMin || 60) * 60000);
-
-  const body = {
-    summary: input.titulo,
-    description: input.descricao || '',
-    location: input.local || '',
-    start: {
-      dateTime: startDt.toISOString(),
-    },
-    end: {
-      dateTime: endDt.toISOString(),
-    },
-    extendedProperties: {
-      private: {
-        createdBy: 'casa_da_lala',
-        lalaCategory: input.categoria,
-      },
-    },
-  };
+  const body = buildGoogleEventBody(input);
 
   const res = await fetch(
     `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(
@@ -399,7 +469,9 @@ export async function atualizarEventoGoogleCalendar(
   return mapped;
 }
 
-export async function excluirEventoGoogleCalendar(gcalId: string): Promise<void> {
+export async function excluirEventoGoogleCalendar(
+  gcalId: string
+): Promise<void> {
   const token = await getAccessToken();
   if (!token) throw new Error('AUTH_REQUIRED');
 
