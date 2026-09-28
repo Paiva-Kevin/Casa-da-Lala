@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Casa da Lala" />
+    <meta name="theme-color" content="#2E6F5E" />
+    <title>Casa da Lala</title>
+    <meta name="description" content="App mobile-first iOS de organização pessoal, prontidão atlética, rotina de estudos UERJ, cuidados com pets e finanças com Modo Sobrevivência." />
+    <meta property="og:title" content="Casa da Lala" />
+    <meta property="og:description" content="App mobile-first iOS de organização pessoal, prontidão atlética, rotina de estudos UERJ, cuidados com pets e finanças com Modo Sobrevivência." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Google Identity Services (GIS) OAuth 2.0 Library -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker
+            .register('/sw.js', { scope: '/' })
+            .then((reg) => {
+              reg.update();
+            })
+            .catch((err) => {
+              console.debug('Service Worker registration fallback:', err);
+            });
+        });
+      }
+    </script>
+  </body>
+</html>

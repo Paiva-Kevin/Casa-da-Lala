@@ -1,0 +1,555 @@
+export type ThemeMode = "light" | "dark" | "survival";
+
+export interface ThemeTokens {
+  mode: ThemeMode;
+  bg: string;
+  card: string;
+  cardSubtle: string;
+  border: string;
+  primary: string;
+  action: string;
+  finance: string;
+  alert: string;
+  danger: string;
+  text: string;
+  textSoft: string;
+}
+
+export type TabId =
+  | "inicio"
+  | "agenda"
+  | "calendario"
+  | "governanta_lala"
+  | "estudos_trabalho"
+  | "casa_rotinas"
+  | "saude_pets"
+  | "financas";
+
+export type ModoInteracaoLala =
+  | "comando"
+  | "devaneio"
+  | "desabafo"
+  | "orientacao"
+  | "informacao";
+
+export type TomGovernanta =
+  | "equilibrada"
+  | "acolhedora"
+  | "executiva"
+  | "treinadora";
+
+export interface PerfilUsuarioCalibrado {
+  nomeUsuario: string;
+  cursoUERJ: string;
+  periodoUERJ: string;
+  frentesTrabalho: string;
+  metaHorasSono: number;
+  metaProteinaG: number;
+  metaKcal: number;
+  calibrado: boolean;
+  ultimaCalibracao?: string;
+}
+
+export interface AnexoLala {
+  nome: string;
+  mimeType: string;
+  tamanhoBytes: number;
+  base64?: string;
+  textoExtraido?: string;
+  intencao?:
+    | "auto"
+    | "dieta"
+    | "grade"
+    | "treino"
+    | "financas"
+    | "guardar";
+  areaRepositorio?: ArquivoRepositorio["area"];
+}
+
+export interface AcaoGovernanta {
+  id: string;
+  tipo:
+    | "CRIAR_TAREFA"
+    | "REGISTRAR_GASTO"
+    | "ALIMENTAR_PETS"
+    | "REGISTRAR_SRPE"
+    | "GUARDAR_SEGUNDO_CEREBRO"
+    | "ALIVIAR_AGENDA_HOJE"
+    | "ATIVAR_MODO_SOS"
+    | "ATUALIZAR_DIETA_E_COMPRAS"
+    | "ATUALIZAR_GRADE_UERJ"
+    | "ATUALIZAR_CONTAS_FINANCAS"
+    | "ATUALIZAR_PETS"
+    | "CRIAR_LISTA_COMPRAS"
+    | "ATUALIZAR_TREINO";
+  titulo: string;
+  detalhe: string;
+  executada: boolean;
+  payload?: {
+    texto?: string;
+    valor?: number;
+    categoriaGasto?: OrcamentoCategoria["categoria"];
+    srpe?: number;
+    areaNota?: ArquivoRepositorio["area"];
+    anexo?: AnexoLala;
+    refeicoes?: {
+      horario: string;
+      nome: string;
+      descricao: string;
+      proteinaG: number;
+      kcal: number;
+    }[];
+    itensCompras?: {
+      nome: string;
+      categoria: "Pets" | "Despensa & Meal Prep" | "Limpeza & Casa" | "Higiene";
+      quantidadeComprar: number;
+      unidade: string;
+      precoEstimado: number;
+    }[];
+    disciplinas?: {
+      nome: string;
+      professor: string;
+      horarioSala: string;
+      aulasTotaisSemestre?: number;
+      faltasMax?: number;
+    }[];
+    contasAjuste?: {
+      nome: string;
+      saldoAtual: number;
+    }[];
+    estoquePetsAjuste?: {
+      estoqueSaches?: number;
+      estoqueRacaoKg?: number;
+    };
+    fichaTreino?: {
+      nome: string;
+      foco: string;
+      exercicios: {
+        nome: string;
+        series: number;
+        reps: string;
+        cargaKg: number;
+        descansoSeg: number;
+      }[];
+    };
+  };
+}
+
+export interface MatrizDecisaoLala {
+  cenarioA: string;
+  cenarioB: string;
+  vereditoLala: string;
+}
+
+export interface InteracaoGovernanta {
+  id: number;
+  dataHora: string;
+  modo: ModoInteracaoLala;
+  humorUsuario?: string;
+  mensagemUsuario: string;
+  nomeAnexo?: string;
+  anexo?: AnexoLala;
+  respostaLala: string;
+  tags?: string[];
+  tituloCard?: string;
+  acoesPropostas?: AcaoGovernanta[];
+  matrizDecisao?: MatrizDecisaoLala;
+  guardadoNoCofre?: boolean;
+}
+
+export type AbaTipo = TabId;
+
+export type StatusLeitura = "Para Ler" | "Lendo" | "Concluído";
+
+export type ColorTokenKey = "primary" | "action" | "finance" | "alert";
+
+export type TaskCategoryFilter = "todas" | "uerj" | "trabalho" | "casa" | "pessoal";
+
+export type TaskHorizon = "hoje" | "semana" | "backlog";
+
+export interface TaskItem {
+  id: number;
+  texto: string;
+  aba: Exclude<TabId, "inicio">;
+  categoriaFiltro: Exclude<TaskCategoryFilter, "todas">;
+  cor: ColorTokenKey;
+  feito: boolean;
+  // Critérios da fórmula: Score = Impacto*30% + Urgência*25% + Facilidade*25% + Retorno*20%
+  impacto: number; // 1-10
+  urgencia: number; // 1-10
+  facilidade: number; // 1-10
+  retorno: number; // 1-10
+  horizonte?: TaskHorizon; // Fluxo bidirecional: "hoje" | "semana" | "backlog"
+  manualLock?: "p1" | "top3" | "adiada" | "backlog" | null;
+  horarioAgendado?: string | null; // ex: "07:30", "14:00"
+  duracaoMin?: number; // ex: 5, 10, 15, 45, 60
+  prazoFixo?: string; // ex: "28/09", ou vazio se sem prazo fixo (Backlog)
+  diaAgendado?: number; // dia do mês (ex: 27)
+  origemRadarId?: number;
+}
+
+export interface HabitoDiario {
+  id: number;
+  titulo: string;
+  icone: "droplets" | "book" | "dumbbell" | "paw" | "sparkles" | "sun";
+  categoria: "Saúde" | "Estudos" | "Casa & Pets" | "Mente";
+  cor: ColorTokenKey;
+  feitoHoje: boolean;
+  streakAtual: number;
+  melhorStreak: number;
+  // Histórico últimos 7 dias (SEG..DOM): true = concluído
+  historicoSemana: boolean[];
+  metaTexto?: string; // ex: "5 min", "2,8L", "15 págs"
+}
+
+export interface Compromisso {
+  id: number;
+  hora: string; // "07:30", "08:00", "12:15" (qualquer HH:MM)
+  duracaoMin: number; // duração exata em minutos (ex: 5, 10, 15, 45, 110)
+  titulo: string;
+  local?: string;
+  cor: ColorTokenKey;
+  aba: Exclude<TabId, "inicio">;
+  diaMes: number; // 1..30 (Setembro)
+  diaSemanaIdx: number; // 0=SEG .. 6=DOM
+  notas?: string;
+  gcalSynced?: boolean;
+  taskId?: number;
+  concluido?: boolean;
+}
+
+// ---------- NO RADAR (7 A 14 DIAS) ----------
+export interface EtapaPreparacaoRadar {
+  id: number;
+  diasAntes: number;
+  rotuloTempo: string;
+  acao: string;
+  concluida: boolean;
+  enviadaParaHoje?: boolean;
+}
+
+export interface ItemRadar {
+  id: number;
+  titulo: string;
+  dataEvento: string;
+  diasRestantes: number;
+  area: "UERJ" | "Trabalho" | "Casa & Pets" | "Corpo" | "Finanças";
+  cor: ColorTokenKey;
+  etapas: EtapaPreparacaoRadar[];
+}
+
+// ---------- METAS COM MARCOS INTERMEDIÁRIOS ----------
+export interface MarcoMeta {
+  id: number;
+  texto: string;
+  concluido: boolean;
+}
+
+export interface MetaItem {
+  id: number;
+  titulo: string;
+  categoria: string;
+  prazo: string;
+  cor: ColorTokenKey;
+  marcos: MarcoMeta[];
+}
+
+// ---------- CHECK-IN DE PRONTIDÃO DIÁRIO (30s) ----------
+export interface CheckinProntidao {
+  horasSono: number;
+  qualidadeSono: number;
+  energiaFisica: number;
+  focoMental: number;
+  realizadoHoje: boolean;
+  nota?: string;
+}
+
+// ---------- GRADUAÇÃO UERJ & ESTUDOS ----------
+export interface AvaliacaoDisciplina {
+  id: number;
+  tipo: string;
+  data: string;
+  peso: number;
+  notaObtida?: number | null;
+  concluida?: boolean;
+}
+
+export interface LeituraObrigatoria {
+  id: number;
+  titulo: string;
+  paginas: string;
+  lido: boolean;
+}
+
+export interface LinkUtilDisciplina {
+  id: number;
+  rotulo: string;
+  url: string;
+}
+
+export interface Disciplina {
+  id: number;
+  nome: string;
+  professor: string;
+  horarioSala: string;
+  prazo: string;
+  status: "estudando" | "pendente" | "em dia";
+  aulasTotaisSemestre: number;
+  faltasAtuais: number;
+  faltasMax: number;
+  presencas: number;
+  mediaAprovacao: number;
+  avaliacoes: AvaliacaoDisciplina[];
+  leiturasSemana: LeituraObrigatoria[];
+  linksUteis: LinkUtilDisciplina[];
+  anotacoes: string;
+}
+
+export type FaseArtigo =
+  | "Triagem"
+  | "Leitura ativa"
+  | "Fichamento/Notas"
+  | "Escrita/Citações"
+  | "Submissão";
+
+export interface FichaCitacao {
+  id: number;
+  autorAno: string;
+  pagina: string;
+  trecho: string;
+  tag: string;
+}
+
+export interface Artigo {
+  id: number;
+  nome: string;
+  subtitulo: string;
+  periódicoAlvo: string;
+  fase: FaseArtigo;
+  statusLeitura?: StatusLeitura;
+  notas: string;
+  citacoes: FichaCitacao[];
+}
+
+export interface LivroLeitura {
+  id: number;
+  tipo: "Acadêmico" | "Fantasia";
+  titulo: string;
+  autor: string;
+  paginasLidas: number;
+  paginasTotal: number;
+}
+
+// ---------- SAÚDE & TREINOS (CHEERLEADING, GINÁSTICA, MUSCULAÇÃO) ----------
+export type ModalidadeTreino = "Musculação" | "Cheerleading" | "Ginástica";
+
+export interface SerieExercicio {
+  id: number;
+  numero: number;
+  cargaOuDetalhe: string | number;
+  repsOuTempo: string | number;
+  qualidadeOuHit?: string;
+  concluida: boolean;
+}
+
+export interface ExercicioTreino {
+  id: number;
+  nome: string;
+  modalidade: ModalidadeTreino;
+  notaTecnica?: string;
+  descansoSeg: number;
+  series: SerieExercicio[];
+}
+
+export interface FichaTreino {
+  id: number;
+  nome: string;
+  modalidade: ModalidadeTreino;
+  foco: string;
+  ultimaRealizacao?: string;
+  exercicios: ExercicioTreino[];
+}
+
+export interface ItemRefeicao {
+  id: number;
+  horario: string;
+  nome: string;
+  descricao: string;
+  proteinaG: number;
+  kcal: number;
+  feito: boolean;
+}
+
+// ---------- CASA & ROTINAS EDITÁVEIS ----------
+export type FrequenciaRotina = "Diária" | "3x na semana" | "Semanal" | "Quinzenal";
+
+export interface RotinaComodo {
+  id: number;
+  tarefa: string;
+  frequencia: FrequenciaRotina;
+  diasCiclo: number; // 1, 2, 7, 15
+  diasDesdeUltimaVez: number; // se >= diasCiclo e !pausada, está Pendente Hoje
+  feitoHoje: boolean;
+  tempoEstimadoMin: number;
+  pausada?: boolean; // permite pausar rotinas recorrentes
+  proximaDataLabel?: string; // caso reagendada manualmente
+}
+
+export interface ComodoCasa {
+  id: number;
+  nome: string;
+  icone: string;
+  rotinas: RotinaComodo[];
+}
+
+export interface ItemEstoqueCasa {
+  id: number;
+  nome: string;
+  categoria: "Pets" | "Despensa & Meal Prep" | "Limpeza & Casa" | "Higiene";
+  quantidadeAtual: number;
+  quantidadeMinima: number;
+  unidade: string;
+  consumoDiarioEstimado?: number;
+  precoEstimadoReposicao: number;
+}
+
+export interface ItemListaCompras {
+  id: number;
+  nome: string;
+  categoria: "Pets" | "Despensa & Meal Prep" | "Limpeza & Casa" | "Higiene";
+  quantidadeComprar: number;
+  unidade: string;
+  precoEstimado: number;
+  origemEstoqueId?: number;
+  comprado: boolean;
+}
+
+export interface VacinaCuidadoPet {
+  id: number;
+  tipo: string;
+  dataRealizada: string;
+  proximaData: string;
+  status: "em dia" | "atencao";
+}
+
+export interface PetPerfil {
+  id: number;
+  nome: string;
+  racao: string;
+  consumoRacaoGramasDia: number;
+  consumoSachesDia: number;
+  proximaVet: string;
+  estoqueSaches: number;
+  estoqueRacaoKg: number;
+  alimentadoHojeRefeicoes: number;
+  sachesDadosHoje?: number;
+  metaRefeicoesDia: number;
+  historicoPeso: { data: string; pesoKg: number }[];
+  cuidados: VacinaCuidadoPet[];
+  observacoes: string;
+}
+
+// ---------- TRABALHO & ENTREGÁVEIS DE PROJETOS ----------
+export type StatusEntregavel = "Planejado" | "Em Produção" | "Revisão" | "Entregue";
+
+export interface EntregavelProjeto {
+  id: number;
+  titulo: string;
+  prazo: string;
+  status: StatusEntregavel;
+  duracaoEstimadaMin: number;
+  concluido: boolean;
+}
+
+export interface ProjetoTrabalho {
+  id: number;
+  nome: string;
+  papel: string;
+  tarefa: string; // Entregável principal ativo
+  prazo: string;
+  prioridade: "alta" | "média" | "baixa";
+  statusProjeto?: StatusEntregavel;
+  notas: string;
+  subtarefas: { id: number; texto: string; feito: boolean; prazo?: string }[];
+}
+
+// ---------- FINANÇAS ----------
+export type MesFinanceiroKey = "2026-08" | "2026-09" | "2026-10";
+
+export interface ContaBancaria {
+  id: number;
+  nome: string;
+  tipo: "Corrente / Pix" | "Recebimento" | "Reserva";
+  saldoAtual: number;
+  cor: string;
+}
+
+export interface CartaoCredito {
+  id: number;
+  nome: string;
+  limiteTotal: number;
+  faturaAtual: number;
+  fechamentoDia: number;
+  vencimentoDia: number;
+  statusFatura: "aberta" | "fechada" | "paga";
+}
+
+export interface OrcamentoCategoria {
+  categoria:
+    | "Mercado"
+    | "Pets"
+    | "Transporte"
+    | "Moradia & Fixos"
+    | "Estudos & UERJ"
+    | "Dívida"
+    | "Lazer & Outros";
+  tetoMensal: number;
+}
+
+export interface LancamentoFinanceiro {
+  id: number;
+  mesKey: MesFinanceiroKey;
+  data: string;
+  descricao: string;
+  tipo: "despesa" | "receita";
+  status: "realizado" | "previsto";
+  metodo: "Conta / Pix" | "Cartão de Crédito";
+  contaId?: number;
+  cartaoId?: number;
+  categoria: OrcamentoCategoria["categoria"];
+  valor: number;
+}
+
+// ---------- REPOSITÓRIO DE ARQUIVOS & SEGUNDO CÉREBRO ----------
+export interface ArquivoRepositorio {
+  id: number;
+  titulo: string;
+  area: "UERJ" | "Artigos" | "CDT & RCR" | "Casa & Pets" | "Finanças" | "Pessoal";
+  tipo: "PDF / Doc" | "Link Externo" | "Nota Rápida" | "Planilha" | "Imagem / Foto";
+  urlOuConteudo: string;
+  dataCriacao: string;
+  fixado?: boolean;
+  statusLeitura?: StatusLeitura;
+  anexoBase64?: string;
+  mimeType?: string;
+  nomeArquivoOriginal?: string;
+  tamanhoBytes?: number;
+}
+
+export type BottomSheetType =
+  | "disciplina"
+  | "artigo"
+  | "leitura"
+  | "pet"
+  | "projeto"
+  | "compromisso"
+  | "tarefa"
+  | "checkin_prontidao"
+  | "radar_item"
+  | "comodo"
+  | "planilha";
+
+export interface BottomSheetPayload {
+  tipo: BottomSheetType;
+  id?: number | string;
+}

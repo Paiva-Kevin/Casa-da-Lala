@@ -1,0 +1,6 @@
+{
+  "name": "Casa da Lala",
+  "description": "App mobile-first iOS de organização pessoal, prontidão atlética, rotina de estudos UERJ, cuidados com pets e finanças com Modo Sobrevivência.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
