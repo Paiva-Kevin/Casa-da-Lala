@@ -37,6 +37,7 @@ import {
   ItemRadar,
   LancamentoFinanceiro,
   PetPerfil,
+  RecorrenciaCompromisso,
   ThemeTokens,
 } from "../../types/lala";
 import {
@@ -81,6 +82,10 @@ export interface EventoCalendarioUnificado {
   corCustomHex?: string;
   concluido?: boolean;
   ehTarefa?: boolean;
+  ehRecorrente?: boolean;
+  recorrencia?: RecorrenciaCompromisso;
+  recorrenciaSerieId?: string;
+  disciplinaId?: number;
   origem: "app" | "gcal" | "modulo";
   gcalId?: string;
   calendarId?: string;
@@ -89,6 +94,15 @@ export interface EventoCalendarioUnificado {
   htmlLink?: string;
   compromissoId?: number;
   payloadSheet?: BottomSheetPayload;
+}
+
+export type EscopoAlteracaoRecorrencia = "este" | "seguintes" | "todos";
+
+interface ConfirmacaoRecorrenciaModalState {
+  evento: EventoCalendarioUnificado;
+  tipoOperacao: "mover" | "editar" | "excluir";
+  resumoAlteracao: string;
+  onEscolherEscopo: (escopo: EscopoAlteracaoRecorrencia) => void;
 }
 
 interface ConfirmacaoGoogleCalendarModalState {
@@ -104,6 +118,7 @@ interface AbaCalendarioProps {
   compromissos: Compromisso[];
   setCompromissos: React.Dispatch<React.SetStateAction<Compromisso[]>>;
   disciplinas: Disciplina[];
+  setDisciplinas?: React.Dispatch<React.SetStateAction<Disciplina[]>>;
   petsPerfil: PetPerfil[];
   lancamentos: LancamentoFinanceiro[];
   cartoes: CartaoCredito[];
@@ -147,11 +162,16 @@ const PALETA_CORES_SUGERIDAS = [
   "#475569",
 ];
 
+function formatDataIso(ano: number, mes: number, dia: number): string {
+  return `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+}
+
 export function AbaCalendario({
   t,
   compromissos,
   setCompromissos,
   disciplinas,
+  setDisciplinas,
   petsPerfil,
   lancamentos,
   cartoes,
@@ -210,6 +230,25 @@ export function AbaCalendario({
   const [executandoConfirmacao, setExecutandoConfirmacao] =
     useState<boolean>(false);
 
+  // Confirmação ao alterar / mover / excluir evento recorrente ("este", "seguintes", "todos")
+  const [confirmacaoRecorrencia, setConfirmacaoRecorrencia] =
+    useState<ConfirmacaoRecorrenciaModalState | null>(null);
+
+  // Estado para Drag and Drop em todas as visões (Mês, Semana, Dia)
+  const [eventoArrastando, setEventoArrastando] =
+    useState<EventoCalendarioUnificado | null>(null);
+  const [dropTargetDia, setDropTargetDia] = useState<number | null>(null);
+  const [dropTargetHora, setDropTargetHora] = useState<string | null>(null);
+
+  // Arraste vertical interativo (Mouse/Touch) na régua diária de 15 em 15 min
+  const [dragVerticalDia, setDragVerticalDia] = useState<{
+    ev: EventoCalendarioUnificado;
+    startY: number;
+    origMin: number;
+    previewMin: number;
+    moved: boolean;
+  } | null>(null);
+
   // Formulário rápido para novo evento no dia selecionado e Modal Nativo estilo Google Agenda
   const [novoTitulo, setNovoTitulo] = useState("");
   const [novaHora, setNovaHora] = useState("14:00");
@@ -217,6 +256,9 @@ export function AbaCalendario({
   const [novoLocal, setNovoLocal] = useState("");
   const [novaDescricao, setNovaDescricao] = useState("");
   const [novaCat, setNovaCat] = useState<CategoriaCalendarioApp>("pessoal");
+  const [novaRecorrencia, setNovaRecorrencia] =
+    useState<RecorrenciaCompromisso>("nenhuma");
+  const [novaRecorrenciaAte, setNovaRecorrenciaAte] = useState<string>("");
   const [enviarNovoParaGoogle, setEnviarNovoParaGoogle] = useState<boolean>(
     configCalendario.sincronizarAoCriarNoGoogle
   );
@@ -369,12 +411,22 @@ export function AbaCalendario({
     return diff > 0 ? diff : fallback;
   };
 
+  // Detecta se um título ou série possui múltiplas ocorrências para saber se é recorrente
+  const titulosRepetidosMap = useMemo(() => {
+    const counts = new Map<string, number>();
+    compromissos.forEach((c) => {
+      const k = c.recorrenciaSerieId || c.titulo.trim().toLowerCase();
+      counts.set(k, (counts.get(k) || 0) + 1);
+    });
+    return counts;
+  }, [compromissos]);
+
   // Consolida todos os eventos do App + Módulos + Google Agenda para o mês/ano ativo
   const todosEventosMes = useMemo<EventoCalendarioUnificado[]>(() => {
     const lista: EventoCalendarioUnificado[] = [];
     const gcalIdsJaNosCompromissos = new Set<string>();
 
-    // 1. Compromissos nativos do App
+    // 1. Compromissos nativos do App (incluindo projeção de eventos recorrentes diários/semanais/mensais)
     compromissos.forEach((c) => {
       const mesComp =
         c.mes === undefined
@@ -383,7 +435,10 @@ export function AbaCalendario({
           ? 1
           : c.mes;
       const anoComp = c.ano ?? anoAtivo;
-      if (mesComp !== mesAtivo || anoComp !== anoAtivo) return;
+      const rec = c.recorrencia || "nenhuma";
+      const serieKey = c.recorrenciaSerieId || c.titulo.trim().toLowerCase();
+      const repetePorMultiplos = (titulosRepetidosMap.get(serieKey) || 0) > 1;
+      const ehRecorrente = rec !== "nenhuma" || Boolean(c.recorrenciaSerieId) || repetePorMultiplos;
 
       if (c.gcalEventId) {
         gcalIdsJaNosCompromissos.add(c.gcalEventId);
@@ -408,25 +463,97 @@ export function AbaCalendario({
           ? "pets"
           : "pessoal");
 
-      lista.push({
-        id: `comp-${c.id}`,
-        compromissoId: c.id,
-        diaMes: Math.min(diasNoMesCount, Math.max(1, c.diaMes)),
-        mes: mesComp,
-        ano: anoComp,
-        horario: c.hora,
-        horaFim: calcularHoraFim(c.hora, c.duracaoMin),
-        duracaoMin: c.duracaoMin || 60,
-        titulo: c.titulo,
-        subtitulo: `${c.duracaoMin} min · ${c.local || "Agenda Casa da Lala"}`,
-        local: c.local,
-        categoria: catMap,
-        cor: c.cor,
-        concluido: c.concluido,
-        origem: c.gcalEventId ? "gcal" : "app",
-        gcalId: c.gcalEventId,
-        payloadSheet: { tipo: "compromisso", id: c.id },
-      });
+      const dataInicioIso = formatDataIso(
+        anoComp,
+        mesComp,
+        Math.min(31, Math.max(1, c.diaMes))
+      );
+      const excluidas = new Set(c.datasExcluidasRecorrencia || []);
+
+      if (rec === "nenhuma") {
+        if (mesComp !== mesAtivo || anoComp !== anoAtivo) return;
+        const diaReal = Math.min(diasNoMesCount, Math.max(1, c.diaMes));
+        const dataIso = formatDataIso(anoAtivo, mesAtivo, diaReal);
+        if (excluidas.has(dataIso)) return;
+
+        lista.push({
+          id: `comp-${c.id}-${diaReal}`,
+          compromissoId: c.id,
+          diaMes: diaReal,
+          mes: mesComp,
+          ano: anoComp,
+          horario: c.hora,
+          horaFim: calcularHoraFim(c.hora, c.duracaoMin),
+          duracaoMin: c.duracaoMin || 60,
+          titulo: c.titulo,
+          subtitulo: `${c.duracaoMin} min · ${c.local || "Agenda Casa da Lala"}`,
+          local: c.local,
+          categoria: catMap,
+          cor: c.cor,
+          concluido: c.concluido,
+          ehTarefa: c.titulo.startsWith("[Tarefa]") || c.titulo.startsWith("☑"),
+          ehRecorrente,
+          recorrencia: rec,
+          recorrenciaSerieId: c.recorrenciaSerieId,
+          origem: c.gcalEventId ? "gcal" : "app",
+          gcalId: c.gcalEventId,
+          payloadSheet: { tipo: "compromisso", id: c.id },
+        });
+      } else {
+        // Projeta ocorrências da recorrência ("diaria", "semanal", "mensal") nos dias do mês ativo
+        const jsDayOriginal = new Date(anoComp, mesComp - 1, c.diaMes).getDay();
+        const diaSemanaOriginal = jsDayOriginal === 0 ? 6 : jsDayOriginal - 1;
+
+        diasNoMesArray.forEach((dia) => {
+          const dataIso = formatDataIso(anoAtivo, mesAtivo, dia);
+          if (dataIso < dataInicioIso) return;
+          if (c.recorrenciaAteData && dataIso > c.recorrenciaAteData) return;
+          if (excluidas.has(dataIso)) return;
+
+          const diaSemanaAtual = (dia + offsetInicioMes - 1) % 7;
+          const bateRecorrencia =
+            rec === "diaria" ||
+            (rec === "semanal" &&
+              diaSemanaAtual === (c.diaSemanaIdx ?? diaSemanaOriginal)) ||
+            (rec === "mensal" && dia === Math.min(diasNoMesCount, c.diaMes));
+
+          if (!bateRecorrencia) return;
+
+          const labelRec =
+            rec === "diaria"
+              ? "Repete todo dia"
+              : rec === "semanal"
+              ? "Repete toda semana"
+              : "Repete todo mês";
+
+          lista.push({
+            id: `comp-${c.id}-rec-${dia}`,
+            compromissoId: c.id,
+            diaMes: dia,
+            mes: mesAtivo,
+            ano: anoAtivo,
+            horario: c.hora,
+            horaFim: calcularHoraFim(c.hora, c.duracaoMin),
+            duracaoMin: c.duracaoMin || 60,
+            titulo: c.titulo,
+            subtitulo: `${c.duracaoMin} min · ${labelRec} · ${
+              c.local || "Agenda Casa da Lala"
+            }`,
+            local: c.local,
+            categoria: catMap,
+            cor: c.cor,
+            concluido: c.concluido,
+            ehTarefa:
+              c.titulo.startsWith("[Tarefa]") || c.titulo.startsWith("☑"),
+            ehRecorrente: true,
+            recorrencia: rec,
+            recorrenciaSerieId: c.recorrenciaSerieId || `serie-${c.id}`,
+            origem: c.gcalEventId ? "gcal" : "app",
+            gcalId: c.gcalEventId,
+            payloadSheet: { tipo: "compromisso", id: c.id },
+          });
+        });
+      }
     });
 
     // 2. Eventos vindos diretamente do Google Agenda (de todas as contas e agendas conectadas)
@@ -459,6 +586,7 @@ export function AbaCalendario({
           titulo: eg.titulo,
           descricao: eg.descricao,
           ehTarefa: eg.titulo.startsWith("[Tarefa]") || eg.titulo.startsWith("☑"),
+          ehRecorrente: eg.gcalId.includes("_"),
           subtitulo: eg.diaInteiro
             ? `Dia inteiro · ${labelOrigem}${eg.local ? ` · ${eg.local}` : ""}`
             : `${eg.horaInicio}–${eg.horaFim} · ${labelOrigem}${
@@ -473,7 +601,7 @@ export function AbaCalendario({
       });
     }
 
-    // 3. Aulas Semanais & Avaliações da UERJ
+    // 3. Aulas Semanais & Avaliações Acadêmicas
     if (configCalendario.mostrarAulasUERJ) {
       disciplinas.forEach((d, idx) => {
         // Projeta aulas nos dias da semana correspondentes (ex: Seg, Ter, Qua, Qui, Sex)
@@ -494,23 +622,37 @@ export function AbaCalendario({
             }`
           : "08:00";
 
+        // Permite excluir dias específicos de aulas se a usuária moveu/excluiu "apenas este evento"
+        const datasExcluidasDisc = new Set(
+          (d.anotacoes || "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter((s) => s.startsWith("EX:"))
+            .map((s) => s.replace("EX:", ""))
+        );
+
         if (diasSemanaDisc.length > 0) {
           diasNoMesArray.forEach((dia) => {
+            const dataIso = formatDataIso(anoAtivo, mesAtivo, dia);
+            if (datasExcluidasDisc.has(dataIso)) return;
             const diaSemana = (dia + offsetInicioMes - 1) % 7;
             if (diasSemanaDisc.includes(diaSemana)) {
               lista.push({
                 id: `uerj-aula-${d.id}-dia-${dia}`,
+                disciplinaId: d.id,
                 diaMes: dia,
                 mes: mesAtivo,
                 ano: anoAtivo,
                 horario: horaAula,
                 horaFim: calcularHoraFim(horaAula, 110),
                 duracaoMin: 110,
-                titulo: `Aula UERJ: ${d.nome}`,
-                subtitulo: `${d.horarioSala} · ${d.professor}`,
+                titulo: `Aula: ${d.nome}`,
+                subtitulo: `${d.horarioSala} · ${d.professor} (Repete toda semana)`,
                 local: d.horarioSala,
                 categoria: "uerj",
                 cor: "primary",
+                ehRecorrente: true,
+                recorrencia: "semanal",
                 origem: "modulo",
                 payloadSheet: { tipo: "disciplina", id: d.id },
               });
@@ -521,13 +663,14 @@ export function AbaCalendario({
           if (mes === mesAtivo) {
             lista.push({
               id: `uerj-disc-${d.id}`,
+              disciplinaId: d.id,
               diaMes: dia,
               mes: mesAtivo,
               ano: anoAtivo,
               horario: horaAula,
               horaFim: calcularHoraFim(horaAula, 110),
               duracaoMin: 110,
-              titulo: `UERJ: ${d.nome}`,
+              titulo: `Estudos: ${d.nome}`,
               subtitulo: `${d.horarioSala} · Prazo: ${d.prazo}`,
               categoria: "uerj",
               cor: "primary",
@@ -543,6 +686,7 @@ export function AbaCalendario({
           if (mes === mesAtivo) {
             lista.push({
               id: `uerj-av-${d.id}-${av.id}`,
+              disciplinaId: d.id,
               diaMes: dia,
               mes: mesAtivo,
               ano: anoAtivo,
@@ -628,6 +772,8 @@ export function AbaCalendario({
             categoria: "financas",
             cor: "finance",
             concluido: ct.statusFatura === "paga",
+            ehRecorrente: true,
+            recorrencia: "mensal",
             origem: "modulo",
           });
         }
@@ -698,6 +844,7 @@ export function AbaCalendario({
     return lista.sort((a, b) => a.horario.localeCompare(b.horario));
   }, [
     compromissos,
+    titulosRepetidosMap,
     eventosGoogle,
     disciplinas,
     petsPerfil,
@@ -780,13 +927,15 @@ export function AbaCalendario({
     setNovoTitulo("");
     setNovoLocal("");
     setNovaDescricao("");
+    setNovaRecorrencia("nenhuma");
+    setNovaRecorrenciaAte("");
     setModalCriacaoAberto(true);
   };
 
   // Abre um evento/tarefa existente para visualização, conclusão ou edição
   const abrirEventoNoCalendario = (ev: EventoCalendarioUnificado) => {
     setDiaSelecionado(ev.diaMes);
-    if (ev.payloadSheet && ev.origem === "modulo") {
+    if (ev.payloadSheet && ev.origem === "modulo" && !ev.disciplinaId) {
       openCard(ev.payloadSheet);
       return;
     }
@@ -798,9 +947,492 @@ export function AbaCalendario({
     setNovoLocal(ev.local || "");
     setNovaDescricao(ev.descricao || ev.subtitulo || "");
     setNovaCat(ev.categoria);
+    setNovaRecorrencia(ev.recorrencia || (ev.ehRecorrente ? "semanal" : "nenhuma"));
     setContaDestinoCriacao(ev.contaEmail || ev.calendarId || "");
     setModalCriacaoAberto(true);
   };
+
+  // Aplica a movimentação ou edição de um evento de acordo com o escopo ("este", "seguintes", "todos")
+  const aplicarAlteracaoComEscopo = useCallback(
+    async (
+      ev: EventoCalendarioUnificado,
+      dadosNovos: {
+        novoDia: number;
+        novoMes: number;
+        novoAno: number;
+        novaHoraStr: string;
+        novaDuracaoNum: number;
+        novoTituloStr: string;
+        novoLocalStr?: string;
+        novaCatVal?: CategoriaCalendarioApp;
+        novaRec?: RecorrenciaCompromisso;
+      },
+      escopo: EscopoAlteracaoRecorrencia
+    ) => {
+      const dataOcorrenciaIso = formatDataIso(ev.ano, ev.mes, ev.diaMes);
+      const dataAnteriorIso = (() => {
+        const dt = new Date(ev.ano, ev.mes - 1, ev.diaMes);
+        dt.setDate(dt.getDate() - 1);
+        return formatDataIso(
+          dt.getFullYear(),
+          dt.getMonth() + 1,
+          dt.getDate()
+        );
+      })();
+      const novoDiaSemanaIdx =
+        (dadosNovos.novoDia + offsetInicioMes - 1) % 7;
+
+      const abaMap: Record<CategoriaCalendarioApp, Compromisso["aba"]> = {
+        uerj: "estudos_trabalho",
+        trabalho: "estudos_trabalho",
+        pets: "casa_rotinas",
+        financas: "financas",
+        saude: "saude_pets",
+        pessoal: "casa_rotinas",
+      };
+      const catFinal = dadosNovos.novaCatVal || ev.categoria;
+
+      // Caso A: Evento de Aula Semanal de Disciplina (origem === "modulo" com disciplinaId)
+      if (ev.disciplinaId) {
+        if (escopo === "este") {
+          // Exclui apenas a aula desta data e cria um Compromisso avulso no novo dia/horário
+          if (setDisciplinas) {
+            setDisciplinas((prev) =>
+              prev.map((d) =>
+                d.id === ev.disciplinaId
+                  ? {
+                      ...d,
+                      anotacoes: `${d.anotacoes ? d.anotacoes + "," : ""}EX:${dataOcorrenciaIso}`,
+                    }
+                  : d
+              )
+            );
+          }
+          setCompromissos((prev) => [
+            ...prev,
+            {
+              id: Date.now(),
+              hora: dadosNovos.novaHoraStr,
+              duracaoMin: dadosNovos.novaDuracaoNum,
+              titulo: dadosNovos.novoTituloStr,
+              local: dadosNovos.novoLocalStr || ev.local || "Aula remarcada",
+              cor: "primary",
+              aba: "estudos_trabalho",
+              diaMes: dadosNovos.novoDia,
+              mes: dadosNovos.novoMes,
+              ano: dadosNovos.novoAno,
+              diaSemanaIdx: novoDiaSemanaIdx,
+              categoriaCalendario: "uerj",
+              recorrencia: "nenhuma",
+            },
+          ]);
+          showToast(
+            `Apenas esta aula foi movida para ${String(
+              dadosNovos.novoDia
+            ).padStart(2, "0")}/${String(dadosNovos.novoMes).padStart(
+              2,
+              "0"
+            )} às ${dadosNovos.novaHoraStr}!`
+          );
+          return;
+        }
+
+        // Escopo "seguintes" ou "todos" na disciplina: atualiza o horário/dia da disciplina ou cria série
+        if (setDisciplinas) {
+          const nomeDiaCurto =
+            DIAS_SEMANA_CURTO[novoDiaSemanaIdx]?.toUpperCase() || "SEG";
+          setDisciplinas((prev) =>
+            prev.map((d) => {
+              if (d.id !== ev.disciplinaId) return d;
+              const novoHorSala =
+                dadosNovos.novoDia !== ev.diaMes
+                  ? `${nomeDiaCurto} · ${dadosNovos.novaHoraStr}`
+                  : d.horarioSala.replace(
+                      /(\d{1,2})[:h](\d{2})?/,
+                      dadosNovos.novaHoraStr
+                    );
+              return {
+                ...d,
+                nome: dadosNovos.novoTituloStr.replace(/^(Aula( UERJ)?:\s*)/i, ""),
+                horarioSala: novoHorSala.includes(dadosNovos.novaHoraStr)
+                  ? novoHorSala
+                  : `${d.horarioSala} · ${dadosNovos.novaHoraStr}`,
+              };
+            })
+          );
+        }
+        showToast(
+          escopo === "todos"
+            ? `Todas as aulas da série atualizadas para ${dadosNovos.novaHoraStr}!`
+            : `Esta aula e as seguintes foram atualizadas para ${dadosNovos.novaHoraStr}!`
+        );
+        return;
+      }
+
+      // Caso B: Compromisso nativo do App (recorrente ou em série)
+      if (ev.compromissoId) {
+        const compOriginal = compromissos.find(
+          (c) => c.id === ev.compromissoId
+        );
+        const serieKey =
+          compOriginal?.recorrenciaSerieId ||
+          ev.titulo.trim().toLowerCase();
+
+        if (escopo === "este") {
+          setCompromissos((prev) => {
+            const atualizados = prev
+              .map((c) => {
+                if (c.id !== ev.compromissoId) return c;
+                // Se o compromisso tem recorrência projetada, adiciona a data na lista de excluídas
+                if (c.recorrencia && c.recorrencia !== "nenhuma") {
+                  return {
+                    ...c,
+                    datasExcluidasRecorrencia: [
+                      ...(c.datasExcluidasRecorrencia || []),
+                      dataOcorrenciaIso,
+                    ],
+                  };
+                }
+                // Se era uma ocorrência individual de uma série, atualiza somente ela
+                return {
+                  ...c,
+                  titulo: dadosNovos.novoTituloStr,
+                  hora: dadosNovos.novaHoraStr,
+                  duracaoMin: dadosNovos.novaDuracaoNum,
+                  local: dadosNovos.novoLocalStr ?? c.local,
+                  categoriaCalendario: catFinal,
+                  aba: abaMap[catFinal],
+                  diaMes: dadosNovos.novoDia,
+                  mes: dadosNovos.novoMes,
+                  ano: dadosNovos.novoAno,
+                  diaSemanaIdx: novoDiaSemanaIdx,
+                  recorrencia: "nenhuma" as RecorrenciaCompromisso,
+                };
+              });
+
+            // Se o original era recorrente projetado, criamos a nova instância avulsa no dia/hora destino
+            if (
+              compOriginal?.recorrencia &&
+              compOriginal.recorrencia !== "nenhuma"
+            ) {
+              atualizados.push({
+                ...compOriginal,
+                id: Date.now(),
+                titulo: dadosNovos.novoTituloStr,
+                hora: dadosNovos.novaHoraStr,
+                duracaoMin: dadosNovos.novaDuracaoNum,
+                local: dadosNovos.novoLocalStr ?? compOriginal.local,
+                categoriaCalendario: catFinal,
+                aba: abaMap[catFinal],
+                diaMes: dadosNovos.novoDia,
+                mes: dadosNovos.novoMes,
+                ano: dadosNovos.novoAno,
+                diaSemanaIdx: novoDiaSemanaIdx,
+                recorrencia: "nenhuma",
+                datasExcluidasRecorrencia: [],
+              });
+            }
+            return atualizados;
+          });
+
+          showToast(
+            `Alterado apenas este evento (${String(dadosNovos.novoDia).padStart(
+              2,
+              "0"
+            )}/${String(dadosNovos.novoMes).padStart(2, "0")} às ${
+              dadosNovos.novaHoraStr
+            })!`
+          );
+          return;
+        }
+
+        if (escopo === "seguintes") {
+          setCompromissos((prev) => {
+            const listaNova: Compromisso[] = [];
+            prev.forEach((c) => {
+              const mesmaSerie =
+                c.id === ev.compromissoId ||
+                (c.recorrenciaSerieId &&
+                  c.recorrenciaSerieId === compOriginal?.recorrenciaSerieId) ||
+                c.titulo.trim().toLowerCase() === serieKey;
+
+              if (!mesmaSerie) {
+                listaNova.push(c);
+                return;
+              }
+
+              if (c.recorrencia && c.recorrencia !== "nenhuma") {
+                // Encerra a série antiga no dia anterior e cria a nova série a partir da data atual
+                listaNova.push({
+                  ...c,
+                  recorrenciaAteData: dataAnteriorIso,
+                });
+                listaNova.push({
+                  ...c,
+                  id: Date.now() + Math.floor(Math.random() * 1000),
+                  titulo: dadosNovos.novoTituloStr,
+                  hora: dadosNovos.novaHoraStr,
+                  duracaoMin: dadosNovos.novaDuracaoNum,
+                  local: dadosNovos.novoLocalStr ?? c.local,
+                  categoriaCalendario: catFinal,
+                  aba: abaMap[catFinal],
+                  diaMes: dadosNovos.novoDia,
+                  mes: dadosNovos.novoMes,
+                  ano: dadosNovos.novoAno,
+                  diaSemanaIdx: novoDiaSemanaIdx,
+                  recorrencia: dadosNovos.novaRec || c.recorrencia,
+                  recorrenciaAteData: c.recorrenciaAteData,
+                  datasExcluidasRecorrencia: [],
+                });
+              } else {
+                // Para eventos em série individuais: altera este e os de datas >= dataOcorrenciaIso
+                const cIso = formatDataIso(
+                  c.ano ?? anoAtivo,
+                  c.mes ?? mesAtivo,
+                  c.diaMes
+                );
+                if (cIso >= dataOcorrenciaIso) {
+                  listaNova.push({
+                    ...c,
+                    titulo: dadosNovos.novoTituloStr,
+                    hora: dadosNovos.novaHoraStr,
+                    duracaoMin: dadosNovos.novaDuracaoNum,
+                    local: dadosNovos.novoLocalStr ?? c.local,
+                    categoriaCalendario: catFinal,
+                    aba: abaMap[catFinal],
+                    diaMes:
+                      c.id === ev.compromissoId ? dadosNovos.novoDia : c.diaMes,
+                  });
+                } else {
+                  listaNova.push(c);
+                }
+              }
+            });
+            return listaNova;
+          });
+
+          showToast(
+            `Este evento e os seguintes foram atualizados para ${dadosNovos.novaHoraStr}!`
+          );
+          return;
+        }
+
+        // Escopo === "todos": altera toda a série
+        setCompromissos((prev) =>
+          prev.map((c) => {
+            const mesmaSerie =
+              c.id === ev.compromissoId ||
+              (c.recorrenciaSerieId &&
+                c.recorrenciaSerieId === compOriginal?.recorrenciaSerieId) ||
+              c.titulo.trim().toLowerCase() === serieKey;
+            if (!mesmaSerie) return c;
+            return {
+              ...c,
+              titulo: dadosNovos.novoTituloStr,
+              hora: dadosNovos.novaHoraStr,
+              duracaoMin: dadosNovos.novaDuracaoNum,
+              local: dadosNovos.novoLocalStr ?? c.local,
+              categoriaCalendario: catFinal,
+              aba: abaMap[catFinal],
+              diaMes:
+                c.id === ev.compromissoId || c.recorrencia !== "nenhuma"
+                  ? dadosNovos.novoDia
+                  : c.diaMes,
+              mes:
+                c.id === ev.compromissoId || c.recorrencia !== "nenhuma"
+                  ? dadosNovos.novoMes
+                  : c.mes,
+              ano:
+                c.id === ev.compromissoId || c.recorrencia !== "nenhuma"
+                  ? dadosNovos.novoAno
+                  : c.ano,
+              diaSemanaIdx: novoDiaSemanaIdx,
+              recorrencia:
+                dadosNovos.novaRec !== undefined
+                  ? dadosNovos.novaRec
+                  : c.recorrencia,
+            };
+          })
+        );
+        showToast(
+          `Todos os eventos da série "${dadosNovos.novoTituloStr}" foram atualizados!`
+        );
+        return;
+      }
+
+      // Caso C: Evento do Google Calendar ou módulo convertido ao arrastar
+      if (ev.gcalId && navigator.onLine) {
+        try {
+          const atualizado = await atualizarEventoGoogleCalendar(ev.gcalId, {
+            titulo: dadosNovos.novoTituloStr,
+            descricao: ev.descricao || "",
+            local: dadosNovos.novoLocalStr || ev.local || "",
+            ano: dadosNovos.novoAno,
+            mes: dadosNovos.novoMes,
+            diaMes: dadosNovos.novoDia,
+            horaInicio: dadosNovos.novaHoraStr,
+            duracaoMin: dadosNovos.novaDuracaoNum,
+            categoria: catFinal,
+            targetAccountEmail: ev.contaEmail,
+            targetCalendarId: ev.calendarId || "primary",
+          });
+          setEventosGoogle((prev) =>
+            prev.map((x) => (x.gcalId === ev.gcalId ? atualizado : x))
+          );
+          showToast(
+            `"${atualizado.titulo}" movido para ${String(
+              dadosNovos.novoDia
+            ).padStart(2, "0")}/${String(dadosNovos.novoMes).padStart(
+              2,
+              "0"
+            )} às ${dadosNovos.novaHoraStr}!`
+          );
+          return;
+        } catch {
+          // fallback local
+        }
+      }
+
+      // Fallback para eventos de outros módulos arrastados: cria compromisso personalizado no novo horário
+      setCompromissos((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          hora: dadosNovos.novaHoraStr,
+          duracaoMin: dadosNovos.novaDuracaoNum,
+          titulo: dadosNovos.novoTituloStr,
+          local: dadosNovos.novoLocalStr || ev.local || "Agenda Casa da Lala",
+          cor: ev.cor || "action",
+          aba: abaMap[catFinal],
+          diaMes: dadosNovos.novoDia,
+          mes: dadosNovos.novoMes,
+          ano: dadosNovos.novoAno,
+          diaSemanaIdx: novoDiaSemanaIdx,
+          categoriaCalendario: catFinal,
+          recorrencia: "nenhuma",
+        },
+      ]);
+      showToast(
+        `"${dadosNovos.novoTituloStr}" reagendado em ${String(
+          dadosNovos.novoDia
+        ).padStart(2, "0")}/${String(dadosNovos.novoMes).padStart(
+          2,
+          "0"
+        )} às ${dadosNovos.novaHoraStr}!`
+      );
+    },
+    [anoAtivo, compromissos, mesAtivo, offsetInicioMes, setCompromissos, setDisciplinas, showToast]
+  );
+
+  // Solicita mover um evento (via Drag & Drop) para novoDia e/ou novaHora, perguntando escopo se for recorrente!
+  const handleMoverEventoNoCalendario = useCallback(
+    (
+      ev: EventoCalendarioUnificado,
+      novoDia: number,
+      novaHoraAlvo?: string
+    ) => {
+      const horaFinal = novaHoraAlvo || ev.horario || "09:00";
+      if (novoDia === ev.diaMes && horaFinal === ev.horario) return;
+
+      const dadosNovos = {
+        novoDia,
+        novoMes: mesAtivo,
+        novoAno: anoAtivo,
+        novaHoraStr: horaFinal,
+        novaDuracaoNum: ev.duracaoMin || 60,
+        novoTituloStr: ev.titulo,
+        novoLocalStr: ev.local,
+        novaCatVal: ev.categoria,
+        novaRec: ev.recorrencia,
+      };
+
+      // Se o evento se repete, abre o modal perguntando: "Apenas este", "Este e os seguintes" ou "Todos"!
+      if (ev.ehRecorrente) {
+        setConfirmacaoRecorrencia({
+          evento: ev,
+          tipoOperacao: "mover",
+          resumoAlteracao: `Mover "${ev.titulo}" de ${String(ev.diaMes).padStart(
+            2,
+            "0"
+          )}/${String(mesAtivo).padStart(2, "0")} (${ev.horario}) para ${String(
+            novoDia
+          ).padStart(2, "0")}/${String(mesAtivo).padStart(
+            2,
+            "0"
+          )} às ${horaFinal}`,
+          onEscolherEscopo: (escopo) => {
+            aplicarAlteracaoComEscopo(ev, dadosNovos, escopo);
+            setConfirmacaoRecorrencia(null);
+          },
+        });
+        return;
+      }
+
+      aplicarAlteracaoComEscopo(ev, dadosNovos, "este");
+    },
+    [anoAtivo, aplicarAlteracaoComEscopo, mesAtivo]
+  );
+
+  // Listener global para finalizar o arraste vertical por Mouse/Touch na Visão Diária
+  useEffect(() => {
+    if (!dragVerticalDia) return;
+
+    const handleMove = (clientY: number) => {
+      const deltaPx = clientY - dragVerticalDia.startY;
+      // 96px = 60 min => 24px = 15 min
+      const deltaQuartos = Math.round(deltaPx / 24);
+      const novoMin = Math.max(
+        5 * 60,
+        Math.min(23 * 60 + 45, dragVerticalDia.origMin + deltaQuartos * 15)
+      );
+      setDragVerticalDia((prev) =>
+        prev
+          ? {
+              ...prev,
+              previewMin: novoMin,
+              moved: prev.moved || Math.abs(deltaPx) > 6,
+            }
+          : null
+      );
+    };
+
+    const onMouseMove = (e: MouseEvent) => handleMove(e.clientY);
+    const onTouchMove = (e: TouchEvent) => {
+      if (e.touches[0]) handleMove(e.touches[0].clientY);
+    };
+
+    const onEnd = () => {
+      if (dragVerticalDia.moved) {
+        const hh = String(Math.floor(dragVerticalDia.previewMin / 60)).padStart(
+          2,
+          "0"
+        );
+        const mm = String(dragVerticalDia.previewMin % 60).padStart(2, "0");
+        const novaHoraStr = `${hh}:${mm}`;
+        if (novaHoraStr !== dragVerticalDia.ev.horario) {
+          handleMoverEventoNoCalendario(
+            dragVerticalDia.ev,
+            dragVerticalDia.ev.diaMes,
+            novaHoraStr
+          );
+        }
+      } else {
+        abrirEventoNoCalendario(dragVerticalDia.ev);
+      }
+      setDragVerticalDia(null);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onEnd);
+    window.addEventListener("touchmove", onTouchMove);
+    window.addEventListener("touchend", onEnd);
+    return () => {
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+  }, [dragVerticalDia, handleMoverEventoNoCalendario]);
 
   const handleConectarOutroEmailGoogle = async () => {
     const res = await connectAdditionalGoogleAccount();
@@ -938,6 +1570,10 @@ export function AbaCalendario({
       ano: anoAtivo,
       diaSemanaIdx: (diaSelecionado + offsetInicioMes - 1) % 7,
       categoriaCalendario: novaCat,
+      recorrencia: novaRecorrencia,
+      recorrenciaSerieId:
+        novaRecorrencia !== "nenhuma" ? `serie-${novoId}` : undefined,
+      recorrenciaAteData: novaRecorrenciaAte || undefined,
       gcalSynced: Boolean(gcalEventIdCriado),
       gcalEventId: gcalEventIdCriado,
     };
@@ -964,62 +1600,43 @@ export function AbaCalendario({
 
     // Se estiver editando um evento existente
     if (eventoEditando) {
-      if (eventoEditando.compromissoId) {
-        setCompromissos((prev) =>
-          prev.map((c) =>
-            c.id === eventoEditando.compromissoId
-              ? {
-                  ...c,
-                  titulo: tituloFormatado,
-                  hora: diaInteiroModal ? "08:00" : novaHora,
-                  duracaoMin: novaDuracao,
-                  local: novoLocal.trim() || c.local,
-                  categoriaCalendario: novaCat,
-                  diaMes: diaSelecionado,
-                  mes: mesAtivo,
-                  ano: anoAtivo,
-                }
-              : c
-          )
-        );
-      }
+      const editRef = eventoEditando;
+      const horaEdit = diaInteiroModal ? "08:00" : novaHora;
+      const dadosNovos = {
+        novoDia: diaSelecionado,
+        novoMes: mesAtivo,
+        novoAno: anoAtivo,
+        novaHoraStr: horaEdit,
+        novaDuracaoNum: novaDuracao,
+        novoTituloStr: tituloFormatado,
+        novoLocalStr: novoLocal.trim() || editRef.local,
+        novaCatVal: novaCat,
+        novaRec: novaRecorrencia,
+      };
 
       setModalCriacaoAberto(false);
-      const editRef = eventoEditando;
       setEventoEditando(null);
 
-      if (editRef.gcalId && navigator.onLine) {
-        try {
-          const atualizado = await atualizarEventoGoogleCalendar(
-            editRef.gcalId,
-            {
-              titulo: tituloFormatado,
-              descricao: novaDescricao.trim(),
-              local: novoLocal.trim(),
-              ano: anoAtivo,
-              mes: mesAtivo,
-              diaMes: diaSelecionado,
-              horaInicio: diaInteiroModal ? "08:00" : novaHora,
-              duracaoMin: novaDuracao,
-              diaInteiro: diaInteiroModal,
-              categoria: novaCat,
-              targetAccountEmail:
-                contaDestinoCriacao || editRef.contaEmail,
-              targetCalendarId: editRef.calendarId || "primary",
-            }
-          );
-          setEventosGoogle((prev) =>
-            prev.map((x) =>
-              x.gcalId === editRef.gcalId ? atualizado : x
-            )
-          );
-          showToast(`"${atualizado.titulo}" atualizado na Agenda e no Google!`);
-        } catch {
-          showToast(`"${tituloFormatado}" atualizado na Agenda local!`);
-        }
-      } else {
-        showToast(`"${tituloFormatado}" atualizado na Agenda!`);
+      // Se o evento se repete, pergunta se quer alterar apenas este, este e os seguintes, ou todos!
+      if (editRef.ehRecorrente) {
+        setConfirmacaoRecorrencia({
+          evento: editRef,
+          tipoOperacao: "editar",
+          resumoAlteracao: `Alterar "${editRef.titulo}" para "${tituloFormatado}" (${String(
+            diaSelecionado
+          ).padStart(2, "0")}/${String(mesAtivo).padStart(
+            2,
+            "0"
+          )} às ${horaEdit})`,
+          onEscolherEscopo: (escopo) => {
+            aplicarAlteracaoComEscopo(editRef, dadosNovos, escopo);
+            setConfirmacaoRecorrencia(null);
+          },
+        });
+        return;
       }
+
+      await aplicarAlteracaoComEscopo(editRef, dadosNovos, "este");
       return;
     }
 
@@ -1105,6 +1722,119 @@ export function AbaCalendario({
 
   const handleSolicitarExclusaoEvento = (ev: EventoCalendarioUnificado) => {
     setModalCriacaoAberto(false);
+    setEventoEditando(null);
+
+    // Se for um evento que se repete, pergunta se deseja excluir apenas este, este e os seguintes, ou todos!
+    if (ev.ehRecorrente && (ev.compromissoId || ev.disciplinaId)) {
+      const dataOcorrenciaIso = formatDataIso(ev.ano, ev.mes, ev.diaMes);
+      const dataAnteriorIso = (() => {
+        const dt = new Date(ev.ano, ev.mes - 1, ev.diaMes);
+        dt.setDate(dt.getDate() - 1);
+        return formatDataIso(
+          dt.getFullYear(),
+          dt.getMonth() + 1,
+          dt.getDate()
+        );
+      })();
+
+      setConfirmacaoRecorrencia({
+        evento: ev,
+        tipoOperacao: "excluir",
+        resumoAlteracao: `Excluir "${ev.titulo}" (${String(ev.diaMes).padStart(
+          2,
+          "0"
+        )}/${String(ev.mes).padStart(2, "0")} às ${ev.horario})`,
+        onEscolherEscopo: (escopo) => {
+          if (ev.disciplinaId && setDisciplinas) {
+            if (escopo === "este") {
+              setDisciplinas((prev) =>
+                prev.map((d) =>
+                  d.id === ev.disciplinaId
+                    ? {
+                        ...d,
+                        anotacoes: `${
+                          d.anotacoes ? d.anotacoes + "," : ""
+                        }EX:${dataOcorrenciaIso}`,
+                      }
+                    : d
+                )
+              );
+              showToast(`Aula de ${ev.diaMes}/${ev.mes} removida da agenda.`);
+            } else {
+              setDisciplinas((prev) =>
+                prev.filter((d) => d.id !== ev.disciplinaId)
+              );
+              showToast(`Série de aulas "${ev.titulo}" removida.`);
+            }
+            setConfirmacaoRecorrencia(null);
+            return;
+          }
+
+          const compOrig = compromissos.find((c) => c.id === ev.compromissoId);
+          const serieKey =
+            compOrig?.recorrenciaSerieId || ev.titulo.trim().toLowerCase();
+
+          if (escopo === "este") {
+            setCompromissos((prev) =>
+              prev.flatMap((c) => {
+                if (c.id !== ev.compromissoId) return [c];
+                if (c.recorrencia && c.recorrencia !== "nenhuma") {
+                  return [
+                    {
+                      ...c,
+                      datasExcluidasRecorrencia: [
+                        ...(c.datasExcluidasRecorrencia || []),
+                        dataOcorrenciaIso,
+                      ],
+                    },
+                  ];
+                }
+                return [];
+              })
+            );
+            showToast(`Removido apenas o evento de ${ev.diaMes}/${ev.mes}.`);
+          } else if (escopo === "seguintes") {
+            setCompromissos((prev) =>
+              prev.flatMap((c) => {
+                const mesmaSerie =
+                  c.id === ev.compromissoId ||
+                  (c.recorrenciaSerieId &&
+                    c.recorrenciaSerieId === compOrig?.recorrenciaSerieId) ||
+                  c.titulo.trim().toLowerCase() === serieKey;
+                if (!mesmaSerie) return [c];
+                if (c.recorrencia && c.recorrencia !== "nenhuma") {
+                  return [{ ...c, recorrenciaAteData: dataAnteriorIso }];
+                }
+                const cIso = formatDataIso(
+                  c.ano ?? anoAtivo,
+                  c.mes ?? mesAtivo,
+                  c.diaMes
+                );
+                return cIso >= dataOcorrenciaIso ? [] : [c];
+              })
+            );
+            showToast(
+              `Este evento e os seguintes foram removidos da série "${ev.titulo}".`
+            );
+          } else {
+            setCompromissos((prev) =>
+              prev.filter((c) => {
+                const mesmaSerie =
+                  c.id === ev.compromissoId ||
+                  (c.recorrenciaSerieId &&
+                    c.recorrenciaSerieId === compOrig?.recorrenciaSerieId) ||
+                  c.titulo.trim().toLowerCase() === serieKey;
+                return !mesmaSerie;
+              })
+            );
+            showToast(`Todos os eventos da série "${ev.titulo}" foram removidos.`);
+          }
+          setConfirmacaoRecorrencia(null);
+        },
+      });
+      return;
+    }
+
     if (ev.gcalId) {
       setConfirmacaoGCal({
         tipo: "excluir",
@@ -2018,6 +2748,7 @@ export function AbaCalendario({
                     mesAtivo === hojeReal.getMonth() + 1 &&
                     anoAtivo === hojeReal.getFullYear();
                   const isSelecionado = dia === diaSelecionado;
+                  const isDropTarget = dropTargetDia === dia;
                   const evsDia = eventosFiltrados.filter(
                     (e) => e.diaMes === dia
                   );
@@ -2035,20 +2766,41 @@ export function AbaCalendario({
                       onDoubleClick={() =>
                         abrirModalCriacaoRapida(dia, "14:00", "evento")
                       }
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dropTargetDia !== dia) setDropTargetDia(dia);
+                      }}
+                      onDragLeave={() => {
+                        if (dropTargetDia === dia) setDropTargetDia(null);
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setDropTargetDia(null);
+                        if (eventoArrastando) {
+                          handleMoverEventoNoCalendario(eventoArrastando, dia);
+                          setEventoArrastando(null);
+                        }
+                      }}
                       className="group h-24 sm:h-32 p-1.5 sm:p-2 rounded-2xl border flex flex-col justify-between text-left transition-all cursor-pointer relative overflow-hidden"
                       style={{
-                        background: isSelecionado
+                        background: isDropTarget
+                          ? `${t.primary}22`
+                          : isSelecionado
                           ? `${t.action}14`
                           : isHoje
                           ? t.cardSubtle
                           : t.bg,
-                        borderColor: isSelecionado
+                        borderColor: isDropTarget
+                          ? t.primary
+                          : isSelecionado
                           ? t.action
                           : isHoje
                           ? t.primary
                           : t.border,
+                        borderWidth: isDropTarget ? "2px" : "1px",
                       }}
-                      title="Clique para selecionar ou clique novamente no dia para criar Evento / Tarefa"
+                      title="Clique para selecionar ou arraste qualquer evento para este dia"
                     >
                       <div className="flex items-center justify-between w-full">
                         <span
@@ -2090,7 +2842,7 @@ export function AbaCalendario({
                         </div>
                       </div>
 
-                      {/* Pílulas de eventos estilo Google Calendar */}
+                      {/* Pílulas de eventos estilo Google Calendar (arrastáveis entre dias) */}
                       <div className="space-y-1 w-full overflow-hidden">
                         {evsDia.slice(0, 3).map((ev) => {
                           const corCat = getCorHexCategoria(
@@ -2100,11 +2852,23 @@ export function AbaCalendario({
                           return (
                             <div
                               key={ev.id}
+                              draggable
+                              onDragStart={(e) => {
+                                e.stopPropagation();
+                                setEventoArrastando(ev);
+                                e.dataTransfer.effectAllowed = "move";
+                                e.dataTransfer.setData("text/plain", ev.id);
+                              }}
+                              onDragEnd={() => {
+                                setEventoArrastando(null);
+                                setDropTargetDia(null);
+                                setDropTargetHora(null);
+                              }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 abrirEventoNoCalendario(ev);
                               }}
-                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold truncate flex items-center gap-1 hover:opacity-90"
+                              className="px-1.5 py-0.5 rounded text-[10px] font-semibold truncate flex items-center gap-1 hover:opacity-90 cursor-grab active:cursor-grabbing select-none"
                               style={{
                                 background: `${corCat}22`,
                                 color: corCat,
@@ -2112,17 +2876,20 @@ export function AbaCalendario({
                                 textDecoration: ev.concluido
                                   ? "line-through"
                                   : "none",
+                                opacity:
+                                  eventoArrastando?.id === ev.id ? 0.45 : 1,
                               }}
-                              title={`${ev.horario} ${ev.titulo}${
-                                ev.nomeCalendario
-                                  ? ` (${ev.nomeCalendario})`
-                                  : ""
+                              title={`Arraste para mudar de dia · ${ev.horario} ${ev.titulo}${
+                                ev.ehRecorrente ? " (Evento Recorrente ↻)" : ""
                               }`}
                             >
                               <span className="font-mono-num hidden sm:inline">
                                 {ev.horario}
                               </span>
-                              <span className="truncate">{ev.titulo}</span>
+                              <span className="truncate">
+                                {ev.ehRecorrente ? "↻ " : ""}
+                                {ev.titulo}
+                              </span>
                             </div>
                           );
                         })}
@@ -2230,14 +2997,57 @@ export function AbaCalendario({
                                 tipoItemModal
                               );
                             }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.dataTransfer.dropEffect = "move";
+                              const rect =
+                                e.currentTarget.getBoundingClientRect();
+                              const relY = Math.max(
+                                0,
+                                Math.min(63, e.clientY - rect.top)
+                              );
+                              const quarto = Math.floor((relY / 64) * 4) * 15;
+                              const horaAlvo = `${prefixoHora}:${String(
+                                quarto
+                              ).padStart(2, "0")}`;
+                              if (dropTargetDia !== dia) setDropTargetDia(dia);
+                              if (dropTargetHora !== horaAlvo)
+                                setDropTargetHora(horaAlvo);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const rect =
+                                e.currentTarget.getBoundingClientRect();
+                              const relY = Math.max(
+                                0,
+                                Math.min(63, e.clientY - rect.top)
+                              );
+                              const quarto = Math.floor((relY / 64) * 4) * 15;
+                              const horaAlvo = `${prefixoHora}:${String(
+                                quarto
+                              ).padStart(2, "0")}`;
+                              setDropTargetDia(null);
+                              setDropTargetHora(null);
+                              if (eventoArrastando) {
+                                handleMoverEventoNoCalendario(
+                                  eventoArrastando,
+                                  dia,
+                                  horaAlvo
+                                );
+                                setEventoArrastando(null);
+                              }
+                            }}
                             className="rounded-lg relative cursor-pointer transition-colors hover:opacity-90 overflow-visible"
                             style={{
                               background:
-                                dia === diaSelecionado
+                                dropTargetDia === dia &&
+                                dropTargetHora?.startsWith(prefixoHora)
+                                  ? `${t.primary}22`
+                                  : dia === diaSelecionado
                                   ? `${t.action}08`
                                   : t.bg,
                             }}
-                            title={`Clique para agendar no dia ${dia} (${prefixoHora}:00, :15, :30 ou :45)`}
+                            title={`Clique ou arraste um evento para o dia ${dia} (${prefixoHora}:00, :15, :30 ou :45)`}
                           >
                             {/* Linha guia de 30 min no meio da hora */}
                             <div
@@ -2276,11 +3086,23 @@ export function AbaCalendario({
                               return (
                                 <div
                                   key={ev.id}
+                                  draggable
+                                  onDragStart={(e) => {
+                                    e.stopPropagation();
+                                    setEventoArrastando(ev);
+                                    e.dataTransfer.effectAllowed = "move";
+                                    e.dataTransfer.setData("text/plain", ev.id);
+                                  }}
+                                  onDragEnd={() => {
+                                    setEventoArrastando(null);
+                                    setDropTargetDia(null);
+                                    setDropTargetHora(null);
+                                  }}
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     abrirEventoNoCalendario(ev);
                                   }}
-                                  className="absolute z-10 px-1 rounded-md text-[10px] font-bold leading-none flex items-center truncate shadow-2xs"
+                                  className="absolute z-10 px-1 rounded-md text-[10px] font-bold leading-none flex items-center truncate shadow-2xs cursor-grab active:cursor-grabbing select-none"
                                   style={{
                                     top: `${topPct}%`,
                                     height: `${heightPx}px`,
@@ -2292,12 +3114,19 @@ export function AbaCalendario({
                                         : `${corCat}38`,
                                     color: corCat,
                                     borderLeft: `3px solid ${corCat}`,
+                                    opacity:
+                                      eventoArrastando?.id === ev.id ? 0.45 : 1,
                                   }}
-                                  title={`${ev.horario}${
+                                  title={`Arraste para mudar de dia/horário · ${
+                                    ev.horario
+                                  }${
                                     ev.horaFim ? `–${ev.horaFim}` : ""
                                   } (${durMin} min) — ${ev.titulo}`}
                                 >
-                                  <span className="truncate">{ev.titulo}</span>
+                                  <span className="truncate">
+                                    {ev.ehRecorrente ? "↻ " : ""}
+                                    {ev.titulo}
+                                  </span>
                                 </div>
                               );
                             })}
@@ -2457,10 +3286,35 @@ export function AbaCalendario({
                                       tipoItemModal
                                     )
                                   }
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                    if (dropTargetDia !== diaSelecionado)
+                                      setDropTargetDia(diaSelecionado);
+                                    if (dropTargetHora !== horaQuartoStr)
+                                      setDropTargetHora(horaQuartoStr);
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    setDropTargetDia(null);
+                                    setDropTargetHora(null);
+                                    if (eventoArrastando) {
+                                      handleMoverEventoNoCalendario(
+                                        eventoArrastando,
+                                        diaSelecionado,
+                                        horaQuartoStr
+                                      );
+                                      setEventoArrastando(null);
+                                    }
+                                  }}
                                   className="group absolute left-[62px] right-0 flex items-center px-3 cursor-pointer transition-colors hover:bg-black/5"
                                   style={{
                                     top: `${qIdx * 24}px`,
                                     height: "24px",
+                                    background:
+                                      dropTargetHora === horaQuartoStr
+                                        ? `${t.primary}22`
+                                        : "transparent",
                                     borderTop:
                                       qIdx === 0
                                         ? "none"
@@ -2468,7 +3322,7 @@ export function AbaCalendario({
                                         ? `1px dashed ${t.border}`
                                         : `1px dotted ${t.border}75`,
                                   }}
-                                  title={`Clique para criar Evento ou Tarefa às ${horaQuartoStr}`}
+                                  title={`Clique ou solte um evento às ${horaQuartoStr}`}
                                 >
                                   {!ocupadoNesseQuarto && (
                                     <span
@@ -2481,7 +3335,7 @@ export function AbaCalendario({
                                     >
                                       <Plus size={10} />{" "}
                                       {qIdx === 0
-                                        ? `Clique para criar às ${horaQuartoStr}`
+                                        ? `Clique ou arraste p/ ${horaQuartoStr}`
                                         : `+ Agendar às ${horaQuartoStr}`}
                                     </span>
                                   )}
@@ -2492,16 +3346,31 @@ export function AbaCalendario({
                         );
                       })}
 
-                      {/* 2. BLOCOS PROPORCIONAIS DE EVENTOS E TAREFAS (15 min = 24px = 1/4 da hora; 30 min = 48px = 1/2; 60 min = 96px = 1h) */}
+                      {/* 2. BLOCOS PROPORCIONAIS DE EVENTOS E TAREFAS (15 min = 24px = 1/4 da hora; 30 min = 48px = 1/2; 60 min = 96px = 1h) — ARRASTÁVEIS! */}
                       {evsPosicionados.map((item, idx) => {
                         const { ev, inicioMin, fimMin, durMin } = item;
+                        const isBeingDraggedVert =
+                          dragVerticalDia?.ev.id === ev.id;
+                        const minEfetivo = isBeingDraggedVert
+                          ? dragVerticalDia.previewMin
+                          : inicioMin;
+                        const horaExibida = isBeingDraggedVert
+                          ? `${String(Math.floor(minEfetivo / 60)).padStart(
+                              2,
+                              "0"
+                            )}:${String(minEfetivo % 60).padStart(2, "0")}`
+                          : ev.horario;
+                        const horaFimExibida = isBeingDraggedVert
+                          ? calcularHoraFim(horaExibida, durMin)
+                          : ev.horaFim;
+
                         const corCat = getCorHexCategoria(
                           ev.categoria,
                           ev.corCustomHex
                         );
                         const offsetMinDesdeTopo = Math.max(
                           0,
-                          inicioMin - horaMinimaGrade * 60
+                          minEfetivo - horaMinimaGrade * 60
                         );
                         const topPx = offsetMinDesdeTopo * PX_POR_MIN;
                         // Altura estritamente proporcional aos minutos reais (15 min = 24px, 30 min = 48px, 60 min = 96px)
@@ -2530,9 +3399,40 @@ export function AbaCalendario({
                         return (
                           <div
                             key={ev.id || idx}
-                            onClick={(e) => {
+                            draggable
+                            onDragStart={(e) => {
                               e.stopPropagation();
-                              abrirEventoNoCalendario(ev);
+                              setEventoArrastando(ev);
+                              e.dataTransfer.effectAllowed = "move";
+                              e.dataTransfer.setData("text/plain", ev.id);
+                            }}
+                            onDragEnd={() => {
+                              setEventoArrastando(null);
+                              setDropTargetDia(null);
+                              setDropTargetHora(null);
+                            }}
+                            onMouseDown={(e) => {
+                              if (e.button !== 0) return;
+                              e.stopPropagation();
+                              setDragVerticalDia({
+                                ev,
+                                startY: e.clientY,
+                                origMin: inicioMin,
+                                previewMin: inicioMin,
+                                moved: false,
+                              });
+                            }}
+                            onTouchStart={(e) => {
+                              const touch = e.touches[0];
+                              if (!touch) return;
+                              e.stopPropagation();
+                              setDragVerticalDia({
+                                ev,
+                                startY: touch.clientY,
+                                origMin: inicioMin,
+                                previewMin: inicioMin,
+                                moved: false,
+                              });
                             }}
                             style={{
                               top: `${topPx + 1}px`,
@@ -2543,16 +3443,18 @@ export function AbaCalendario({
                               width: `calc((100% - 74px) * ${
                                 larguraPct / 100
                               } - 2px)`,
-                              background:
-                                t.mode === "light"
-                                  ? `${corCat}22`
-                                  : `${corCat}35`,
+                              background: isBeingDraggedVert
+                                ? `${corCat}45`
+                                : t.mode === "light"
+                                ? `${corCat}22`
+                                : `${corCat}35`,
                               borderColor: corCat,
                               borderLeftWidth: "4px",
+                              zIndex: isBeingDraggedVert ? 30 : 10,
                             }}
-                            className="absolute z-10 rounded-xl border px-2.5 overflow-hidden cursor-pointer shadow-2xs transition-opacity hover:opacity-95 flex items-center"
-                            title={`${ev.horario}${
-                              ev.horaFim ? `–${ev.horaFim}` : ""
+                            className="absolute rounded-xl border px-2.5 overflow-hidden cursor-grab active:cursor-grabbing shadow-2xs transition-opacity hover:opacity-95 flex items-center select-none"
+                            title={`Arraste verticalmente (15 em 15 min) ou clique para editar · ${horaExibida}${
+                              horaFimExibida ? `–${horaFimExibida}` : ""
                             } (${durMin} min) · ${ev.titulo}`}
                           >
                             {isCurto ? (
@@ -2563,8 +3465,8 @@ export function AbaCalendario({
                                     className="text-[10px] font-mono-num font-bold shrink-0"
                                     style={{ color: corCat }}
                                   >
-                                    {ev.horario}
-                                    {ev.horaFim ? `–${ev.horaFim}` : ""}
+                                    {horaExibida}
+                                    {horaFimExibida ? `–${horaFimExibida}` : ""}
                                   </span>
                                   <span
                                     className="text-xs font-bold truncate"
@@ -2575,6 +3477,7 @@ export function AbaCalendario({
                                         : "none",
                                     }}
                                   >
+                                    {ev.ehRecorrente ? "↻ " : ""}
                                     {ev.titulo}
                                   </span>
                                 </div>
@@ -2619,9 +3522,11 @@ export function AbaCalendario({
                                       className="text-[11px] font-mono-num font-bold shrink-0"
                                       style={{ color: corCat }}
                                     >
-                                      {ev.horario}
-                                      {ev.horaFim ? `–${ev.horaFim}` : ""} (
-                                      {durMin}m)
+                                      {horaExibida}
+                                      {horaFimExibida
+                                        ? `–${horaFimExibida}`
+                                        : ""}{" "}
+                                      ({durMin}m)
                                     </span>
                                     <span
                                       className="text-xs font-bold truncate"
@@ -2632,6 +3537,7 @@ export function AbaCalendario({
                                           : "none",
                                       }}
                                     >
+                                      {ev.ehRecorrente ? "↻ " : ""}
                                       {ev.titulo}
                                     </span>
                                   </div>
@@ -2674,10 +3580,23 @@ export function AbaCalendario({
                                       className="text-xs font-mono-num font-bold"
                                       style={{ color: corCat }}
                                     >
-                                      {ev.horario}
-                                      {ev.horaFim ? `–${ev.horaFim}` : ""} (
-                                      {durMin} min)
+                                      {horaExibida}
+                                      {horaFimExibida
+                                        ? `–${horaFimExibida}`
+                                        : ""}{" "}
+                                      ({durMin} min)
                                     </span>
+                                    {ev.ehRecorrente && (
+                                      <span
+                                        className="text-[9px] font-bold px-1.5 py-0.5 rounded"
+                                        style={{
+                                          background: `${corCat}20`,
+                                          color: corCat,
+                                        }}
+                                      >
+                                        ↻ Recorrente
+                                      </span>
+                                    )}
                                     <span
                                       className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded"
                                       style={{
@@ -2896,14 +3815,27 @@ export function AbaCalendario({
                 return (
                   <div
                     key={ev.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setEventoArrastando(ev);
+                      e.dataTransfer.effectAllowed = "move";
+                      e.dataTransfer.setData("text/plain", ev.id);
+                    }}
+                    onDragEnd={() => {
+                      setEventoArrastando(null);
+                      setDropTargetDia(null);
+                      setDropTargetHora(null);
+                    }}
                     onClick={() => abrirEventoNoCalendario(ev)}
-                    className="p-3 rounded-2xl border flex items-start justify-between gap-2.5 transition-transform active:scale-[0.99] cursor-pointer"
+                    className="p-3 rounded-2xl border flex items-start justify-between gap-2.5 transition-transform active:scale-[0.99] cursor-grab active:cursor-grabbing select-none"
                     style={{
                       background: t.bg,
                       borderColor: t.border,
                       borderLeftWidth: "4px",
                       borderLeftColor: corCat,
+                      opacity: eventoArrastando?.id === ev.id ? 0.45 : 1,
                     }}
+                    title="Arraste este evento para qualquer dia ou horário na grade ao lado, ou clique para editar"
                   >
                     <div className="space-y-1 min-w-0 flex-1">
                       <div className="flex items-center gap-1.5 flex-wrap">
@@ -2913,6 +3845,17 @@ export function AbaCalendario({
                         >
                           <Clock size={11} /> {ev.horario}
                         </span>
+                        {ev.ehRecorrente && (
+                          <span
+                            className="text-[10px] font-bold px-1.5 py-0.5 rounded-md"
+                            style={{
+                              background: `${corCat}20`,
+                              color: corCat,
+                            }}
+                          >
+                            ↻ Repete
+                          </span>
+                        )}
                         <span
                           className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-md"
                           style={{ background: `${corCat}18`, color: corCat }}
@@ -3123,6 +4066,54 @@ export function AbaCalendario({
               </select>
             </div>
 
+            <div className="grid grid-cols-2 gap-2">
+              <select
+                value={novaRecorrencia}
+                onChange={(e) =>
+                  setNovaRecorrencia(e.target.value as RecorrenciaCompromisso)
+                }
+                className="px-2.5 py-2 rounded-xl text-xs font-semibold outline-none border"
+                style={{
+                  background: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              >
+                <option value="nenhuma">↻ Não se repete</option>
+                <option value="diaria">↻ Todos os dias</option>
+                <option value="semanal">↻ Toda semana</option>
+                <option value="mensal">↻ Todo mês</option>
+              </select>
+
+              {novaRecorrencia !== "nenhuma" ? (
+                <input
+                  type="date"
+                  value={novaRecorrenciaAte}
+                  onChange={(e) => setNovaRecorrenciaAte(e.target.value)}
+                  placeholder="Repetir até..."
+                  className="px-2.5 py-2 rounded-xl text-xs font-mono-num outline-none border"
+                  style={{
+                    background: t.card,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                  title="Data final da repetição (opcional)"
+                />
+              ) : (
+                <label className="flex items-center gap-2 text-xs cursor-pointer select-none px-2">
+                  <input
+                    type="checkbox"
+                    checked={enviarNovoParaGoogle}
+                    onChange={(e) => setEnviarNovoParaGoogle(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span className="truncate" style={{ color: t.textSoft }}>
+                    Sync <strong style={{ color: t.text }}>Google</strong>
+                  </span>
+                </label>
+              )}
+            </div>
+
             {contasGoogle.length > 1 && (
               <select
                 value={contaDestinoCriacao}
@@ -3144,19 +4135,6 @@ export function AbaCalendario({
                 ))}
               </select>
             )}
-
-            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={enviarNovoParaGoogle}
-                onChange={(e) => setEnviarNovoParaGoogle(e.target.checked)}
-                className="rounded"
-              />
-              <span style={{ color: t.textSoft }}>
-                Sincronizar com meu{" "}
-                <strong style={{ color: t.text }}>Google Agenda</strong>
-              </span>
-            </label>
 
             <button
               onClick={handleAgendarCompromisso}
@@ -3260,7 +4238,7 @@ export function AbaCalendario({
                 }}
               />
 
-              {/* Data, Hora, Duração e Dia Inteiro */}
+              {/* Data, Hora, Duração e Categoria */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
@@ -3344,6 +4322,43 @@ export function AbaCalendario({
                     <option value="saude">Saúde & Treino</option>
                   </select>
                 </div>
+              </div>
+
+              {/* Recorrência estilo Google Agenda */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                    Repetição / Recorrência
+                  </label>
+                  <select
+                    value={novaRecorrencia}
+                    onChange={(e) =>
+                      setNovaRecorrencia(e.target.value as RecorrenciaCompromisso)
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  >
+                    <option value="nenhuma">Não se repete (evento único)</option>
+                    <option value="diaria">Todos os dias (Diariamente)</option>
+                    <option value="semanal">Toda semana neste dia</option>
+                    <option value="mensal">Todo mês neste dia</option>
+                  </select>
+                </div>
+
+                {novaRecorrencia !== "nenhuma" && (
+                  <div>
+                    <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                      Repetir até (opcional)
+                    </label>
+                    <input
+                      type="date"
+                      value={novaRecorrenciaAte}
+                      onChange={(e) => setNovaRecorrenciaAte(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-mono-num outline-none border"
+                      style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-4 flex-wrap">
@@ -3451,7 +4466,7 @@ export function AbaCalendario({
                 </div>
               ) : (
                 <span className="text-[11px]" style={{ color: t.textSoft }}>
-                  Dica: Clique em qualquer dia ou horário da grade para abrir
+                  Dica: Arraste qualquer evento na grade para mudar dia/hora
                 </span>
               )}
 
@@ -3483,6 +4498,162 @@ export function AbaCalendario({
                     : "Salvar Evento"}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO AO ALTERAR / ARRASTAR / EXCLUIR EVENTO QUE SE REPETE (APENAS ESTE / ESTE E OS SEGUINTES / TODOS) */}
+      {confirmacaoRecorrencia && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-xs"
+            onClick={() => setConfirmacaoRecorrencia(null)}
+          />
+          <div
+            className="relative z-10 w-full max-w-md rounded-3xl border p-5 shadow-2xl space-y-4"
+            style={{
+              background: t.card,
+              color: t.text,
+              borderColor: t.border,
+            }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
+                  style={{
+                    background:
+                      confirmacaoRecorrencia.tipoOperacao === "excluir"
+                        ? `${t.danger}18`
+                        : `${t.action}18`,
+                    color:
+                      confirmacaoRecorrencia.tipoOperacao === "excluir"
+                        ? t.danger
+                        : t.action,
+                  }}
+                >
+                  <RefreshCw size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-bold">
+                    {confirmacaoRecorrencia.tipoOperacao === "excluir"
+                      ? "Excluir evento recorrente"
+                      : "Alterar evento recorrente"}
+                  </h3>
+                  <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                    Este evento se repete na sua agenda. Como deseja aplicar?
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setConfirmacaoRecorrencia(null)}
+                className="p-1.5 rounded-xl cursor-pointer"
+                style={{ color: t.textSoft }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div
+              className="p-3 rounded-2xl border text-xs font-semibold"
+              style={{
+                background: t.cardSubtle,
+                borderColor: t.border,
+                color: t.text,
+              }}
+            >
+              {confirmacaoRecorrencia.resumoAlteracao}
+            </div>
+
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() =>
+                  confirmacaoRecorrencia.onEscolherEscopo("este")
+                }
+                className="w-full p-3.5 rounded-2xl border text-left transition-all hover:opacity-95 cursor-pointer flex items-center justify-between"
+                style={{
+                  background: t.bg,
+                  borderColor: t.primary,
+                }}
+              >
+                <div>
+                  <p className="text-xs font-bold" style={{ color: t.text }}>
+                    Apenas este evento
+                  </p>
+                  <p className="text-[11px]" style={{ color: t.textSoft }}>
+                    Altera somente a ocorrência do dia{" "}
+                    {String(confirmacaoRecorrencia.evento.diaMes).padStart(
+                      2,
+                      "0"
+                    )}
+                    /{String(confirmacaoRecorrencia.evento.mes).padStart(2, "0")};
+                    os demais continuam iguais.
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: t.primary }} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  confirmacaoRecorrencia.onEscolherEscopo("seguintes")
+                }
+                className="w-full p-3.5 rounded-2xl border text-left transition-all hover:opacity-95 cursor-pointer flex items-center justify-between"
+                style={{
+                  background: t.bg,
+                  borderColor: t.action,
+                }}
+              >
+                <div>
+                  <p className="text-xs font-bold" style={{ color: t.text }}>
+                    Este e os eventos seguintes
+                  </p>
+                  <p className="text-[11px]" style={{ color: t.textSoft }}>
+                    Mantém o histórico anterior intacto e atualiza desta data em
+                    diante.
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: t.action }} />
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  confirmacaoRecorrencia.onEscolherEscopo("todos")
+                }
+                className="w-full p-3.5 rounded-2xl border text-left transition-all hover:opacity-95 cursor-pointer flex items-center justify-between"
+                style={{
+                  background: t.bg,
+                  borderColor: t.border,
+                }}
+              >
+                <div>
+                  <p className="text-xs font-bold" style={{ color: t.text }}>
+                    Todos os eventos da série
+                  </p>
+                  <p className="text-[11px]" style={{ color: t.textSoft }}>
+                    Aplica a alteração a todas as ocorrências desta repetição.
+                  </p>
+                </div>
+                <ChevronRight size={16} style={{ color: t.textSoft }} />
+              </button>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={() => setConfirmacaoRecorrencia(null)}
+                className="px-4 py-2 rounded-xl border text-xs font-bold cursor-pointer"
+                style={{
+                  background: t.bg,
+                  color: t.textSoft,
+                  borderColor: t.border,
+                }}
+              >
+                Cancelar
+              </button>
             </div>
           </div>
         </div>

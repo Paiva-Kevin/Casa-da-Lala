@@ -23,8 +23,10 @@ import {
   ArquivoRepositorio,
   CheckinProntidao,
   Disciplina,
+  IntencaoImportacaoArquivo,
   InteracaoGovernanta,
   OrcamentoCategoria,
+  PerfilUsuarioCalibrado,
   PetPerfil,
   ProjetoTrabalho,
   TabId,
@@ -39,6 +41,7 @@ import {
   formatarTamanhoBytes,
   lerArquivoParaAnexo,
 } from "../services/lalaEngine";
+import { FileImportChooserCard } from "./FileImportChooserCard";
 
 interface SmartBrainModalProps {
   t: ThemeTokens;
@@ -65,6 +68,7 @@ interface SmartBrainModalProps {
   checkin: CheckinProntidao;
   disciplinas: Disciplina[];
   projetos: ProjetoTrabalho[];
+  perfilCalibrado?: PerfilUsuarioCalibrado;
   themeMode: ThemeMode;
   setThemeMode: (m: ThemeMode) => void;
   irParaLalaCompleta: () => void;
@@ -91,6 +95,7 @@ export function SmartBrainModal({
   checkin,
   disciplinas,
   projetos,
+  perfilCalibrado,
   irParaLalaCompleta,
   executarAcaoDaLala,
   onOpenCalibracao,
@@ -103,7 +108,7 @@ export function SmartBrainModal({
   const [gravandoVoz, setGravandoVoz] = useState(false);
   const [processando, setProcessando] = useState(false);
   const [anexoAtual, setAnexoAtual] = useState<AnexoLala | null>(null);
-  const [pastaGuardar, setPastaGuardar] =
+  const [pastaGuardar] =
     useState<ArquivoRepositorio["area"]>("Pessoal");
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -141,7 +146,7 @@ export function SmartBrainModal({
     try {
       const lido = await lerArquivoParaAnexo(file, "auto", pastaGuardar);
       setAnexoAtual(lido);
-      showToast(`Arquivo "${file.name}" anexado!`);
+      showToast(`Arquivo "${file.name}" carregado! Escolha o que deseja fazer com ele.`);
     } catch {
       showToast("Não foi possível ler este arquivo.");
     } finally {
@@ -149,13 +154,17 @@ export function SmartBrainModal({
     }
   };
 
-  const guardarAnexoDiretoNoSegundoCerebro = () => {
+  const guardarAnexoDiretoNoSegundoCerebro = (
+    pastaEscolhida?: ArquivoRepositorio["area"],
+    tituloCustom?: string
+  ) => {
     if (!anexoAtual) return;
+    const pastaAlvo = pastaEscolhida || pastaGuardar;
     const isImg = anexoAtual.mimeType.startsWith("image/");
     const novoArq: ArquivoRepositorio = {
       id: Date.now(),
-      titulo: textoLivre.trim() || anexoAtual.nome,
-      area: pastaGuardar,
+      titulo: tituloCustom || textoLivre.trim() || anexoAtual.nome,
+      area: pastaAlvo,
       tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
       urlOuConteudo:
         anexoAtual.textoExtraido?.slice(0, 240) ||
@@ -169,7 +178,7 @@ export function SmartBrainModal({
       tamanhoBytes: anexoAtual.tamanhoBytes,
     };
     setRepositorio((prev) => [novoArq, ...prev]);
-    showToast(`"${anexoAtual.nome}" guardado em ${pastaGuardar}!`);
+    showToast(`"${anexoAtual.nome}" guardado em ${pastaAlvo}!`);
     setAnexoAtual(null);
     setTextoLivre("");
   };
@@ -213,10 +222,10 @@ export function SmartBrainModal({
     setTimeout(() => {
       setGravandoVoz(false);
       const frases = [
-        "Gastei 18,50 na padaria com café pré-UERJ",
+        "Gastei 18,50 na padaria com café no Pix",
         "Alimentei a Nina e o Tobias agora",
-        "Lala, interpreta minha dieta e monta a lista de compras",
-        "Me ajuda a montar minha grade da UERJ sem conflitar com o CDT",
+        "Agendar reunião amanhã às 15h",
+        "Estou cansada hoje, alivia minha agenda?",
       ];
       setTextoLivre(frases[Math.floor(Math.random() * frases.length)]);
     }, 700);
@@ -224,8 +233,10 @@ export function SmartBrainModal({
 
   // Falar com a Lala (Unificado: voz, texto ou arquivo/imagem anexado)
   const falarComALala = async (
-    intencaoForcada?: AnexoLala["intencao"],
-    promptForcado?: string
+    intencaoForcada?: IntencaoImportacaoArquivo,
+    promptForcado?: string,
+    pastaEscolhida?: ArquivoRepositorio["area"],
+    guardarCopia = true
   ) => {
     const txt = (promptForcado ?? textoLivre).trim();
     if (!txt && !anexoAtual) return;
@@ -235,7 +246,8 @@ export function SmartBrainModal({
       ? {
           ...anexoAtual,
           intencao: intencaoForcada || anexoAtual.intencao || "auto",
-          areaRepositorio: pastaGuardar,
+          areaRepositorio: pastaEscolhida || pastaGuardar,
+          guardarCopiaNoSegundoCerebro: guardarCopia,
         }
       : undefined;
 
@@ -292,6 +304,7 @@ export function SmartBrainModal({
     }
 
     const ctx = {
+      nomeUsuario: perfilCalibrado?.nomeUsuario,
       prontidaoScore,
       horasSono: checkin.horasSono,
       dinheiroLivreHoje: Math.round(dinheiroLivreHoje),
@@ -300,6 +313,11 @@ export function SmartBrainModal({
       prioridade1: tarefaP1?.texto || "Nenhuma pendente",
       disciplinasUERJ: disciplinas.map((d) => d.nome),
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
+      tomLala: perfilCalibrado?.tomLala,
+      autonomiaLala: perfilCalibrado?.autonomiaLala,
+      instrucoesPersonalizadasLala: perfilCalibrado?.instrucoesPersonalizadasLala,
+      horarioAcordar: perfilCalibrado?.horarioAcordar,
+      horarioDormir: perfilCalibrado?.horarioDormir,
     };
 
     try {
@@ -316,7 +334,8 @@ export function SmartBrainModal({
         anexoParaEnviar
       );
 
-      // Executa automaticamente as ações de preenchimento/atualização do app para uma experiência 100% fluida e não engessada
+      // Respeita a calibração de autonomia da Lala (auto vs confirmar)
+      const deveAutoExecutar = perfilCalibrado?.autonomiaLala !== "confirmar";
       const acoesMarcadas = (resultado.acoesPropostas || []).map((a) => {
         if (executouDireto) {
           return { ...a, executada: true };
@@ -341,7 +360,7 @@ export function SmartBrainModal({
           "ATUALIZAR_PERFIL_CHECKIN",
           "LIMPAR_DADOS_EXEMPLO",
         ];
-        if (autoExecTypes.includes(a.tipo)) {
+        if (deveAutoExecutar && autoExecTypes.includes(a.tipo)) {
           executarAcaoDaLala(a);
           return { ...a, executada: true };
         }
@@ -514,138 +533,30 @@ export function SmartBrainModal({
               className="hidden"
             />
 
-            {/* Card de Preview quando um arquivo ou imagem está anexado */}
+            {/* Card universal quando um arquivo ou imagem está anexado */}
             {anexoAtual && (
-              <div
-                style={{
-                  backgroundColor: `${t.primary}12`,
-                  borderColor: `${t.primary}45`,
-                }}
-                className="p-3 rounded-2xl border space-y-2.5"
-              >
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {anexoAtual.mimeType.startsWith("image/") &&
-                    anexoAtual.base64 ? (
-                      <img
-                        src={anexoAtual.base64}
-                        alt={anexoAtual.nome}
-                        className="w-11 h-11 rounded-xl object-cover border shrink-0"
-                        style={{ borderColor: t.border }}
-                      />
-                    ) : (
-                      <div
-                        style={{ backgroundColor: t.primary, color: "#fff" }}
-                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                      >
-                        <FileText size={18} />
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold truncate">
-                        {anexoAtual.nome}
-                      </p>
-                      <p style={{ color: t.textSoft }} className="text-[10px]">
-                        {formatarTamanhoBytes(anexoAtual.tamanhoBytes)} · O que
-                        a Lala deve fazer com este arquivo?
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setAnexoAtual(null)}
-                    className="p-1 rounded-full cursor-pointer"
-                    style={{ color: t.textSoft }}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-
-                {/* Ações de 1-Toque para o Arquivo Anexado */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    onClick={() =>
-                      falarComALala(
-                        "dieta",
-                        `Lala, interprete minha dieta do arquivo "${anexoAtual.nome}", atualize minhas refeições e gere a Lista de Compras!`
-                      )
-                    }
-                    style={{ backgroundColor: t.card, borderColor: t.border }}
-                    className="p-2 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer text-left"
-                  >
-                    <Utensils
-                      size={13}
-                      style={{ color: t.primary }}
-                      className="shrink-0"
-                    />
-                    <span className="truncate">
-                      Virar Dieta + Lista Compras
-                    </span>
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      falarComALala(
-                        "grade",
-                        `Lala, interprete minha grade da UERJ do arquivo "${anexoAtual.nome}", atualize minhas disciplinas e aloque na Agenda!`
-                      )
-                    }
-                    style={{ backgroundColor: t.card, borderColor: t.border }}
-                    className="p-2 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer text-left"
-                  >
-                    <GraduationCap
-                      size={13}
-                      style={{ color: t.action }}
-                      className="shrink-0"
-                    />
-                    <span className="truncate">Virar Grade UERJ + Agenda</span>
-                  </button>
-
-                  <button
-                    onClick={() =>
-                      falarComALala(
-                        "treino",
-                        `Lala, interprete a ficha de treino "${anexoAtual.nome}" e atualize meus treinos!`
-                      )
-                    }
-                    style={{ backgroundColor: t.card, borderColor: t.border }}
-                    className="p-2 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer text-left"
-                  >
-                    <Dumbbell
-                      size={13}
-                      style={{ color: t.finance }}
-                      className="shrink-0"
-                    />
-                    <span className="truncate">Virar Ficha de Treino</span>
-                  </button>
-
-                  <div className="flex items-center gap-1">
-                    <select
-                      value={pastaGuardar}
-                      onChange={(e) =>
-                        setPastaGuardar(
-                          e.target.value as ArquivoRepositorio["area"]
-                        )
-                      }
-                      style={{ backgroundColor: t.card, color: t.text }}
-                      className="p-2 rounded-xl text-[10px] font-bold outline-none border"
-                    >
-                      <option value="Pessoal">Pessoal</option>
-                      <option value="UERJ">UERJ</option>
-                      <option value="Casa & Pets">Casa/Dieta</option>
-                      <option value="Finanças">Finanças</option>
-                      <option value="Artigos">Artigos</option>
-                      <option value="CDT & RCR">CDT/RCR</option>
-                    </select>
-                    <button
-                      onClick={guardarAnexoDiretoNoSegundoCerebro}
-                      style={{ backgroundColor: t.action, color: "#fff" }}
-                      className="flex-1 py-2 px-2 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
-                    >
-                      <FolderOpen size={12} /> Só Guardar
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <FileImportChooserCard
+                t={t}
+                anexo={anexoAtual}
+                compact
+                onClear={() => setAnexoAtual(null)}
+                onConfirmImport={(
+                  intencao,
+                  instrucao,
+                  pastaDestino,
+                  guardarCopia
+                ) =>
+                  falarComALala(
+                    intencao,
+                    instrucao,
+                    pastaDestino,
+                    guardarCopia
+                  )
+                }
+                onSaveOnly={(pastaDestino, tituloCustom) =>
+                  guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
+                }
+              />
             )}
 
             <div className="flex gap-1.5 items-end">
@@ -657,7 +568,7 @@ export function SmartBrainModal({
                   color: t.primary,
                   borderColor: anexoAtual ? t.primary : t.border,
                 }}
-                title="Anexar arquivo ou imagem (Dieta, Grade, PDF, Foto ou Guardar)"
+                title="Anexar qualquer arquivo ou imagem (escolher importar ou guardar)"
               >
                 <Paperclip size={18} />
               </button>
@@ -672,7 +583,7 @@ export function SmartBrainModal({
                     falarComALala();
                   }
                 }}
-                placeholder='Fale, digite ou anexe no clipe 📎: "Sube minha dieta", "18,50 padaria", "Me ajuda a montar a grade"...'
+                placeholder='Fale, digite ou anexe um arquivo no clipe 📎 para importar eventos, tarefas, gastos, compras ou guardar...'
                 className="flex-1 p-3 rounded-2xl text-xs outline-none resize-none leading-relaxed"
                 style={{ background: t.cardSubtle, color: t.text }}
               />
@@ -724,11 +635,11 @@ export function SmartBrainModal({
                   borderColor: `${t.primary}35`,
                 }}
               >
-                <Paperclip size={11} /> Subir Dieta / Grade / Imagem
+                <Paperclip size={11} /> Subir Arquivo / Foto (Importar ou Guardar)
               </button>
               {[
                 "18,50 padaria no Pix",
-                "Me ajuda a montar minha grade UERJ",
+                "Agendar reunião amanhã às 14h",
                 "Tô cansada hoje, alivia meu dia?",
               ].map((sug) => (
                 <button

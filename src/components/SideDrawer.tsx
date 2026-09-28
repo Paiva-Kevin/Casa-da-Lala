@@ -24,6 +24,7 @@ import {
   Download,
 } from "lucide-react";
 import {
+  AnexoLala,
   ArquivoRepositorio,
   Compromisso,
   StatusLeitura,
@@ -32,6 +33,7 @@ import {
   ThemeTokens,
 } from "../types/lala";
 import { formatarTamanhoBytes, lerArquivoParaAnexo } from "../services/lalaEngine";
+import { FileImportChooserCard } from "./FileImportChooserCard";
 
 export interface SideDrawerProps {
   t: ThemeTokens;
@@ -47,6 +49,11 @@ export interface SideDrawerProps {
   compromissos: Compromisso[];
   setCompromissos: React.Dispatch<React.SetStateAction<Compromisso[]>>;
   abrirCalibracao?: () => void;
+  onInterpretarArquivoComLala?: (
+    anexo: AnexoLala,
+    promptInicial: string
+  ) => Promise<void>;
+  showToast?: (msg: string) => void;
 }
 
 const STATUS_LEITURA_OPCOES: StatusLeitura[] = [
@@ -67,6 +74,8 @@ export function SideDrawer({
   repositorio,
   setRepositorio,
   abrirCalibracao,
+  onInterpretarArquivoComLala,
+  showToast,
 }: SideDrawerProps) {
   const [secaoMenu, setSecaoMenu] = useState<"arquivos" | "nav">("arquivos");
   const [novoArquivoTitulo, setNovoArquivoTitulo] = useState("");
@@ -75,6 +84,10 @@ export function SideDrawer({
     useState<ArquivoRepositorio["area"]>("UERJ");
   const [novoArquivoStatus, setNovoArquivoStatus] =
     useState<StatusLeitura>("Para Ler");
+  const [anexoPendenteRepo, setAnexoPendenteRepo] = useState<AnexoLala | null>(
+    null
+  );
+  const [processandoAnexoRepo, setProcessandoAnexoRepo] = useState(false);
   const fileRepoInputRef = React.useRef<HTMLInputElement | null>(null);
 
   if (!open) return null;
@@ -86,29 +99,63 @@ export function SideDrawer({
     if (!file) return;
     try {
       const lido = await lerArquivoParaAnexo(file, "guardar", novoArquivoArea);
-      const isImg = lido.mimeType.startsWith("image/");
-      const novo: ArquivoRepositorio = {
-        id: Date.now(),
-        titulo: novoArquivoTitulo.trim() || lido.nome,
-        area: novoArquivoArea,
-        tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
-        urlOuConteudo:
-          novoArquivoConteudo.trim() ||
-          lido.textoExtraido?.slice(0, 240) ||
-          `Arquivo salvo (${formatarTamanhoBytes(lido.tamanhoBytes)})`,
-        dataCriacao: "Hoje",
-        fixado: true,
-        statusLeitura: novoArquivoStatus,
-        anexoBase64: lido.base64,
-        mimeType: lido.mimeType,
-        nomeArquivoOriginal: lido.nome,
-        tamanhoBytes: lido.tamanhoBytes,
-      };
-      setRepositorio((prev) => [novo, ...prev]);
-      setNovoArquivoTitulo("");
-      setNovoArquivoConteudo("");
+      setAnexoPendenteRepo(lido);
     } finally {
       e.target.value = "";
+    }
+  };
+
+  const handleGuardarApenasNoRepositorio = (
+    anexo: AnexoLala,
+    areaEscolhida: ArquivoRepositorio["area"]
+  ) => {
+    const isImg = anexo.mimeType.startsWith("image/");
+    const novo: ArquivoRepositorio = {
+      id: Date.now(),
+      titulo: novoArquivoTitulo.trim() || anexo.nome,
+      area: areaEscolhida,
+      tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
+      urlOuConteudo:
+        novoArquivoConteudo.trim() ||
+        anexo.textoExtraido?.slice(0, 240) ||
+        `Arquivo salvo (${formatarTamanhoBytes(anexo.tamanhoBytes)})`,
+      dataCriacao: "Hoje",
+      fixado: true,
+      statusLeitura: novoArquivoStatus,
+      anexoBase64: anexo.base64,
+      mimeType: anexo.mimeType,
+      nomeArquivoOriginal: anexo.nome,
+      tamanhoBytes: anexo.tamanhoBytes,
+    };
+    setRepositorio((prev) => [novo, ...prev]);
+    setNovoArquivoTitulo("");
+    setNovoArquivoConteudo("");
+    setAnexoPendenteRepo(null);
+    showToast?.(`"${novo.titulo}" guardado em ${areaEscolhida} no Segundo Cérebro!`);
+  };
+
+  const handleInterpretarEPreencherApp = async (
+    anexo: AnexoLala,
+    instrucaoExtra: string
+  ) => {
+    if (!onInterpretarArquivoComLala) {
+      handleGuardarApenasNoRepositorio(anexo, novoArquivoArea);
+      return;
+    }
+    setProcessandoAnexoRepo(true);
+    try {
+      const prompt =
+        instrucaoExtra ||
+        `Lala, interprete o arquivo "${anexo.nome}" e preencha automaticamente os módulos correspondentes do app (tarefas, agenda, dieta, compras, estudos ou finanças).`;
+      await onInterpretarArquivoComLala(
+        { ...anexo, intencao: "interpretar" },
+        prompt
+      );
+      setAnexoPendenteRepo(null);
+      setActiveTab("governanta_lala");
+      onClose();
+    } finally {
+      setProcessandoAnexoRepo(false);
     }
   };
 
@@ -554,10 +601,25 @@ export function SideDrawer({
                 <input
                   ref={fileRepoInputRef}
                   type="file"
-                  accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
+                  accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx,.ics,.xlsx,.xls,.html"
                   onChange={handleUploadDiretoRepositorio}
                   className="hidden"
                 />
+
+                {anexoPendenteRepo && (
+                  <FileImportChooserCard
+                    t={t}
+                    anexo={anexoPendenteRepo}
+                    processando={processandoAnexoRepo}
+                    onCancel={() => setAnexoPendenteRepo(null)}
+                    onChooseGuardar={(anexo, area) =>
+                      handleGuardarApenasNoRepositorio(anexo, area)
+                    }
+                    onChooseInterpretar={(anexo, instrucao) =>
+                      handleInterpretarEPreencherApp(anexo, instrucao)
+                    }
+                  />
+                )}
 
                 <div className="grid grid-cols-2 gap-2">
                   <button

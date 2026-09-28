@@ -31,6 +31,7 @@ import {
   LivroLeitura,
   PetPerfil,
   ProjetoTrabalho,
+  RecorrenciaCompromisso,
   TaskItem,
   ThemeTokens,
 } from "../types/lala";
@@ -123,6 +124,9 @@ export function BottomSheet({
   const [novaEtapaDias, setNovaEtapaDias] = useState("3");
   const [novaEtapaAcao, setNovaEtapaAcao] = useState("");
   const [novaRotinaComodo, setNovaRotinaComodo] = useState("");
+  const [escopoCompromisso, setEscopoCompromisso] = useState<
+    "este" | "seguintes" | "todos"
+  >("todos");
   const [abaPlanilha, setAbaPlanilha] = useState<
     | "Financas"
     | "Casa_e_Cuidado"
@@ -1407,32 +1411,147 @@ export function BottomSheet({
         {/* 10. COMPROMISSO */}
         {compromisso && (
           <div className="space-y-3">
-            <div className="p-3.5 rounded-2xl space-y-2" style={{ background: t.bg }}>
+            <div className="p-3.5 rounded-2xl space-y-3" style={{ background: t.bg }}>
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5" style={{ color: t.textSoft }}>
                   <Clock size={13} /> Horário na agenda:
                 </span>
-                <select
+                <input
+                  type="time"
                   value={compromisso.hora}
-                  onChange={(e) =>
-                    setCompromissos((prev) =>
-                      prev
-                        .map((c) =>
-                          c.id === compromisso.id ? { ...c, hora: e.target.value } : c
-                        )
-                        .sort((a, b) => a.hora.localeCompare(b.hora))
-                    )
-                  }
+                  onChange={(e) => {
+                    const novaHora = e.target.value;
+                    if (!novaHora) return;
+                    const ehRec =
+                      (compromisso.recorrencia &&
+                        compromisso.recorrencia !== "nenhuma") ||
+                      Boolean(compromisso.recorrenciaSerieId);
+                    setCompromissos((prev) => {
+                      if (ehRec && escopoCompromisso === "este") {
+                        const hoje = new Date();
+                        const ano = compromisso.ano ?? hoje.getFullYear();
+                        const mes = compromisso.mes ?? hoje.getMonth() + 1;
+                        const dataIso = `${ano}-${String(mes).padStart(
+                          2,
+                          "0"
+                        )}-${String(compromisso.diaMes).padStart(2, "0")}`;
+                        if (
+                          compromisso.recorrencia &&
+                          compromisso.recorrencia !== "nenhuma"
+                        ) {
+                          return [
+                            ...prev.map((c) =>
+                              c.id === compromisso.id
+                                ? {
+                                    ...c,
+                                    datasExcluidasRecorrencia: [
+                                      ...(c.datasExcluidasRecorrencia || []),
+                                      dataIso,
+                                    ],
+                                  }
+                                : c
+                            ),
+                            {
+                              ...compromisso,
+                              id: Date.now(),
+                              hora: novaHora,
+                              recorrencia: "nenhuma",
+                              datasExcluidasRecorrencia: [],
+                            },
+                          ];
+                        }
+                      }
+                      const keySerie =
+                        compromisso.recorrenciaSerieId ||
+                        compromisso.titulo.trim().toLowerCase();
+                      return prev
+                        .map((c) => {
+                          const k =
+                            c.recorrenciaSerieId ||
+                            c.titulo.trim().toLowerCase();
+                          if (
+                            c.id === compromisso.id ||
+                            (ehRec &&
+                              escopoCompromisso === "todos" &&
+                              k === keySerie)
+                          ) {
+                            return { ...c, hora: novaHora };
+                          }
+                          return c;
+                        })
+                        .sort((a, b) => a.hora.localeCompare(b.hora));
+                    });
+                  }}
                   className="px-2.5 py-1 rounded-lg text-xs font-mono-num font-bold outline-none"
                   style={{ background: t.card, color: t.text }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-xs">
+                <span style={{ color: t.textSoft }}>Repetição (Recorrência):</span>
+                <select
+                  value={compromisso.recorrencia || "nenhuma"}
+                  onChange={(e) => {
+                    const rec = e.target.value as RecorrenciaCompromisso;
+                    setCompromissos((prev) =>
+                      prev.map((c) =>
+                        c.id === compromisso.id
+                          ? {
+                              ...c,
+                              recorrencia: rec,
+                              recorrenciaSerieId:
+                                rec !== "nenhuma"
+                                  ? c.recorrenciaSerieId || `serie-${c.id}`
+                                  : undefined,
+                            }
+                          : c
+                      )
+                    );
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-xs font-semibold outline-none"
+                  style={{ background: t.card, color: t.text }}
                 >
-                  {HORARIOS_LINHA_DO_TEMPO.map((h) => (
-                    <option key={h} value={h}>
-                      {h}
-                    </option>
-                  ))}
+                  <option value="nenhuma">Não se repete</option>
+                  <option value="diaria">Todo dia</option>
+                  <option value="semanal">Toda semana</option>
+                  <option value="mensal">Todo mês</option>
                 </select>
               </div>
+
+              {((compromisso.recorrencia &&
+                compromisso.recorrencia !== "nenhuma") ||
+                compromisso.recorrenciaSerieId) && (
+                <div className="pt-1 space-y-1.5 border-t" style={{ borderColor: t.border }}>
+                  <p className="text-[11px] font-semibold" style={{ color: t.textSoft }}>
+                    Aplicar alterações ou exclusão em:
+                  </p>
+                  <div className="grid grid-cols-3 gap-1">
+                    {(
+                      [
+                        { id: "este", label: "Só este" },
+                        { id: "seguintes", label: "Este e seg." },
+                        { id: "todos", label: "Todos" },
+                      ] as const
+                    ).map((op) => (
+                      <button
+                        key={op.id}
+                        type="button"
+                        onClick={() => setEscopoCompromisso(op.id)}
+                        className="py-1.5 px-2 rounded-lg text-[11px] font-bold cursor-pointer"
+                        style={{
+                          background:
+                            escopoCompromisso === op.id ? t.action : t.card,
+                          color:
+                            escopoCompromisso === op.id ? "#fff" : t.textSoft,
+                        }}
+                      >
+                        {op.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {compromisso.notas && (
                 <p className="text-xs" style={{ color: t.textSoft }}>
                   {compromisso.notas}
@@ -1441,13 +1560,36 @@ export function BottomSheet({
             </div>
             <button
               onClick={() => {
-                setCompromissos((prev) => prev.filter((c) => c.id !== compromisso.id));
+                const ehRec =
+                  (compromisso.recorrencia &&
+                    compromisso.recorrencia !== "nenhuma") ||
+                  Boolean(compromisso.recorrenciaSerieId);
+                const keySerie =
+                  compromisso.recorrenciaSerieId ||
+                  compromisso.titulo.trim().toLowerCase();
+                setCompromissos((prev) => {
+                  if (ehRec && escopoCompromisso === "todos") {
+                    return prev.filter((c) => {
+                      const k =
+                        c.recorrenciaSerieId ||
+                        c.titulo.trim().toLowerCase();
+                      return c.id !== compromisso.id && k !== keySerie;
+                    });
+                  }
+                  return prev.filter((c) => c.id !== compromisso.id);
+                });
                 onClose();
               }}
               className="w-full py-2.5 rounded-2xl text-xs font-semibold flex items-center justify-center gap-1.5"
               style={{ background: t.bg, color: t.danger }}
             >
-              <Trash2 size={14} /> Remover bloco da linha do tempo
+              <Trash2 size={14} /> Remover da agenda (
+              {escopoCompromisso === "este"
+                ? "apenas este evento"
+                : escopoCompromisso === "seguintes"
+                ? "este e seguintes"
+                : "série"}
+              )
             </button>
           </div>
         )}

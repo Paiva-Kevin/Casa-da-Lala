@@ -48,7 +48,24 @@ export interface PerfilUsuarioCalibrado {
   metaKcal: number;
   calibrado: boolean;
   ultimaCalibracao?: string;
+  tomLala?: TomGovernanta;
+  autonomiaLala?: "auto" | "confirmar";
+  instrucoesPersonalizadasLala?: string;
+  horarioAcordar?: string;
+  horarioDormir?: string;
 }
+
+export type IntencaoImportacaoArquivo =
+  | "auto"
+  | "calendario"
+  | "tarefas"
+  | "financas"
+  | "compras_dieta"
+  | "estudos"
+  | "treino"
+  | "guardar"
+  | "dieta"
+  | "grade";
 
 export interface AnexoLala {
   nome: string;
@@ -56,13 +73,9 @@ export interface AnexoLala {
   tamanhoBytes: number;
   base64?: string;
   textoExtraido?: string;
-  intencao?:
-    | "auto"
-    | "dieta"
-    | "grade"
-    | "treino"
-    | "financas"
-    | "guardar";
+  intencao?: IntencaoImportacaoArquivo;
+  instrucaoUsuario?: string;
+  guardarCopiaNoSegundoCerebro?: boolean;
   areaRepositorio?: ArquivoRepositorio["area"];
 }
 
@@ -283,6 +296,8 @@ export interface HabitoDiario {
   metaTexto?: string; // ex: "5 min", "2,8L", "15 págs"
 }
 
+export type RecorrenciaCompromisso = "nenhuma" | "diaria" | "semanal" | "mensal";
+
 export interface Compromisso {
   id: number;
   hora: string; // "07:30", "08:00", "12:15" (qualquer HH:MM)
@@ -301,6 +316,10 @@ export interface Compromisso {
   categoriaCalendario?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal";
   taskId?: number;
   concluido?: boolean;
+  recorrencia?: RecorrenciaCompromisso;
+  serieRecorrenciaId?: string;
+  excecoesDatas?: string[]; // Datas "YYYY-MM-DD" excluídas ou separadas desta série
+  dataFimRecorrencia?: string; // Data limite "YYYY-MM-DD" (inclusive) quando a série foi dividida em "este e os seguintes"
 }
 
 // ---------- NO RADAR (7 A 14 DIAS) ----------

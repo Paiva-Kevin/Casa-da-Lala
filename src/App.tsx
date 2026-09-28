@@ -2545,6 +2545,7 @@ export default function App() {
                 compromissos={compromissos}
                 setCompromissos={setCompromissos}
                 disciplinas={disciplinas}
+                setDisciplinas={setDisciplinas}
                 petsPerfil={petsPerfil}
                 lancamentos={lancamentos}
                 cartoes={cartoes}
@@ -2859,6 +2860,8 @@ export default function App() {
         compromissos={compromissos}
         setCompromissos={setCompromissos}
         abrirCalibracao={() => setCalibracaoOpen(true)}
+        onInterpretarArquivoComLala={handleEnviarAnexoParaLalaGlobal}
+        showToast={showToast}
       />
 
       <CloudSyncModal

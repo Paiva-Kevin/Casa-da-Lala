@@ -26,8 +26,10 @@ import {
   ArquivoRepositorio,
   CheckinProntidao,
   Disciplina,
+  IntencaoImportacaoArquivo,
   InteracaoGovernanta,
   OrcamentoCategoria,
+  PerfilUsuarioCalibrado,
   PetPerfil,
   ProjetoTrabalho,
   TaskItem,
@@ -39,6 +41,7 @@ import {
   formatarTamanhoBytes,
   lerArquivoParaAnexo,
 } from "../../services/lalaEngine";
+import { FileImportChooserCard } from "../FileImportChooserCard";
 
 interface AbaGovernantaLalaProps {
   t: ThemeTokens;
@@ -65,6 +68,7 @@ interface AbaGovernantaLalaProps {
   checkin: CheckinProntidao;
   disciplinas: Disciplina[];
   projetos: ProjetoTrabalho[];
+  perfilCalibrado?: PerfilUsuarioCalibrado;
   executarAcaoDaLala: (acao: AcaoGovernanta, interacaoId?: number) => void;
   onOpenCalibracao: () => void;
   showToast: (msg: string) => void;
@@ -83,6 +87,7 @@ export function AbaGovernantaLala({
   checkin,
   disciplinas,
   projetos,
+  perfilCalibrado,
   executarAcaoDaLala,
   onOpenCalibracao,
   showToast,
@@ -91,7 +96,7 @@ export function AbaGovernantaLala({
   const [gravandoVoz, setGravandoVoz] = useState<boolean>(false);
   const [processando, setProcessando] = useState<boolean>(false);
   const [anexoAtual, setAnexoAtual] = useState<AnexoLala | null>(null);
-  const [pastaGuardar, setPastaGuardar] =
+  const [pastaGuardar] =
     useState<ArquivoRepositorio["area"]>("Pessoal");
   const [filtroHistorico, setFiltroHistorico] = useState<
     "tudo" | "devaneio" | "desabafo" | "orientacao" | "comando"
@@ -115,7 +120,9 @@ export function AbaGovernantaLala({
     try {
       const lido = await lerArquivoParaAnexo(file, "auto", pastaGuardar);
       setAnexoAtual(lido);
-      showToast(`Arquivo "${file.name}" anexado na Lala!`);
+      showToast(
+        `Arquivo "${file.name}" carregado! Escolha o que deseja fazer ou importar.`
+      );
     } catch {
       showToast("Erro ao ler o arquivo selecionado.");
     } finally {
@@ -123,17 +130,21 @@ export function AbaGovernantaLala({
     }
   };
 
-  const guardarAnexoDiretoNoSegundoCerebro = () => {
+  const guardarAnexoDiretoNoSegundoCerebro = (
+    pastaEscolhida?: ArquivoRepositorio["area"],
+    tituloCustom?: string
+  ) => {
     if (!anexoAtual) return;
+    const pastaAlvo = pastaEscolhida || pastaGuardar;
     const isImg = anexoAtual.mimeType.startsWith("image/");
     const novoArq: ArquivoRepositorio = {
       id: Date.now(),
-      titulo: mensagem.trim() || anexoAtual.nome,
-      area: pastaGuardar,
+      titulo: tituloCustom || mensagem.trim() || anexoAtual.nome,
+      area: pastaAlvo,
       tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
       urlOuConteudo:
         anexoAtual.textoExtraido?.slice(0, 260) ||
-        `Arquivo anexado (${formatarTamanhoBytes(anexoAtual.tamanhoBytes)}) — salvo na pasta ${pastaGuardar}`,
+        `Arquivo anexado (${formatarTamanhoBytes(anexoAtual.tamanhoBytes)}) — salvo na pasta ${pastaAlvo}`,
       dataCriacao: "Hoje (via Lala)",
       fixado: true,
       statusLeitura: "Para Ler",
@@ -153,11 +164,13 @@ export function AbaGovernantaLala({
       modo: "comando",
       nomeAnexo: anexoAtual.nome,
       anexo: anexoAtual,
-      tituloCard: `Arquivo guardado em ${pastaGuardar}`,
-      tags: ["Segundo Cérebro", pastaGuardar, "Arquivo"],
+      tituloCard: `Arquivo guardado em ${pastaAlvo}`,
+      tags: ["Segundo Cérebro", pastaAlvo, "Arquivo"],
       mensagemUsuario:
-        mensagem.trim() || `Guardar "${anexoAtual.nome}" em ${pastaGuardar}`,
-      respostaLala: `Guardei o arquivo "${anexoAtual.nome}" diretamente na pasta **${pastaGuardar}** do seu Segundo Cérebro! Você pode visualizá-lo ou baixá-lo a qualquer momento pelo menu lateral ou aqui na linha do tempo.`,
+        tituloCustom ||
+        mensagem.trim() ||
+        `Guardar "${anexoAtual.nome}" em ${pastaAlvo}`,
+      respostaLala: `Guardei o arquivo "${anexoAtual.nome}" diretamente na pasta **${pastaAlvo}** do seu Segundo Cérebro! Você pode visualizá-lo ou baixá-lo a qualquer momento pelo menu lateral ou aqui na linha do tempo.`,
       guardadoNoCofre: true,
     };
     setInteracoes((prev) => [novaInteracao, ...prev]);
@@ -205,7 +218,9 @@ export function AbaGovernantaLala({
 
   const enviarParaLala = async (
     textoCustom?: string,
-    intencaoForcada?: AnexoLala["intencao"]
+    intencaoForcada?: IntencaoImportacaoArquivo,
+    pastaEscolhida?: ArquivoRepositorio["area"],
+    guardarCopia = true
   ) => {
     const txt = (textoCustom ?? mensagem).trim();
     if (!txt && !anexoAtual) return;
@@ -214,7 +229,8 @@ export function AbaGovernantaLala({
       ? {
           ...anexoAtual,
           intencao: intencaoForcada || anexoAtual.intencao || "auto",
-          areaRepositorio: pastaGuardar,
+          areaRepositorio: pastaEscolhida || pastaGuardar,
+          guardarCopiaNoSegundoCerebro: guardarCopia,
         }
       : undefined;
 
@@ -223,6 +239,7 @@ export function AbaGovernantaLala({
     setAnexoAtual(null);
 
     const ctx = {
+      nomeUsuario: perfilCalibrado?.nomeUsuario,
       prontidaoScore,
       horasSono: checkin.horasSono,
       dinheiroLivreHoje: Math.round(dinheiroLivreHoje),
@@ -231,6 +248,11 @@ export function AbaGovernantaLala({
       prioridade1: tarefaP1?.texto || "Nenhuma pendente",
       disciplinasUERJ: disciplinas.map((d) => d.nome),
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
+      tomLala: perfilCalibrado?.tomLala,
+      autonomiaLala: perfilCalibrado?.autonomiaLala,
+      instrucoesPersonalizadasLala: perfilCalibrado?.instrucoesPersonalizadasLala,
+      horarioAcordar: perfilCalibrado?.horarioAcordar,
+      horarioDormir: perfilCalibrado?.horarioDormir,
     };
 
     try {
@@ -247,7 +269,8 @@ export function AbaGovernantaLala({
         anexoParaEnviar
       );
 
-      // Executa automaticamente as ações de preenchimento/atualização para que a conversa com a Lala preencha o app de forma livre e imediata
+      // Respeita a autonomia calibrada da Lala ("auto" vs "confirmar")
+      const deveAutoExecutar = perfilCalibrado?.autonomiaLala !== "confirmar";
       const acoesAutoExecutadas = (resultado.acoesPropostas || []).map((a) => {
         const autoExecTypes: AcaoGovernanta["tipo"][] = [
           "CRIAR_TAREFA",
@@ -269,7 +292,7 @@ export function AbaGovernantaLala({
           "ATUALIZAR_PERFIL_CHECKIN",
           "LIMPAR_DADOS_EXEMPLO",
         ];
-        if (autoExecTypes.includes(a.tipo)) {
+        if (deveAutoExecutar && autoExecTypes.includes(a.tipo)) {
           executarAcaoDaLala(a);
           return { ...a, executada: true };
         }
@@ -315,19 +338,34 @@ export function AbaGovernantaLala({
               L
             </div>
             <div>
-              <h1
-                className="text-lg sm:text-xl font-bold tracking-tight"
-                style={{ color: t.text }}
-              >
-                Lala
-              </h1>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1
+                  className="text-lg sm:text-xl font-bold tracking-tight"
+                  style={{ color: t.text }}
+                >
+                  Lala
+                </h1>
+                <span
+                  style={{
+                    backgroundColor: `${t.primary}15`,
+                    color: t.primary,
+                  }}
+                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                >
+                  Tom: {perfilCalibrado?.tomLala || "Equilibrada"} ·{" "}
+                  {perfilCalibrado?.autonomiaLala === "confirmar"
+                    ? "Pedir confirmação"
+                    : "Ação automática"}
+                </span>
+              </div>
               <p
                 style={{ color: t.textSoft }}
                 className="text-xs mt-0.5 leading-relaxed"
               >
-                Sua governanta pessoal. Fale, digite ou suba arquivos/fotos (sua
-                dieta, grade da UERJ, treinos, comprovantes ou documentos para
-                guardar) — eu interpreto e organizo tudo no app.
+                Sua governanta pessoal. Converse livremente ou suba qualquer
+                arquivo/foto para escolher o que importar (eventos, tarefas,
+                finanças, compras, estudos, treinos) ou guardar no Segundo
+                Cérebro.
               </p>
             </div>
           </div>
@@ -342,7 +380,7 @@ export function AbaGovernantaLala({
             className="px-3.5 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
           >
             <SlidersHorizontal size={14} />
-            <span>Calibrar Dados do App</span>
+            <span>Calibrar Lala & Rotina</span>
           </button>
         </div>
 
@@ -424,136 +462,29 @@ export function AbaGovernantaLala({
           className="hidden"
         />
 
-        {/* Card de Preview e Ações Rápidas quando há arquivo/foto anexado */}
+        {/* Card Universal de Escolha de Ação / Importação quando há arquivo anexado */}
         {anexoAtual && (
-          <div
-            style={{
-              backgroundColor: `${t.primary}12`,
-              borderColor: `${t.primary}45`,
-            }}
-            className="p-4 rounded-2xl border space-y-3"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                {anexoAtual.mimeType.startsWith("image/") &&
-                anexoAtual.base64 ? (
-                  <img
-                    src={anexoAtual.base64}
-                    alt={anexoAtual.nome}
-                    className="w-14 h-14 rounded-xl object-cover border shrink-0"
-                    style={{ borderColor: t.border }}
-                  />
-                ) : (
-                  <div
-                    style={{ backgroundColor: t.primary, color: "#fff" }}
-                    className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
-                  >
-                    <FileText size={20} />
-                  </div>
-                )}
-                <div className="min-w-0">
-                  <p className="text-xs sm:text-sm font-bold truncate">
-                    {anexoAtual.nome}
-                  </p>
-                  <p style={{ color: t.textSoft }} className="text-[11px]">
-                    {formatarTamanhoBytes(anexoAtual.tamanhoBytes)} · Escolha
-                    abaixo o que a Lala deve fazer (ou digite uma instrução e
-                    envie):
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setAnexoAtual(null)}
-                className="p-1.5 rounded-full cursor-pointer"
-                style={{ backgroundColor: t.card, color: t.textSoft }}
-              >
-                <X size={15} />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-              <button
-                onClick={() =>
-                  enviarParaLala(
-                    `Lala, interprete minha dieta do arquivo "${anexoAtual.nome}", atualize meu cardápio de refeições e já gere automaticamente a Lista de Compras de mercado!`,
-                    "dieta"
-                  )
-                }
-                style={{ backgroundColor: t.card, borderColor: t.border }}
-                className="p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 cursor-pointer text-left"
-              >
-                <Utensils size={15} style={{ color: t.primary }} className="shrink-0" />
-                <span>Interpretar Dieta → Cardápio + Compras</span>
-              </button>
-
-              <button
-                onClick={() =>
-                  enviarParaLala(
-                    `Lala, interprete minha grade da UERJ do arquivo "${anexoAtual.nome}", cadastre as disciplinas e aloque os horários na Agenda!`,
-                    "grade"
-                  )
-                }
-                style={{ backgroundColor: t.card, borderColor: t.border }}
-                className="p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 cursor-pointer text-left"
-              >
-                <GraduationCap
-                  size={15}
-                  style={{ color: t.action }}
-                  className="shrink-0"
-                />
-                <span>Interpretar Grade UERJ + Agenda</span>
-              </button>
-
-              <button
-                onClick={() =>
-                  enviarParaLala(
-                    `Lala, interprete minha ficha de treino do arquivo "${anexoAtual.nome}" e atualize meus treinos!`,
-                    "treino"
-                  )
-                }
-                style={{ backgroundColor: t.card, borderColor: t.border }}
-                className="p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 cursor-pointer text-left"
-              >
-                <Dumbbell
-                  size={15}
-                  style={{ color: t.finance }}
-                  className="shrink-0"
-                />
-                <span>Interpretar Ficha de Treino</span>
-              </button>
-
-              <div className="flex items-center gap-1.5">
-                <select
-                  value={pastaGuardar}
-                  onChange={(e) =>
-                    setPastaGuardar(
-                      e.target.value as ArquivoRepositorio["area"]
-                    )
-                  }
-                  style={{
-                    backgroundColor: t.card,
-                    color: t.text,
-                    borderColor: t.border,
-                  }}
-                  className="p-2.5 rounded-xl text-xs font-bold outline-none border"
-                >
-                  <option value="Pessoal">Pessoal</option>
-                  <option value="UERJ">UERJ</option>
-                  <option value="Casa & Pets">Casa/Dieta</option>
-                  <option value="Finanças">Finanças</option>
-                  <option value="Artigos">Artigos</option>
-                  <option value="CDT & RCR">CDT/RCR</option>
-                </select>
-                <button
-                  onClick={guardarAnexoDiretoNoSegundoCerebro}
-                  style={{ backgroundColor: t.action, color: "#fff" }}
-                  className="flex-1 py-2.5 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <FolderOpen size={14} /> Só Guardar
-                </button>
-              </div>
-            </div>
-          </div>
+          <FileImportChooserCard
+            t={t}
+            anexo={anexoAtual}
+            onClear={() => setAnexoAtual(null)}
+            onConfirmImport={(
+              intencao,
+              instrucao,
+              pastaDestino,
+              guardarCopia
+            ) =>
+              enviarParaLala(
+                instrucao,
+                intencao,
+                pastaDestino,
+                guardarCopia
+              )
+            }
+            onSaveOnly={(pastaDestino, tituloCustom) =>
+              guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
+            }
+          />
         )}
 
         {/* Entrada Única e Fluida (Voz, Texto ou Arquivo/Imagem) */}
@@ -569,7 +500,7 @@ export function AbaGovernantaLala({
                   enviarParaLala();
                 }
               }}
-              placeholder='Converse, dê comandos ou anexe um arquivo no clipe 📎: "Subi minha dieta, cria a lista de compras", "Me ajuda a montar a grade da UERJ", "Gastei 22 no café", "Tô exausta hoje"...'
+              placeholder='Converse com a Lala, dê comandos ou anexe qualquer arquivo no clipe 📎 para escolher o que importar (eventos, tarefas, gastos, compras, estudos, treinos) ou guardar...'
               style={{
                 backgroundColor: t.cardSubtle,
                 color: t.text,
@@ -589,7 +520,7 @@ export function AbaGovernantaLala({
                     borderColor: anexoAtual ? t.primary : t.border,
                   }}
                   className="w-11 h-11 rounded-2xl border flex items-center justify-center cursor-pointer"
-                  title="Anexar Arquivo ou Foto (Dieta, Grade, PDF, Imagem ou Guardar)"
+                  title="Subir Arquivo ou Foto (escolher o que importar ou guardar)"
                 >
                   <Paperclip size={18} />
                 </button>
@@ -619,7 +550,7 @@ export function AbaGovernantaLala({
             </div>
           </div>
 
-          {/* Atalhos Rápidos de 1-Toque (Upload Dieta, Grade, Desabafo, Orientação) */}
+          {/* Atalhos Rápidos de 1-Toque (Upload Universal, Calibração, Desabafo, Orientação) */}
           <div className="flex flex-wrap gap-1.5">
             <button
               onClick={() => fileInputRef.current?.click()}
@@ -631,20 +562,16 @@ export function AbaGovernantaLala({
               className="px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
             >
               <Paperclip size={13} />
-              Subir Arquivo / Foto (Dieta, Grade ou Guardar)
+              Subir Arquivo / Foto (Escolher o que fazer ou importar)
             </button>
 
             <button
-              onClick={() =>
-                enviarParaLala(
-                  "Lala, me ajuda a montar minha grade da UERJ deste semestre para conciliar com meu trabalho e meus treinos!"
-                )
-              }
+              onClick={onOpenCalibracao}
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
               className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
             >
-              <GraduationCap size={13} style={{ color: t.action }} />
-              Montar minha Grade UERJ
+              <SlidersHorizontal size={13} style={{ color: t.action }} />
+              Calibrar Personalidade & Regras da Lala
             </button>
 
             <button

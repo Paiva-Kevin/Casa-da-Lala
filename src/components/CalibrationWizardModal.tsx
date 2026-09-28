@@ -12,25 +12,32 @@ import {
   Plus,
   Trash2,
   ShoppingCart,
-  ArrowRight,
-  ArrowLeft,
+  Mic,
+  Send,
+  SlidersHorizontal,
+  Bot,
+  ShieldCheck,
 } from "lucide-react";
 import {
   AnexoLala,
+  ArquivoRepositorio,
   CartaoCredito,
   CheckinProntidao,
   ContaBancaria,
   Disciplina,
+  IntencaoImportacaoArquivo,
   ItemListaCompras,
   ItemRefeicao,
   PerfilUsuarioCalibrado,
   PetPerfil,
   ThemeTokens,
+  TomGovernanta,
 } from "../types/lala";
 import {
   extrairIngredientesParaListaCompras,
   lerArquivoParaAnexo,
 } from "../services/lalaEngine";
+import { FileImportChooserCard } from "./FileImportChooserCard";
 
 interface CalibrationWizardModalProps {
   t: ThemeTokens;
@@ -52,11 +59,42 @@ interface CalibrationWizardModalProps {
   setPetsPerfil: React.Dispatch<React.SetStateAction<PetPerfil[]>>;
   checkin: CheckinProntidao;
   setCheckin: React.Dispatch<React.SetStateAction<CheckinProntidao>>;
-  onEnviarAnexoParaLala: (anexo: AnexoLala, promptInicial: string) => Promise<void>;
+  setRepositorio?: React.Dispatch<React.SetStateAction<ArquivoRepositorio[]>>;
+  onEnviarAnexoParaLala: (
+    anexo: AnexoLala,
+    promptInicial: string
+  ) => Promise<void>;
   onAbrirLalaComPrompt: (promptInicial: string) => void;
   onLimparDadosExemplo?: () => void;
   showToast: (msg: string) => void;
 }
+
+const TONS_LALA: {
+  id: TomGovernanta;
+  label: string;
+  desc: string;
+}[] = [
+  {
+    id: "equilibrada",
+    label: "Equilibrada & Prática",
+    desc: "Calorosa na medida certa, objetiva e focada em organizar seu dia sem pressão.",
+  },
+  {
+    id: "acolhedora",
+    label: "Acolhedora & Gentil",
+    desc: "Prioriza seu bem-estar emocional, reduz cobranças e protege seu descanso.",
+  },
+  {
+    id: "executiva",
+    label: "Executiva & Direta",
+    desc: "Respostas curtas, foco em prazos, números, finanças e execução rápida.",
+  },
+  {
+    id: "treinadora",
+    label: "Treinadora de Alta Performance",
+    desc: "Motivadora, acompanha metas, consistência de treinos, estudos e hábitos.",
+  },
+];
 
 export function CalibrationWizardModal({
   t,
@@ -75,15 +113,28 @@ export function CalibrationWizardModal({
   setListaCompras,
   petsPerfil,
   setPetsPerfil,
-  checkin,
   setCheckin,
+  setRepositorio,
   onEnviarAnexoParaLala,
-  onAbrirLalaComPrompt,
   onLimparDadosExemplo,
   showToast,
 }: CalibrationWizardModalProps) {
-  const [passo, setPasso] = useState<1 | 2 | 3 | 4 | 5>(1);
-  const [processandoUpload, setProcessandoUpload] = useState(false);
+  const [aba, setAba] = useState<
+    "lala_ia" | "importar_arquivo" | "rotina" | "financas" | "modulos"
+  >("lala_ia");
+
+  const [falaCalibracao, setFalaCalibracao] = useState("");
+  const [gravandoVoz, setGravandoVoz] = useState(false);
+  const [processandoCalibracaoIA, setProcessandoCalibracaoIA] = useState(false);
+  const [ultimoFeedbackLala, setUltimoFeedbackLala] = useState<string | null>(
+    null
+  );
+
+  // Estado universal para quando o usuário sobe um arquivo dentro da calibração
+  const [anexoCalibracao, setAnexoCalibracao] = useState<AnexoLala | null>(
+    null
+  );
+  const fileInputUniversalRef = useRef<HTMLInputElement | null>(null);
 
   // Inputs para adicionar novos itens rapidamente
   const [novaDiscNome, setNovaDiscNome] = useState("");
@@ -94,9 +145,6 @@ export function CalibrationWizardModal({
   const [novaRefNome, setNovaRefNome] = useState("");
   const [novaRefDesc, setNovaRefDesc] = useState("");
   const [novaRefProt, setNovaRefProt] = useState("30");
-
-  const inputGradeRef = useRef<HTMLInputElement | null>(null);
-  const inputDietaRef = useRef<HTMLInputElement | null>(null);
 
   if (!open) return null;
 
@@ -110,44 +158,156 @@ export function CalibrationWizardModal({
       ...prev,
       horasSono: perfilUsuario.metaHorasSono || prev.horasSono,
     }));
-    showToast("Informações calibradas! A Lala já ajustou sua rotina.");
+    showToast("Calibração da Lala e preferências salvas com sucesso!");
     onClose();
   };
 
-  const handleUploadGrade = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const iniciarVozCalibracao = () => {
+    const SpeechRec =
+      (
+        window as unknown as {
+          SpeechRecognition?: unknown;
+          webkitSpeechRecognition?: unknown;
+        }
+      ).SpeechRecognition ||
+      (window as unknown as { webkitSpeechRecognition?: unknown })
+        .webkitSpeechRecognition;
+
+    if (SpeechRec) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const recognition = new (SpeechRec as any)();
+        recognition.lang = "pt-BR";
+        recognition.interimResults = false;
+        setGravandoVoz(true);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        recognition.onresult = (event: any) => {
+          const transcript = event.results?.[0]?.[0]?.transcript || "";
+          setFalaCalibracao((prev) =>
+            prev ? `${prev} ${transcript}` : transcript
+          );
+          setGravandoVoz(false);
+        };
+        recognition.onerror = () => setGravandoVoz(false);
+        recognition.onend = () => setGravandoVoz(false);
+        recognition.start();
+        return;
+      } catch {
+        setGravandoVoz(false);
+      }
+    }
+    showToast("Digite ou use o microfone do teclado para falar com a Lala.");
+  };
+
+  const handleCalibrarPorConversa = async () => {
+    if (!falaCalibracao.trim()) return;
+    const texto = falaCalibracao.trim();
+    setProcessandoCalibracaoIA(true);
+    try {
+      await onEnviarAnexoParaLala(
+        {
+          nome: "Calibração da Lala",
+          mimeType: "text/plain",
+          tamanhoBytes: texto.length,
+          intencao: "auto",
+          guardarCopiaNoSegundoCerebro: false,
+        },
+        texto
+      );
+      setPerfilUsuario((prev) => ({
+        ...prev,
+        calibrado: true,
+        ultimaCalibracao: new Date().toLocaleDateString("pt-BR"),
+      }));
+      setUltimoFeedbackLala(
+        `Calibrado! A Lala processou: "${texto.slice(
+          0,
+          90
+        )}${texto.length > 90 ? "..." : ""}" e já atualizou o aplicativo.`
+      );
+      setFalaCalibracao("");
+      showToast("A Lala calibrou o app com o que você disse!");
+    } finally {
+      setProcessandoCalibracaoIA(false);
+    }
+  };
+
+  const handleSelecionarArquivoUniversal = async (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setProcessandoUpload(true);
     try {
-      const anexo = await lerArquivoParaAnexo(file, "grade", "UERJ");
-      await onEnviarAnexoParaLala(
-        anexo,
-        `Lala, subi o arquivo "${file.name}" com a minha grade da UERJ. Interprete minhas disciplinas, horários e salas, atualize minha Grade UERJ e aloque na Agenda!`
+      const lido = await lerArquivoParaAnexo(file, "auto", "Pessoal");
+      setAnexoCalibracao(lido);
+      setAba("importar_arquivo");
+      showToast(
+        `Arquivo "${file.name}" carregado! Escolha abaixo o que fazer ou importar.`
       );
-      showToast(`Lala interpretou "${file.name}" e preparou sua Grade UERJ!`);
+    } catch {
+      showToast("Não foi possível ler o arquivo.");
     } finally {
-      setProcessandoUpload(false);
       e.target.value = "";
     }
   };
 
-  const handleUploadDieta = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setProcessandoUpload(true);
+  const handleConfirmarImportacaoUniversal = async (
+    intencao: IntencaoImportacaoArquivo,
+    instrucaoCustom: string,
+    pastaDestino: ArquivoRepositorio["area"],
+    guardarCopia: boolean
+  ) => {
+    if (!anexoCalibracao) return;
+    setProcessandoCalibracaoIA(true);
     try {
-      const anexo = await lerArquivoParaAnexo(file, "dieta", "Casa & Pets");
       await onEnviarAnexoParaLala(
-        anexo,
-        `Lala, subi o arquivo "${file.name}" com a minha dieta. Interprete meu cardápio de refeições e já gere automaticamente a Lista de Compras de mercado com os ingredientes!`
+        {
+          ...anexoCalibracao,
+          intencao,
+          areaRepositorio: pastaDestino,
+          guardarCopiaNoSegundoCerebro: guardarCopia,
+        },
+        instrucaoCustom
       );
-      showToast(
-        `Lala interpretou sua dieta "${file.name}" e gerou o Cardápio + Lista de Compras!`
+      setUltimoFeedbackLala(
+        `Arquivo "${anexoCalibracao.nome}" importado com sucesso pela Lala!`
       );
+      setAnexoCalibracao(null);
+      showToast(`"${anexoCalibracao.nome}" processado e importado!`);
     } finally {
-      setProcessandoUpload(false);
-      e.target.value = "";
+      setProcessandoCalibracaoIA(false);
     }
+  };
+
+  const handleSalvarApenasNoSegundoCerebro = (
+    pastaDestino: ArquivoRepositorio["area"],
+    tituloCustom?: string
+  ) => {
+    if (!anexoCalibracao) return;
+    if (setRepositorio) {
+      const isImg = anexoCalibracao.mimeType.startsWith("image/");
+      setRepositorio((prev) => [
+        {
+          id: Date.now(),
+          titulo: tituloCustom || anexoCalibracao.nome,
+          area: pastaDestino,
+          tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
+          urlOuConteudo:
+            anexoCalibracao.textoExtraido?.slice(0, 240) ||
+            `Arquivo salvo na pasta ${pastaDestino}`,
+          dataCriacao: "Hoje",
+          fixado: true,
+          statusLeitura: "Para Ler",
+          anexoBase64: anexoCalibracao.base64,
+          mimeType: anexoCalibracao.mimeType,
+          nomeArquivoOriginal: anexoCalibracao.nome,
+          tamanhoBytes: anexoCalibracao.tamanhoBytes,
+        },
+        ...prev,
+      ]);
+    }
+    showToast(`"${anexoCalibracao.nome}" salvo em ${pastaDestino}!`);
+    setAnexoCalibracao(null);
   };
 
   const gerarComprasDaDietaAtual = () => {
@@ -162,7 +322,9 @@ export function CalibrationWizardModal({
             !prev.some(
               (p) =>
                 !p.comprado &&
-                p.nome.toLowerCase().includes(ext.nome.slice(0, 10).toLowerCase())
+                p.nome
+                  .toLowerCase()
+                  .includes(ext.nome.slice(0, 10).toLowerCase())
             )
         )
         .map((ext, idx) => ({
@@ -177,7 +339,7 @@ export function CalibrationWizardModal({
       return [...novos, ...prev];
     });
     showToast(
-      `Lala adicionou ${extraidos.length} ingredientes da sua dieta na Lista de Compras!`
+      `Lala adicionou ${extraidos.length} ingredientes na Lista de Compras!`
     );
   };
 
@@ -186,7 +348,7 @@ export function CalibrationWizardModal({
     const nova: Disciplina = {
       id: Date.now(),
       nome: novaDiscNome.trim(),
-      professor: novaDiscProf.trim() || "Docente UERJ",
+      professor: novaDiscProf.trim() || "Docente",
       horarioSala: novaDiscHorario.trim() || "Seg/Qua 08h-10h",
       prazo: "Semestre Atual",
       status: "em dia",
@@ -196,7 +358,13 @@ export function CalibrationWizardModal({
       presencas: 0,
       mediaAprovacao: 7.0,
       avaliacoes: [
-        { id: Date.now() + 1, tipo: "P1", data: "A definir", peso: 1, notaObtida: null },
+        {
+          id: Date.now() + 1,
+          tipo: "P1",
+          data: "A definir",
+          peso: 1,
+          notaObtida: null,
+        },
       ],
       leiturasSemana: [],
       linksUteis: [],
@@ -206,7 +374,7 @@ export function CalibrationWizardModal({
     setNovaDiscNome("");
     setNovaDiscHorario("");
     setNovaDiscProf("");
-    showToast(`Disciplina "${nova.nome}" adicionada na Grade UERJ!`);
+    showToast(`Matéria/Curso "${nova.nome}" adicionado!`);
   };
 
   const adicionarRefeicaoManual = () => {
@@ -227,12 +395,12 @@ export function CalibrationWizardModal({
     showToast(`Refeição "${nova.nome}" adicionada ao cardápio!`);
   };
 
-  const ETAPAS = [
-    { num: 1, label: "1. Você & Rotina", icon: UserCheck },
-    { num: 2, label: "2. Finanças", icon: Wallet },
-    { num: 3, label: "3. Grade UERJ", icon: GraduationCap },
-    { num: 4, label: "4. Dieta & Compras", icon: Utensils },
-    { num: 5, label: "5. Casa & Pets", icon: PawPrint },
+  const ABAS = [
+    { id: "lala_ia", label: "1. Calibrar Lala (IA)", icon: Bot },
+    { id: "importar_arquivo", label: "2. Importar Arquivo", icon: Upload },
+    { id: "rotina", label: "3. Perfil & Horários", icon: UserCheck },
+    { id: "financas", label: "4. Finanças", icon: Wallet },
+    { id: "modulos", label: "5. Estudos, Dieta & Pets", icon: SlidersHorizontal },
   ] as const;
 
   return (
@@ -244,11 +412,23 @@ export function CalibrationWizardModal({
       />
 
       <div
-        style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
-        className="relative w-full max-w-2xl rounded-3xl border shadow-2xl p-5 sm:p-6 max-h-[90vh] overflow-y-auto space-y-4"
+        style={{
+          backgroundColor: t.card,
+          color: t.text,
+          borderColor: t.border,
+        }}
+        className="relative w-full max-w-3xl rounded-3xl border shadow-2xl p-5 sm:p-6 max-h-[92vh] overflow-y-auto space-y-4"
       >
+        <input
+          ref={fileInputUniversalRef}
+          type="file"
+          accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
+          onChange={handleSelecionarArquivoUniversal}
+          className="hidden"
+        />
+
         {/* Cabeçalho */}
-        <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
             <div
               style={{
@@ -267,23 +447,38 @@ export function CalibrationWizardModal({
                 }}
                 className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
               >
-                Calibração Inteligente · Casa da Lala
+                Central de Calibração & Importação Universal
               </span>
               <h2 className="text-base sm:text-lg font-bold mt-0.5">
-                Vamos calibrar o app para a sua vida real
+                Calibre a Lala, suas regras e importe qualquer arquivo
               </h2>
               <p style={{ color: t.textSoft }} className="text-xs">
-                Você pode preencher conversando livremente com a Lala a qualquer
-                momento, subir arquivos ou ajustar abaixo.
+                Converse com a Lala, ajuste o comportamento dela ou suba um
+                arquivo escolhendo exatamente o que fazer com ele.
               </p>
             </div>
           </div>
+
           <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => fileInputUniversalRef.current?.click()}
+              style={{
+                backgroundColor: `${t.action}15`,
+                color: t.action,
+                borderColor: `${t.action}40`,
+              }}
+              className="px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+            >
+              <Upload size={13} />
+              <span>Subir Arquivo</span>
+            </button>
             {onLimparDadosExemplo && (
               <button
+                type="button"
                 onClick={() => {
                   onLimparDadosExemplo();
-                  onClose();
+                  showToast("Dados de exemplo zerados!");
                 }}
                 style={{
                   backgroundColor: `${t.danger}16`,
@@ -294,10 +489,11 @@ export function CalibrationWizardModal({
                 title="Apagar todos os dados de exemplo do app para começar limpo"
               >
                 <Trash2 size={13} />
-                <span>Zerar Dados de Exemplo</span>
+                <span>Zerar Exemplos</span>
               </button>
             )}
             <button
+              type="button"
               onClick={onClose}
               style={{ backgroundColor: t.cardSubtle, color: t.textSoft }}
               className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
@@ -307,33 +503,326 @@ export function CalibrationWizardModal({
           </div>
         </div>
 
-        {/* Barra de Passos */}
+        {/* Barra de Abas Flexível */}
         <div
           style={{ backgroundColor: t.cardSubtle }}
-          className="grid grid-cols-5 gap-1 p-1 rounded-2xl"
+          className="grid grid-cols-2 sm:grid-cols-5 gap-1 p-1 rounded-2xl"
         >
-          {ETAPAS.map((et) => {
-            const Icon = et.icon;
-            const ativo = passo === et.num;
+          {ABAS.map((item) => {
+            const Icon = item.icon;
+            const ativo = aba === item.id;
             return (
               <button
-                key={et.num}
-                onClick={() => setPasso(et.num)}
+                key={item.id}
+                type="button"
+                onClick={() => setAba(item.id)}
                 style={{
                   backgroundColor: ativo ? t.primary : "transparent",
                   color: ativo ? "#fff" : t.textSoft,
                 }}
-                className="py-2 px-1.5 rounded-xl text-[11px] font-bold flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer transition-all"
+                className="py-2 px-2 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all"
               >
                 <Icon size={13} />
-                <span className="truncate max-w-full">{et.label}</span>
+                <span className="truncate">{item.label}</span>
               </button>
             );
           })}
         </div>
 
-        {/* PASSO 1: VOCÊ & ROTINA */}
-        {passo === 1 && (
+        {ultimoFeedbackLala && (
+          <div
+            style={{
+              backgroundColor: `${t.primary}15`,
+              borderColor: t.primary,
+              color: t.text,
+            }}
+            className="p-3 rounded-2xl border text-xs flex items-center justify-between gap-2"
+          >
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={15} style={{ color: t.primary }} />
+              <span className="font-semibold">{ultimoFeedbackLala}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setUltimoFeedbackLala(null)}
+              className="text-[11px] underline cursor-pointer"
+              style={{ color: t.textSoft }}
+            >
+              Fechar
+            </button>
+          </div>
+        )}
+
+        {/* ABA 1: CALIBRAR A LALA (CONVERSA DIRETA + PERSONALIDADE + REGRAS PESSOAIS) */}
+        {aba === "lala_ia" && (
+          <div className="space-y-4">
+            {/* Caixa de Calibração por Conversa Direta */}
+            <div
+              style={{
+                backgroundColor: `${t.primary}10`,
+                borderColor: `${t.primary}40`,
+              }}
+              className="p-4 rounded-2xl border space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p
+                  className="text-xs font-bold flex items-center gap-1.5"
+                  style={{ color: t.primary }}
+                >
+                  <Sparkles size={14} /> Converse com a Lala agora para calibrar
+                  qualquer coisa da sua vida
+                </p>
+                <span className="text-[10px]" style={{ color: t.textSoft }}>
+                  Voz ou Texto · Atualiza o app na hora
+                </span>
+              </div>
+
+              <div className="flex gap-2 items-end">
+                <textarea
+                  rows={3}
+                  value={falaCalibracao}
+                  onChange={(e) => setFalaCalibracao(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleCalibrarPorConversa();
+                    }
+                  }}
+                  placeholder='Ex: "Lala, me chamo Maria, meu saldo no Nubank é R$ 1.250, tenho reunião toda terça às 14h, não marque nada antes das 08h e me ajude a manter foco nos entregáveis do trabalho!"'
+                  style={{
+                    backgroundColor: t.card,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                  className="flex-1 p-3 rounded-xl border text-xs outline-none resize-none leading-relaxed"
+                />
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={iniciarVozCalibracao}
+                    style={{
+                      backgroundColor: gravandoVoz ? t.danger : t.card,
+                      color: gravandoVoz ? "#fff" : t.action,
+                      borderColor: t.border,
+                    }}
+                    className="w-10 h-10 rounded-xl border flex items-center justify-center cursor-pointer"
+                    title="Falar por voz"
+                  >
+                    <Mic size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCalibrarPorConversa}
+                    disabled={processandoCalibracaoIA || !falaCalibracao.trim()}
+                    style={{ backgroundColor: t.primary, color: "#fff" }}
+                    className="px-3.5 h-10 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Send size={13} />
+                    <span>
+                      {processandoCalibracaoIA ? "Calibrando..." : "Aplicar"}
+                    </span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Tom de Voz da Lala */}
+            <div className="space-y-2">
+              <label
+                style={{ color: t.textSoft }}
+                className="text-[11px] font-bold uppercase block"
+              >
+                Como você prefere que a Lala converse e aja com você?
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {TONS_LALA.map((tom) => {
+                  const ativo =
+                    (perfilUsuario.tomLala || "equilibrada") === tom.id;
+                  return (
+                    <button
+                      key={tom.id}
+                      type="button"
+                      onClick={() =>
+                        setPerfilUsuario((p) => ({ ...p, tomLala: tom.id }))
+                      }
+                      style={{
+                        backgroundColor: ativo ? `${t.primary}18` : t.cardSubtle,
+                        borderColor: ativo ? t.primary : t.border,
+                        color: t.text,
+                      }}
+                      className="p-3 rounded-2xl border text-left space-y-1 cursor-pointer transition-all"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">{tom.label}</span>
+                        {ativo && (
+                          <CheckCircle2
+                            size={14}
+                            style={{ color: t.primary }}
+                          />
+                        )}
+                      </div>
+                      <p
+                        style={{ color: t.textSoft }}
+                        className="text-[11px] leading-snug"
+                      >
+                        {tom.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Autonomia da Lala */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() =>
+                  setPerfilUsuario((p) => ({ ...p, autonomiaLala: "auto" }))
+                }
+                style={{
+                  backgroundColor:
+                    (perfilUsuario.autonomiaLala || "auto") === "auto"
+                      ? `${t.action}16`
+                      : t.cardSubtle,
+                  borderColor:
+                    (perfilUsuario.autonomiaLala || "auto") === "auto"
+                      ? t.action
+                      : t.border,
+                }}
+                className="p-3 rounded-2xl border text-left flex items-start gap-2.5 cursor-pointer"
+              >
+                <Sparkles
+                  size={16}
+                  style={{ color: t.action }}
+                  className="shrink-0 mt-0.5"
+                />
+                <div>
+                  <p className="text-xs font-bold">
+                    Autonomia Total (Aplicar na Hora)
+                  </p>
+                  <p style={{ color: t.textSoft }} className="text-[11px]">
+                    Quando você falar um gasto, tarefa ou evento, a Lala já
+                    cadastra direto sem pedir confirmação extra.
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  setPerfilUsuario((p) => ({
+                    ...p,
+                    autonomiaLala: "confirmar",
+                  }))
+                }
+                style={{
+                  backgroundColor:
+                    perfilUsuario.autonomiaLala === "confirmar"
+                      ? `${t.primary}16`
+                      : t.cardSubtle,
+                  borderColor:
+                    perfilUsuario.autonomiaLala === "confirmar"
+                      ? t.primary
+                      : t.border,
+                }}
+                className="p-3 rounded-2xl border text-left flex items-start gap-2.5 cursor-pointer"
+              >
+                <ShieldCheck
+                  size={16}
+                  style={{ color: t.primary }}
+                  className="shrink-0 mt-0.5"
+                />
+                <div>
+                  <p className="text-xs font-bold">
+                    Sempre Pedir Minha Confirmação
+                  </p>
+                  <p style={{ color: t.textSoft }} className="text-[11px]">
+                    A Lala prepara os cartões de ação e aguarda você tocar em
+                    "Confirmar / Executar" antes de alterar o app.
+                  </p>
+                </div>
+              </button>
+            </div>
+
+            {/* Regras e Instruções Fixas da Usuária para a Lala */}
+            <div>
+              <label
+                style={{ color: t.textSoft }}
+                className="text-[11px] font-bold uppercase block mb-1"
+              >
+                Suas Regras e Instruções Pessoais para a Lala (Memória Fixa)
+              </label>
+              <textarea
+                rows={3}
+                value={perfilUsuario.instrucoesPersonalizadasLala || ""}
+                onChange={(e) =>
+                  setPerfilUsuario((p) => ({
+                    ...p,
+                    instrucoesPersonalizadasLala: e.target.value,
+                  }))
+                }
+                placeholder="Ex: Não agende compromissos antes das 08:30; quartas à noite são livres; me lembre sempre de beber água; quando eu estiver cansada, sugira blocos curtos de 15 min..."
+                style={{
+                  backgroundColor: t.cardSubtle,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+                className="w-full p-3 rounded-xl border text-xs outline-none resize-none leading-relaxed"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ABA 2: CENTRAL UNIVERSAL DE UPLOAD E IMPORTAÇÃO DE ARQUIVOS */}
+        {aba === "importar_arquivo" && (
+          <div className="space-y-4">
+            {!anexoCalibracao ? (
+              <div
+                onClick={() => fileInputUniversalRef.current?.click()}
+                style={{
+                  backgroundColor: t.cardSubtle,
+                  borderColor: t.primary,
+                }}
+                className="p-6 rounded-3xl border-2 border-dashed text-center space-y-2.5 cursor-pointer hover:opacity-95 transition-opacity"
+              >
+                <div
+                  style={{ backgroundColor: `${t.primary}20`, color: t.primary }}
+                  className="w-12 h-12 rounded-2xl flex items-center justify-center mx-auto"
+                >
+                  <Upload size={22} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold">
+                    Clique para escolher qualquer arquivo, foto, PDF, print ou
+                    planilha
+                  </p>
+                  <p
+                    style={{ color: t.textSoft }}
+                    className="text-xs max-w-lg mx-auto mt-1"
+                  >
+                    Assim que você selecionar o arquivo, você escolhe o que
+                    fazer com ele: importar eventos para o Calendário, importar
+                    tarefas/projetos, lançar gastos/extrato, criar lista de
+                    compras, atualizar estudos/treinos ou apenas guardar no
+                    Segundo Cérebro!
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <FileImportChooserCard
+                t={t}
+                anexo={anexoCalibracao}
+                onClear={() => setAnexoCalibracao(null)}
+                onConfirmImport={handleConfirmarImportacaoUniversal}
+                onSaveOnly={handleSalvarApenasNoSegundoCerebro}
+              />
+            )}
+          </div>
+        )}
+
+        {/* ABA 3: PERFIL, HORÁRIOS & METAS DIÁRIAS */}
+        {aba === "rotina" && (
           <div className="space-y-3.5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -365,7 +854,7 @@ export function CalibrationWizardModal({
                   style={{ color: t.textSoft }}
                   className="text-[11px] font-bold uppercase block mb-1"
                 >
-                  Curso / Faculdade & Período
+                  Faculdade / Curso ou Área Principal
                 </label>
                 <input
                   value={perfilUsuario.cursoUERJ}
@@ -416,6 +905,57 @@ export function CalibrationWizardModal({
                   style={{ color: t.textSoft }}
                   className="text-[11px] font-bold uppercase block mb-1"
                 >
+                  Horário habitual de Acordar
+                </label>
+                <input
+                  type="time"
+                  value={perfilUsuario.horarioAcordar || "07:00"}
+                  onChange={(e) =>
+                    setPerfilUsuario((p) => ({
+                      ...p,
+                      horarioAcordar: e.target.value,
+                    }))
+                  }
+                  style={{
+                    backgroundColor: t.cardSubtle,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                  className="w-full p-3 rounded-xl border text-xs font-mono outline-none"
+                />
+              </div>
+              <div>
+                <label
+                  style={{ color: t.textSoft }}
+                  className="text-[11px] font-bold uppercase block mb-1"
+                >
+                  Horário habitual de Dormir
+                </label>
+                <input
+                  type="time"
+                  value={perfilUsuario.horarioDormir || "23:00"}
+                  onChange={(e) =>
+                    setPerfilUsuario((p) => ({
+                      ...p,
+                      horarioDormir: e.target.value,
+                    }))
+                  }
+                  style={{
+                    backgroundColor: t.cardSubtle,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                  className="w-full p-3 rounded-xl border text-xs font-mono outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label
+                  style={{ color: t.textSoft }}
+                  className="text-[11px] font-bold uppercase block mb-1"
+                >
                   Meta de Sono por Noite (h)
                 </label>
                 <input
@@ -461,55 +1001,46 @@ export function CalibrationWizardModal({
                 />
               </div>
             </div>
-
-            <div
-              style={{
-                backgroundColor: `${t.action}12`,
-                borderColor: `${t.action}35`,
-              }}
-              className="p-3.5 rounded-2xl border flex items-center justify-between gap-3 flex-wrap"
-            >
-              <div className="space-y-0.5">
-                <p className="text-xs font-bold" style={{ color: t.action }}>
-                  Quer calibrar conversando com a Lala por voz ou texto?
-                </p>
-                <p style={{ color: t.textSoft }} className="text-[11px]">
-                  Você pode falar tudo de uma vez (seu saldo, matérias, dieta e
-                  rotina) e a Lala arruma cada aba pra você.
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  onClose();
-                  onAbrirLalaComPrompt(
-                    "Lala, me ajuda a calibrar minhas informações iniciais: quero ajustar meu saldo bancário, minha grade da UERJ e minha dieta!"
-                  );
-                }}
-                style={{ backgroundColor: t.action, color: "#fff" }}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 cursor-pointer"
-              >
-                Calibrar com a Lala
-              </button>
-            </div>
           </div>
         )}
 
-        {/* PASSO 2: FINANÇAS REAIS (SALDOS & CARTÕES) */}
-        {passo === 2 && (
+        {/* ABA 4: FINANÇAS REAIS (SALDOS & CARTÕES) */}
+        {aba === "financas" && (
           <div className="space-y-3.5">
-            <p style={{ color: t.textSoft }} className="text-xs">
-              Ajuste o saldo atual das suas contas e a fatura dos cartões para o
-              cálculo de <strong>Dinheiro Livre Hoje</strong> ficar 100% exato:
-            </p>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p style={{ color: t.textSoft }} className="text-xs">
+                Ajuste o saldo atual das suas contas e a fatura dos cartões para
+                o cálculo de <strong>Dinheiro Livre Hoje</strong>:
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  setContas((prev) => [
+                    ...prev,
+                    {
+                      id: Date.now(),
+                      nome: "Nova Conta / Reserva",
+                      tipo: "Corrente / Pix",
+                      saldoAtual: 0,
+                      cor: t.primary,
+                    },
+                  ])
+                }
+                style={{ backgroundColor: `${t.primary}15`, color: t.primary }}
+                className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <Plus size={13} /> Nova Conta
+              </button>
+            </div>
 
             <div className="space-y-2">
-              <p className="text-xs font-bold uppercase tracking-wider" style={{ color: t.primary }}>
-                Suas Contas Bancárias / Pix
-              </p>
               {contas.map((c) => (
                 <div
                   key={c.id}
-                  style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
+                  style={{
+                    backgroundColor: t.cardSubtle,
+                    borderColor: t.border,
+                  }}
                   className="p-3 rounded-2xl border grid grid-cols-1 sm:grid-cols-2 gap-2 items-center"
                 >
                   <input
@@ -517,7 +1048,9 @@ export function CalibrationWizardModal({
                     onChange={(e) =>
                       setContas((prev) =>
                         prev.map((item) =>
-                          item.id === c.id ? { ...item, nome: e.target.value } : item
+                          item.id === c.id
+                            ? { ...item, nome: e.target.value }
+                            : item
                         )
                       )
                     }
@@ -525,7 +1058,10 @@ export function CalibrationWizardModal({
                     className="p-2.5 rounded-xl text-xs font-semibold outline-none"
                   />
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono font-bold" style={{ color: t.textSoft }}>
+                    <span
+                      className="text-xs font-mono font-bold"
+                      style={{ color: t.textSoft }}
+                    >
                       Saldo R$:
                     </span>
                     <input
@@ -547,19 +1083,64 @@ export function CalibrationWizardModal({
                       style={{ backgroundColor: t.card, color: t.primary }}
                       className="flex-1 p-2.5 rounded-xl text-xs font-mono font-bold outline-none"
                     />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setContas((prev) =>
+                          prev.filter((item) => item.id !== c.id)
+                        )
+                      }
+                      style={{ color: t.danger }}
+                      className="p-1.5 cursor-pointer"
+                      title="Remover conta"
+                    >
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
               ))}
             </div>
 
             <div className="space-y-2 pt-1">
-              <p className="text-xs font-bold uppercase tracking-wider" style={{ color: t.finance }}>
-                Seus Cartões de Crédito
-              </p>
+              <div className="flex items-center justify-between">
+                <p
+                  className="text-xs font-bold uppercase tracking-wider"
+                  style={{ color: t.finance }}
+                >
+                  Seus Cartões de Crédito
+                </p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setCartoes((prev) => [
+                      ...prev,
+                      {
+                        id: Date.now(),
+                        nome: "Novo Cartão",
+                        limiteTotal: 2000,
+                        faturaAtual: 0,
+                        fechamentoDia: 20,
+                        vencimentoDia: 28,
+                        statusFatura: "aberta",
+                      },
+                    ])
+                  }
+                  style={{
+                    backgroundColor: `${t.finance}15`,
+                    color: t.finance,
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus size={13} /> Novo Cartão
+                </button>
+              </div>
               {cartoes.map((ct) => (
                 <div
                   key={ct.id}
-                  style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
+                  style={{
+                    backgroundColor: t.cardSubtle,
+                    borderColor: t.border,
+                  }}
                   className="p-3 rounded-2xl border grid grid-cols-1 sm:grid-cols-3 gap-2 items-center"
                 >
                   <input
@@ -567,7 +1148,9 @@ export function CalibrationWizardModal({
                     onChange={(e) =>
                       setCartoes((prev) =>
                         prev.map((item) =>
-                          item.id === ct.id ? { ...item, nome: e.target.value } : item
+                          item.id === ct.id
+                            ? { ...item, nome: e.target.value }
+                            : item
                         )
                       )
                     }
@@ -575,7 +1158,10 @@ export function CalibrationWizardModal({
                     className="p-2.5 rounded-xl text-xs font-semibold outline-none"
                   />
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px]" style={{ color: t.textSoft }}>
+                    <span
+                      className="text-[11px]"
+                      style={{ color: t.textSoft }}
+                    >
                       Fatura R$:
                     </span>
                     <input
@@ -599,7 +1185,10 @@ export function CalibrationWizardModal({
                     />
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <span className="text-[11px]" style={{ color: t.textSoft }}>
+                    <span
+                      className="text-[11px]"
+                      style={{ color: t.textSoft }}
+                    >
                       Limite R$:
                     </span>
                     <input
@@ -628,99 +1217,42 @@ export function CalibrationWizardModal({
           </div>
         )}
 
-        {/* PASSO 3: GRADE UERJ & ESTUDOS */}
-        {passo === 3 && (
-          <div className="space-y-3.5">
-            <input
-              ref={inputGradeRef}
-              type="file"
-              accept="image/*,.pdf,.txt,.csv,.doc,.docx"
-              onChange={handleUploadGrade}
-              className="hidden"
-            />
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                onClick={() => inputGradeRef.current?.click()}
-                disabled={processandoUpload}
-                style={{
-                  backgroundColor: `${t.primary}15`,
-                  borderColor: t.primary,
-                  color: t.primary,
-                }}
-                className="p-3.5 rounded-2xl border text-left flex items-center gap-3 cursor-pointer"
-              >
-                <div
-                  style={{ backgroundColor: t.primary, color: "#fff" }}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                >
-                  <Upload size={18} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold">
-                    {processandoUpload
-                      ? "Lendo arquivo da Grade..."
-                      : "Subir Arquivo ou Foto da Grade UERJ"}
-                  </p>
-                  <p style={{ color: t.textSoft }} className="text-[11px]">
-                    A Lala lê o PDF/imagem e cadastra as disciplinas + agenda
-                  </p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  onClose();
-                  onAbrirLalaComPrompt(
-                    "Lala, me ajuda a montar minha grade da UERJ deste semestre para conciliar com trabalho e treinos!"
-                  );
-                }}
-                style={{
-                  backgroundColor: `${t.action}14`,
-                  borderColor: t.action,
-                  color: t.action,
-                }}
-                className="p-3.5 rounded-2xl border text-left flex items-center gap-3 cursor-pointer"
-              >
-                <div
-                  style={{ backgroundColor: t.action, color: "#fff" }}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                >
-                  <Sparkles size={18} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold">
-                    Pedir ajuda da Lala p/ montar a Grade
-                  </p>
-                  <p style={{ color: t.textSoft }} className="text-[11px]">
-                    Planeje horários sem conflito com CDT/RCR e Cheer
-                  </p>
-                </div>
-              </button>
-            </div>
-
-            {/* Adicionar Disciplina Manualmente */}
+        {/* ABA 5: MÓDULOS (ESTUDOS, DIETA/COMPRAS & PETS) */}
+        {aba === "modulos" && (
+          <div className="space-y-4">
+            {/* Seção Estudos / Disciplinas */}
             <div
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="p-3 rounded-2xl border space-y-2"
+              className="p-3.5 rounded-2xl border space-y-2.5"
             >
-              <p className="text-xs font-bold">
-                Adicionar Disciplina Manualmente
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-bold flex items-center gap-1.5">
+                  <GraduationCap size={14} style={{ color: t.primary }} />
+                  Matérias / Cursos / Estudos ({disciplinas.length})
+                </p>
+                <button
+                  type="button"
+                  onClick={() => fileInputUniversalRef.current?.click()}
+                  style={{ color: t.primary }}
+                  className="text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Upload size={12} /> Importar de arquivo
+                </button>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <input
                   value={novaDiscNome}
                   onChange={(e) => setNovaDiscNome(e.target.value)}
-                  placeholder="Nome da matéria..."
+                  placeholder="Nome da matéria ou curso..."
                   style={{ backgroundColor: t.card, color: t.text }}
-                  className="p-2.5 rounded-xl text-xs outline-none"
+                  className="p-2 rounded-xl text-xs outline-none"
                 />
                 <input
                   value={novaDiscHorario}
                   onChange={(e) => setNovaDiscHorario(e.target.value)}
                   placeholder="Horário/Sala (ex: Seg/Qua 08h)"
                   style={{ backgroundColor: t.card, color: t.text }}
-                  className="p-2.5 rounded-xl text-xs outline-none"
+                  className="p-2 rounded-xl text-xs outline-none"
                 />
                 <div className="flex gap-1.5">
                   <input
@@ -728,143 +1260,71 @@ export function CalibrationWizardModal({
                     onChange={(e) => setNovaDiscProf(e.target.value)}
                     placeholder="Professor(a)"
                     style={{ backgroundColor: t.card, color: t.text }}
-                    className="flex-1 p-2.5 rounded-xl text-xs outline-none"
+                    className="flex-1 p-2 rounded-xl text-xs outline-none"
                   />
                   <button
+                    type="button"
                     onClick={adicionarDisciplinaManual}
                     style={{ backgroundColor: t.primary, color: "#fff" }}
                     className="px-3 rounded-xl text-xs font-bold flex items-center justify-center cursor-pointer"
                   >
-                    <Plus size={15} />
+                    <Plus size={14} />
                   </button>
                 </div>
               </div>
-            </div>
-
-            {/* Lista de Disciplinas Atuais */}
-            <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-              {disciplinas.map((d) => (
-                <div
-                  key={d.id}
-                  style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-                  className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0 flex-1 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    <input
-                      value={d.nome}
-                      onChange={(e) =>
-                        setDisciplinas((prev) =>
-                          prev.map((x) =>
-                            x.id === d.id ? { ...x, nome: e.target.value } : x
-                          )
-                        )
-                      }
-                      style={{ backgroundColor: t.card, color: t.text }}
-                      className="p-2 rounded-lg text-xs font-bold outline-none"
-                    />
-                    <input
-                      value={d.horarioSala}
-                      onChange={(e) =>
-                        setDisciplinas((prev) =>
-                          prev.map((x) =>
-                            x.id === d.id
-                              ? { ...x, horarioSala: e.target.value }
-                              : x
-                          )
-                        )
-                      }
-                      style={{ backgroundColor: t.card, color: t.textSoft }}
-                      className="p-2 rounded-lg text-xs outline-none"
-                    />
-                  </div>
-                  <button
-                    onClick={() =>
-                      setDisciplinas((prev) => prev.filter((x) => x.id !== d.id))
-                    }
-                    className="p-1.5 rounded-lg cursor-pointer"
-                    style={{ color: t.danger }}
-                    title="Remover disciplina"
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {disciplinas.map((d) => (
+                  <div
+                    key={d.id}
+                    style={{ backgroundColor: t.card, borderColor: t.border }}
+                    className="p-2 rounded-xl border flex items-center justify-between gap-2 text-xs"
                   >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* PASSO 4: DIETA, REFEIÇÕES & LISTA DE COMPRAS AUTOMÁTICA */}
-        {passo === 4 && (
-          <div className="space-y-3.5">
-            <input
-              ref={inputDietaRef}
-              type="file"
-              accept="image/*,.pdf,.txt,.csv,.doc,.docx"
-              onChange={handleUploadDieta}
-              className="hidden"
-            />
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                onClick={() => inputDietaRef.current?.click()}
-                disabled={processandoUpload}
-                style={{
-                  backgroundColor: `${t.primary}15`,
-                  borderColor: t.primary,
-                  color: t.primary,
-                }}
-                className="p-3.5 rounded-2xl border text-left flex items-center gap-3 cursor-pointer"
-              >
-                <div
-                  style={{ backgroundColor: t.primary, color: "#fff" }}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                >
-                  <Upload size={18} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold">
-                    {processandoUpload
-                      ? "Lala interpretando sua Dieta..."
-                      : "Subir Arquivo/Foto da Minha Dieta"}
-                  </p>
-                  <p style={{ color: t.textSoft }} className="text-[11px]">
-                    A Lala atualiza as refeições e cria a Lista de Compras!
-                  </p>
-                </div>
-              </button>
-
-              <button
-                onClick={gerarComprasDaDietaAtual}
-                style={{
-                  backgroundColor: `${t.finance}15`,
-                  borderColor: t.finance,
-                  color: t.finance,
-                }}
-                className="p-3.5 rounded-2xl border text-left flex items-center gap-3 cursor-pointer"
-              >
-                <div
-                  style={{ backgroundColor: t.finance, color: "#fff" }}
-                  className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
-                >
-                  <ShoppingCart size={18} />
-                </div>
-                <div>
-                  <p className="text-xs font-bold">
-                    Gerar Lista de Compras da Dieta Atual
-                  </p>
-                  <p style={{ color: t.textSoft }} className="text-[11px]">
-                    Lê o cardápio abaixo e envia os ingredientes pro Mercado
-                  </p>
-                </div>
-              </button>
+                    <span className="font-bold truncate">{d.nome}</span>
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-[11px] truncate"
+                        style={{ color: t.textSoft }}
+                      >
+                        {d.horarioSala}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDisciplinas((prev) =>
+                            prev.filter((x) => x.id !== d.id)
+                          )
+                        }
+                        style={{ color: t.danger }}
+                        className="cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
-            {/* Adicionar Refeição Manualmente */}
+            {/* Seção Nutrição & Compras */}
             <div
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="p-3 rounded-2xl border space-y-2"
+              className="p-3.5 rounded-2xl border space-y-2.5"
             >
-              <p className="text-xs font-bold">Adicionar Refeição na Dieta</p>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <p className="text-xs font-bold flex items-center gap-1.5">
+                  <Utensils size={14} style={{ color: t.action }} />
+                  Cardápio & Lista de Compras ({refeicoes.length} refeições)
+                </p>
+                <button
+                  type="button"
+                  onClick={gerarComprasDaDietaAtual}
+                  style={{ color: t.finance }}
+                  className="text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <ShoppingCart size={12} /> Enviar ingredientes p/ Lista de
+                  Compras
+                </button>
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <input
                   value={novaRefHorario}
@@ -883,7 +1343,7 @@ export function CalibrationWizardModal({
                 <input
                   value={novaRefDesc}
                   onChange={(e) => setNovaRefDesc(e.target.value)}
-                  placeholder="Ovos, aveia, frango..."
+                  placeholder="Ovos, aveia, fruta..."
                   style={{ backgroundColor: t.card, color: t.text }}
                   className="p-2 rounded-xl text-xs outline-none"
                 />
@@ -897,6 +1357,7 @@ export function CalibrationWizardModal({
                     className="w-full p-2 rounded-xl text-xs font-mono outline-none"
                   />
                   <button
+                    type="button"
                     onClick={adicionarRefeicaoManual}
                     style={{ backgroundColor: t.primary, color: "#fff" }}
                     className="px-3 rounded-xl text-xs font-bold cursor-pointer"
@@ -907,129 +1368,38 @@ export function CalibrationWizardModal({
               </div>
             </div>
 
-            {/* Lista de Refeições */}
-            <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-              {refeicoes.map((r) => (
-                <div
-                  key={r.id}
-                  style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-                  className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
-                >
-                  <div className="min-w-0 flex-1 grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+            {/* Seção Pets */}
+            <div
+              style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
+              className="p-3.5 rounded-2xl border space-y-2.5"
+            >
+              <p className="text-xs font-bold flex items-center gap-1.5">
+                <PawPrint size={14} style={{ color: t.primary }} />
+                Pets & Estoque
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {petsPerfil.map((pet) => (
+                  <div
+                    key={pet.id}
+                    style={{ backgroundColor: t.card, borderColor: t.border }}
+                    className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
+                  >
                     <input
-                      value={`${r.horario} — ${r.nome}`}
-                      onChange={(e) => {
-                        const partes = e.target.value.split("—");
-                        setRefeicoes((prev) =>
-                          prev.map((item) =>
-                            item.id === r.id
-                              ? {
-                                  ...item,
-                                  horario: (partes[0] || r.horario).trim(),
-                                  nome: (partes[1] || partes[0] || r.nome).trim(),
-                                }
-                              : item
-                          )
-                        );
-                      }}
-                      style={{ backgroundColor: t.card, color: t.text }}
-                      className="p-2 rounded-lg text-xs font-bold outline-none"
-                    />
-                    <input
-                      value={r.descricao}
+                      value={pet.nome}
                       onChange={(e) =>
-                        setRefeicoes((prev) =>
-                          prev.map((item) =>
-                            item.id === r.id
-                              ? { ...item, descricao: e.target.value }
-                              : item
+                        setPetsPerfil((prev) =>
+                          prev.map((p) =>
+                            p.id === pet.id
+                              ? { ...p, nome: e.target.value }
+                              : p
                           )
                         )
                       }
-                      style={{ backgroundColor: t.card, color: t.textSoft }}
-                      className="p-2 rounded-lg text-xs outline-none"
+                      style={{ backgroundColor: t.cardSubtle, color: t.text }}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-bold outline-none w-28"
                     />
-                  </div>
-                  <button
-                    onClick={() =>
-                      setRefeicoes((prev) =>
-                        prev.filter((item) => item.id !== r.id)
-                      )
-                    }
-                    className="p-1.5 cursor-pointer"
-                    style={{ color: t.danger }}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* PASSO 5: CASA & PETS */}
-        {passo === 5 && (
-          <div className="space-y-3.5">
-            <p style={{ color: t.textSoft }} className="text-xs">
-              Configure seus pets e o estoque inicial de sachês/ração para a Lala
-              monitorar a reposição automática:
-            </p>
-
-            <div className="space-y-2.5">
-              {petsPerfil.map((pet) => (
-                <div
-                  key={pet.id}
-                  style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-                  className="p-3.5 rounded-2xl border space-y-2"
-                >
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div>
-                      <label
-                        style={{ color: t.textSoft }}
-                        className="text-[10px] font-bold uppercase block mb-0.5"
-                      >
-                        Nome do Pet
-                      </label>
-                      <input
-                        value={pet.nome}
-                        onChange={(e) =>
-                          setPetsPerfil((prev) =>
-                            prev.map((p) =>
-                              p.id === pet.id ? { ...p, nome: e.target.value } : p
-                            )
-                          )
-                        }
-                        style={{ backgroundColor: t.card, color: t.text }}
-                        className="w-full p-2 rounded-xl text-xs font-bold outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        style={{ color: t.textSoft }}
-                        className="text-[10px] font-bold uppercase block mb-0.5"
-                      >
-                        Ração / Dieta Pet
-                      </label>
-                      <input
-                        value={pet.racao}
-                        onChange={(e) =>
-                          setPetsPerfil((prev) =>
-                            prev.map((p) =>
-                              p.id === pet.id ? { ...p, racao: e.target.value } : p
-                            )
-                          )
-                        }
-                        style={{ backgroundColor: t.card, color: t.text }}
-                        className="w-full p-2 rounded-xl text-xs outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        style={{ color: t.textSoft }}
-                        className="text-[10px] font-bold uppercase block mb-0.5"
-                      >
-                        Estoque Atual de Sachês (un)
-                      </label>
+                    <div className="flex items-center gap-1.5 text-xs">
+                      <span style={{ color: t.textSoft }}>Sachês:</span>
                       <input
                         type="number"
                         value={pet.estoqueSaches}
@@ -1039,57 +1409,47 @@ export function CalibrationWizardModal({
                             prev.map((p) => ({ ...p, estoqueSaches: val }))
                           );
                         }}
-                        style={{ backgroundColor: t.card, color: t.primary }}
-                        className="w-full p-2 rounded-xl text-xs font-mono font-bold outline-none"
+                        style={{
+                          backgroundColor: t.cardSubtle,
+                          color: t.primary,
+                        }}
+                        className="w-16 px-2 py-1.5 rounded-lg text-xs font-mono font-bold outline-none"
                       />
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Rodapé de Navegação */}
+        {/* Rodapé */}
         <div
           style={{ borderColor: t.border }}
           className="pt-3 border-t flex items-center justify-between gap-2 flex-wrap"
         >
-          <div>
-            {passo > 1 && (
-              <button
-                onClick={() => setPasso((p) => Math.max(1, p - 1) as 1 | 2 | 3 | 4 | 5)}
-                style={{ backgroundColor: t.cardSubtle, color: t.text }}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
-                <ArrowLeft size={14} /> Anterior
-              </button>
-            )}
-          </div>
+          <span className="text-[11px]" style={{ color: t.textSoft }}>
+            Dica: Você pode recalibrar ou importar arquivos a qualquer momento.
+          </span>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 ml-auto">
             <button
+              type="button"
+              onClick={onClose}
+              style={{ backgroundColor: t.cardSubtle, color: t.text }}
+              className="px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Fechar
+            </button>
+            <button
+              type="button"
               onClick={concluirCalibracao}
-              style={{
-                backgroundColor: passo === 5 ? t.primary : t.cardSubtle,
-                color: passo === 5 ? "#fff" : t.text,
-              }}
-              className="px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+              style={{ backgroundColor: t.primary, color: "#fff" }}
+              className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
             >
               <CheckCircle2 size={14} />
-              <span>Salvar & Concluir Calibração</span>
+              <span>Salvar Calibração</span>
             </button>
-
-            {passo < 5 && (
-              <button
-                onClick={() => setPasso((p) => Math.min(5, p + 1) as 1 | 2 | 3 | 4 | 5)}
-                style={{ backgroundColor: t.primary, color: "#fff" }}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-              >
-                <span>Próximo</span>
-                <ArrowRight size={14} />
-              </button>
-            )}
           </div>
         </div>
       </div>

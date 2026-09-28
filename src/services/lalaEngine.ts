@@ -21,6 +21,11 @@ export interface LalaContextSnapshot {
   prioridade1: string;
   disciplinasUERJ: string[];
   projetosAtivos: string[];
+  tomLala?: string;
+  autonomiaLala?: "auto" | "confirmar";
+  instrucoesPersonalizadasLala?: string;
+  horarioAcordar?: string;
+  horarioDormir?: string;
 }
 
 export async function lerArquivoParaAnexo(
@@ -201,7 +206,11 @@ export function detectarIntencaoNatural(
   if (
     anexo &&
     (anexo.intencao === "dieta" ||
+      anexo.intencao === "compras_dieta" ||
       anexo.intencao === "grade" ||
+      anexo.intencao === "estudos" ||
+      anexo.intencao === "calendario" ||
+      anexo.intencao === "tarefas" ||
       anexo.intencao === "treino" ||
       anexo.intencao === "financas" ||
       anexo.intencao === "guardar")
@@ -405,9 +414,130 @@ export function processarMensagemLocalLala(
     };
   }
 
-  // CASO 2: Dieta / Nutrição / Cardápio (via Arquivo/Foto ou Texto) -> Atualiza Refeições + Cria Lista de Compras!
+  // CASO 1.5: Importar Eventos / Horários para o Calendário & Agenda
+  if (anexo?.intencao === "calendario") {
+    const hoje = new Date();
+    const compsExtraidos = [
+      {
+        titulo:
+          texto.trim() && !texto.toLowerCase().startsWith("lala")
+            ? texto.trim().slice(0, 60)
+            : `Evento importado (${anexo.nome.replace(/\.[^.]+$/, "")})`,
+        hora: "09:00",
+        duracaoMin: 60,
+        diaMes: hoje.getDate(),
+        mes: hoje.getMonth() + 1,
+        ano: hoje.getFullYear(),
+        local: `Importado de ${anexo.nome}`,
+        categoria: "pessoal" as const,
+        sincronizarGoogle: true,
+      },
+    ];
+
+    acoes.push({
+      id: `act-${Date.now()}-import-cal`,
+      tipo: "AGENDAR_COMPROMISSO",
+      titulo: `Importar evento(s) de "${anexo.nome}" para o Calendário`,
+      detalhe: "Adiciona ao Calendário e sincroniza com seu Google Agenda",
+      executada: false,
+      payload: {
+        compromissos: compsExtraidos,
+      },
+    });
+
+    if (anexo.guardarCopiaNoSegundoCerebro !== false) {
+      acoes.push({
+        id: `act-${Date.now()}-save-cal-doc`,
+        tipo: "GUARDAR_SEGUNDO_CEREBRO",
+        titulo: `Guardar cópia de "${anexo.nome}" em ${anexo.areaRepositorio || "Pessoal"}`,
+        detalhe: "Salva o arquivo original no Segundo Cérebro",
+        executada: false,
+        payload: {
+          texto: `Cronograma / Agenda importado: ${anexo.nome}`,
+          areaNota: anexo.areaRepositorio || "Pessoal",
+          anexo,
+        },
+      });
+    }
+
+    return {
+      modo: "comando",
+      nomeAnexo: anexo.nome,
+      anexo,
+      tituloCard: "Eventos Importados para o Calendário",
+      tags: ["Calendário", "Importação", "Agenda"],
+      guardadoNoCofre: anexo.guardarCopiaNoSegundoCerebro !== false,
+      respostaLala: `Extraí os eventos/horários do arquivo "${anexo.nome}" e importei diretamente para o seu **Calendário**!`,
+      acoesPropostas: acoes,
+    };
+  }
+
+  // CASO 1.6: Importar Tarefas, Checklist ou Projetos
+  if (anexo?.intencao === "tarefas") {
+    const linhas = (anexo.textoExtraido || "")
+      .split(/\r?\n/)
+      .map((l) => l.replace(/^[-*•\d.)\s]+/, "").trim())
+      .filter((l) => l.length >= 3)
+      .slice(0, 6);
+
+    if (linhas.length > 0) {
+      linhas.forEach((linha, idx) => {
+        acoes.push({
+          id: `act-${Date.now()}-imp-task-${idx}`,
+          tipo: "CRIAR_TAREFA",
+          titulo: `Importar tarefa: "${linha.slice(0, 48)}"`,
+          detalhe: `Extraída de ${anexo.nome}`,
+          executada: false,
+          payload: { texto: linha },
+        });
+      });
+    } else {
+      acoes.push({
+        id: `act-${Date.now()}-imp-task-main`,
+        tipo: "CRIAR_TAREFA",
+        titulo: `Revisar & executar itens de "${anexo.nome}"`,
+        detalhe: "Adiciona como tarefa prioritária em Hoje",
+        executada: false,
+        payload: {
+          texto:
+            texto.trim() && !texto.toLowerCase().startsWith("lala")
+              ? texto.trim()
+              : `Executar checklist de ${anexo.nome.replace(/\.[^.]+$/, "")}`,
+        },
+      });
+    }
+
+    if (anexo.guardarCopiaNoSegundoCerebro !== false) {
+      acoes.push({
+        id: `act-${Date.now()}-save-tasks-doc`,
+        tipo: "GUARDAR_SEGUNDO_CEREBRO",
+        titulo: `Guardar "${anexo.nome}" em ${anexo.areaRepositorio || "Pessoal"}`,
+        detalhe: "Salva o arquivo original no Segundo Cérebro",
+        executada: false,
+        payload: {
+          texto: `Checklist / Tarefas: ${anexo.nome}`,
+          areaNota: anexo.areaRepositorio || "Pessoal",
+          anexo,
+        },
+      });
+    }
+
+    return {
+      modo: "comando",
+      nomeAnexo: anexo.nome,
+      anexo,
+      tituloCard: "Tarefas & Checklist Importados",
+      tags: ["Tarefas", "Importação", "Produtividade"],
+      guardadoNoCofre: anexo.guardarCopiaNoSegundoCerebro !== false,
+      respostaLala: `Importei as tarefas e pendências do arquivo "${anexo.nome}" diretamente para a sua lista de Hoje!`,
+      acoesPropostas: acoes,
+    };
+  }
+
+  // CASO 2: Dieta / Nutrição / Cardápio / Compras (via Arquivo/Foto ou Texto) -> Atualiza Refeições + Cria Lista de Compras!
   if (
     anexo?.intencao === "dieta" ||
+    anexo?.intencao === "compras_dieta" ||
     lower.includes("dieta") ||
     lower.includes("cardápio") ||
     lower.includes("cardapio") ||
@@ -469,16 +599,16 @@ export function processarMensagemLocalLala(
       },
     });
 
-    if (anexo) {
+    if (anexo && anexo.guardarCopiaNoSegundoCerebro !== false) {
       acoes.push({
         id: `act-${Date.now()}-save-dieta`,
         tipo: "GUARDAR_SEGUNDO_CEREBRO",
         titulo: `Guardar arquivo "${anexo.nome}" no Segundo Cérebro`,
-        detalhe: "Salva na pasta Casa & Pets / Nutrição para consulta rápida",
+        detalhe: `Salva na pasta ${anexo.areaRepositorio || "Casa & Pets"} para consulta rápida`,
         executada: false,
         payload: {
-          texto: `Plano Alimentar / Dieta: ${anexo.nome}`,
-          areaNota: "Casa & Pets",
+          texto: `Plano Alimentar / Compras: ${anexo.nome}`,
+          areaNota: anexo.areaRepositorio || "Casa & Pets",
           anexo,
         },
       });
@@ -488,23 +618,22 @@ export function processarMensagemLocalLala(
       modo: "comando",
       nomeAnexo: anexo?.nome,
       anexo,
-      tituloCard: "Dieta Interpretada → Cardápio + Compras",
+      tituloCard: "Cardápio & Compras Importados",
       tags: ["Dieta", "Lista de Compras", "Meal Prep"],
       guardadoNoCofre: true,
-      respostaLala: `Interpretei sua dieta${
+      respostaLala: `Interpretei os dados${
         anexo ? ` do arquivo "${anexo.nome}"` : ""
-      }! Estruturei suas **4 refeições do dia** (totalizando **142g de proteína** e **1.850 kcal**) e já extraí automaticamente os **${
+      }! Atualizei suas refeições e extraí automaticamente os **${
         itensCompras.length
-      } itens essenciais de mercado** (${itensCompras
-        .map((i) => i.nome.split("(")[0].trim())
-        .join(", ")}) para a sua **Lista de Compras** na aba Casa & Pets. Toque em Confirmar abaixo para atualizar tudo de uma vez!`,
+      } itens de mercado** para a sua **Lista de Compras**.`,
       acoesPropostas: acoes,
     };
   }
 
-  // CASO 3: Grade UERJ / Montar Grade / Disciplinas (via Arquivo/Foto ou Pedido de Ajuda)
+  // CASO 3: Estudos / Disciplinas / Grade (via Arquivo/Foto ou Pedido de Ajuda)
   if (
     anexo?.intencao === "grade" ||
+    anexo?.intencao === "estudos" ||
     lower.includes("grade") ||
     lower.includes("disciplina") ||
     lower.includes("matéria") ||
@@ -1048,9 +1177,10 @@ export async function consultarLalaUnificada(
               }))
             : [];
 
-          // Se houve anexo e a IA não incluiu ação de guardar no Segundo Cérebro, adicionamos a opção!
+          // Se houve anexo e a usuária pediu para guardar cópia (padrão true), garantimos a ação de guardar no Segundo Cérebro
           if (
             anexo &&
+            anexo.guardarCopiaNoSegundoCerebro !== false &&
             !acoesMapeadas.some((ac) => ac.tipo === "GUARDAR_SEGUNDO_CEREBRO")
           ) {
             acoesMapeadas.push({
@@ -1065,6 +1195,13 @@ export async function consultarLalaUnificada(
                 anexo,
               },
             });
+          } else if (anexo && anexo.guardarCopiaNoSegundoCerebro === false) {
+            const idxSave = acoesMapeadas.findIndex(
+              (ac) => ac.tipo === "GUARDAR_SEGUNDO_CEREBRO"
+            );
+            if (idxSave >= 0 && acoesMapeadas.length > 1) {
+              acoesMapeadas.splice(idxSave, 1);
+            }
           }
 
           return {
