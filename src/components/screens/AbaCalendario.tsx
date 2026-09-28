@@ -356,6 +356,19 @@ export function AbaCalendario({
     return `${String(fimH).padStart(2, "0")}:${String(fimM).padStart(2, "0")}`;
   };
 
+  const calcularDuracaoEntreHoras = (
+    horaInicio?: string,
+    horaFim?: string,
+    fallback = 60
+  ): number => {
+    if (!horaInicio || !horaFim) return fallback;
+    const [h1, m1] = horaInicio.split(":").map(Number);
+    const [h2, m2] = horaFim.split(":").map(Number);
+    if (isNaN(h1) || isNaN(m1) || isNaN(h2) || isNaN(m2)) return fallback;
+    const diff = h2 * 60 + m2 - (h1 * 60 + m1);
+    return diff > 0 ? diff : fallback;
+  };
+
   // Consolida todos os eventos do App + Módulos + Google Agenda para o mês/ano ativo
   const todosEventosMes = useMemo<EventoCalendarioUnificado[]>(() => {
     const lista: EventoCalendarioUnificado[] = [];
@@ -440,7 +453,9 @@ export function AbaCalendario({
           ano: eg.ano,
           horario: eg.horaInicio,
           horaFim: eg.horaFim,
-          duracaoMin: eg.duracaoMin,
+          duracaoMin:
+            eg.duracaoMin ||
+            calcularDuracaoEntreHoras(eg.horaInicio, eg.horaFim, 60),
           titulo: eg.titulo,
           descricao: eg.descricao,
           ehTarefa: eg.titulo.startsWith("[Tarefa]") || eg.titulo.startsWith("☑"),
@@ -896,9 +911,7 @@ export function AbaCalendario({
     const horaFinal = diaInteiroModal ? "08:00" : novaHora || "14:00";
     const duracaoFinal = diaInteiroModal
       ? 480
-      : tipoItemModal === "tarefa"
-      ? 30
-      : Number(novaDuracao) || 60;
+      : Number(novaDuracao) || (tipoItemModal === "tarefa" ? 15 : 60);
 
     const novoId = Date.now();
     const novo: Compromisso = {
@@ -1030,7 +1043,8 @@ export function AbaCalendario({
         mes: mesAtivo,
         diaMes: diaSelecionado,
         horaInicio: diaInteiroModal ? "08:00" : novaHora,
-        duracaoMin: tipoItemModal === "tarefa" ? 30 : novaDuracao,
+        duracaoMin:
+          Number(novaDuracao) || (tipoItemModal === "tarefa" ? 15 : 60),
         diaInteiro: diaInteiroModal,
         categoria: novaCat,
         targetAccountEmail: contaAlvo,
@@ -1817,7 +1831,10 @@ export function AbaCalendario({
           >
             <button
               type="button"
-              onClick={() => setTipoItemModal("evento")}
+              onClick={() => {
+                setTipoItemModal("evento");
+                if (novaDuracao === 15) setNovaDuracao(60);
+              }}
               className="px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
               style={{
                 background:
@@ -1829,7 +1846,10 @@ export function AbaCalendario({
             </button>
             <button
               type="button"
-              onClick={() => setTipoItemModal("tarefa")}
+              onClick={() => {
+                setTipoItemModal("tarefa");
+                if (novaDuracao === 60) setNovaDuracao(15);
+              }}
               className="px-2.5 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
               style={{
                 background:
@@ -1873,6 +1893,25 @@ export function AbaCalendario({
               borderColor: t.border,
             }}
           />
+
+          <select
+            value={novaDuracao}
+            onChange={(e) => setNovaDuracao(Number(e.target.value))}
+            className="px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+            style={{
+              background: t.bg,
+              color: t.text,
+              borderColor: t.border,
+            }}
+            title="Duração proporcional na agenda"
+          >
+            <option value={15}>15 min</option>
+            <option value={30}>30 min</option>
+            <option value={45}>45 min</option>
+            <option value={60}>1h</option>
+            <option value={90}>1h30</option>
+            <option value={120}>2h</option>
+          </select>
 
           <select
             value={novaCat}
@@ -2137,18 +2176,18 @@ export function AbaCalendario({
                 })}
               </div>
 
-              {/* Grade Horária Semanal */}
-              <div className="max-h-[520px] overflow-y-auto space-y-1 pr-1">
+              {/* Grade Horária Semanal Proporcional (1h = 64px, 15min = 16px = 1/4 do slot) */}
+              <div className="max-h-[560px] overflow-y-auto pr-1">
                 {horasGrade.map((hora) => {
                   const prefixoHora = String(hora).padStart(2, "0");
                   return (
                     <div
                       key={hora}
-                      className="grid grid-cols-8 gap-1.5 min-h-[54px] border-b py-1"
+                      className="grid grid-cols-8 gap-1.5 h-[64px] border-b relative"
                       style={{ borderColor: `${t.border}80` }}
                     >
                       <div
-                        className="text-[11px] font-mono-num font-semibold flex items-start justify-center pt-1"
+                        className="text-[11px] font-mono-num font-semibold flex items-start justify-center pt-1 select-none"
                         style={{ color: t.textSoft }}
                       >
                         {prefixoHora}:00
@@ -2159,7 +2198,7 @@ export function AbaCalendario({
                           return (
                             <div
                               key={cIdx}
-                              className="rounded-lg opacity-20"
+                              className="rounded-lg opacity-20 h-full"
                               style={{ background: t.bg }}
                             />
                           );
@@ -2176,27 +2215,64 @@ export function AbaCalendario({
                         return (
                           <div
                             key={cIdx}
-                            onClick={() =>
+                            onClick={(e) => {
+                              const rect =
+                                e.currentTarget.getBoundingClientRect();
+                              const relY = Math.max(
+                                0,
+                                Math.min(63, e.clientY - rect.top)
+                              );
+                              const quarto = Math.floor((relY / 64) * 4) * 15;
+                              const minStr = String(quarto).padStart(2, "0");
                               abrirModalCriacaoRapida(
                                 dia,
-                                `${prefixoHora}:00`,
-                                "evento"
-                              )
-                            }
-                            className="rounded-xl p-1 space-y-1 cursor-pointer transition-colors hover:opacity-90"
+                                `${prefixoHora}:${minStr}`,
+                                tipoItemModal
+                              );
+                            }}
+                            className="rounded-lg relative cursor-pointer transition-colors hover:opacity-90 overflow-visible"
                             style={{
                               background:
                                 dia === diaSelecionado
                                   ? `${t.action}08`
                                   : t.bg,
                             }}
-                            title={`Clique para criar Evento ou Tarefa no dia ${dia} às ${prefixoHora}:00`}
+                            title={`Clique para agendar no dia ${dia} (${prefixoHora}:00, :15, :30 ou :45)`}
                           >
-                            {evsSlot.map((ev) => {
+                            {/* Linha guia de 30 min no meio da hora */}
+                            <div
+                              className="absolute left-0 right-0 top-1/2 border-t border-dashed pointer-events-none opacity-35"
+                              style={{ borderColor: t.border }}
+                            />
+
+                            {evsSlot.map((ev, evIdx) => {
                               const corCat = getCorHexCategoria(
                                 ev.categoria,
                                 ev.corCustomHex
                               );
+                              const minInicio =
+                                parseInt(
+                                  (ev.horario || "09:00").split(":")[1] || "0",
+                                  10
+                                ) || 0;
+                              const durMin = Math.max(
+                                10,
+                                ev.duracaoMin ||
+                                  calcularDuracaoEntreHoras(
+                                    ev.horario,
+                                    ev.horaFim,
+                                    60
+                                  )
+                              );
+                              const topPct = (minInicio / 60) * 100;
+                              const heightPx = Math.max(
+                                15,
+                                Math.round((durMin / 60) * 64)
+                              );
+                              const totalMesmoSlot = evsSlot.length;
+                              const widthPct = 100 / totalMesmoSlot;
+                              const leftPct = evIdx * widthPct;
+
                               return (
                                 <div
                                   key={ev.id}
@@ -2204,15 +2280,24 @@ export function AbaCalendario({
                                     e.stopPropagation();
                                     abrirEventoNoCalendario(ev);
                                   }}
-                                  className="p-1 rounded-lg text-[10px] font-bold leading-tight truncate"
+                                  className="absolute z-10 px-1 rounded-md text-[10px] font-bold leading-none flex items-center truncate shadow-2xs"
                                   style={{
-                                    background: `${corCat}24`,
+                                    top: `${topPct}%`,
+                                    height: `${heightPx}px`,
+                                    left: `${leftPct}%`,
+                                    width: `${widthPct}%`,
+                                    background:
+                                      t.mode === "light"
+                                        ? `${corCat}26`
+                                        : `${corCat}38`,
                                     color: corCat,
                                     borderLeft: `3px solid ${corCat}`,
                                   }}
-                                  title={`${ev.horario} — ${ev.titulo}`}
+                                  title={`${ev.horario}${
+                                    ev.horaFim ? `–${ev.horaFim}` : ""
+                                  } (${durMin} min) — ${ev.titulo}`}
                                 >
-                                  {ev.titulo}
+                                  <span className="truncate">{ev.titulo}</span>
                                 </div>
                               );
                             })}
@@ -2226,96 +2311,372 @@ export function AbaCalendario({
             </div>
           )}
 
-          {/* MODO 3: VISÃO DIÁRIA HORA A HORA (ESTILO GOOGLE AGENDA) */}
+          {/* MODO 3: VISÃO DIÁRIA PROPORCIONAL AO TEMPO REAL (15 MIN = 1/4 DA HORA, 30 MIN = 1/2, 60 MIN = 1 HORA) */}
           {visao === "dia" && (
             <div className="space-y-3">
-              <div className="flex items-center justify-between border-b pb-2.5" style={{ borderColor: t.border }}>
+              <div
+                className="flex items-center justify-between border-b pb-2.5 flex-wrap gap-2"
+                style={{ borderColor: t.border }}
+              >
                 <div>
-                  <span className="text-xs font-bold uppercase" style={{ color: t.action }}>
-                    Visão Diária Detalhada
+                  <span
+                    className="text-xs font-bold uppercase"
+                    style={{ color: t.action }}
+                  >
+                    Visão Diária Proporcional (Escala de 15 min)
                   </span>
                   <h3 className="text-base font-bold" style={{ color: t.text }}>
-                    {DIAS_SEMANA_CURTO[(diaSelecionado + offsetInicioMes - 1) % 7]},{" "}
-                    {diaSelecionado} de {NOMES_MESES[mesAtivo - 1]} de {anoAtivo}
+                    {
+                      DIAS_SEMANA_CURTO[
+                        (diaSelecionado + offsetInicioMes - 1) % 7
+                      ]
+                    }
+                    , {diaSelecionado} de {NOMES_MESES[mesAtivo - 1]} de{" "}
+                    {anoAtivo}
                   </h3>
                 </div>
-                <span
-                  className="text-xs font-mono-num font-bold px-3 py-1 rounded-xl"
-                  style={{ background: t.cardSubtle, color: t.primary }}
-                >
-                  {eventosDoDiaSelecionado.length} evento(s)
-                </span>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="text-[11px] font-mono-num px-2.5 py-1 rounded-xl border"
+                    style={{
+                      background: t.bg,
+                      color: t.textSoft,
+                      borderColor: t.border,
+                    }}
+                  >
+                    15 min = 1/4 da hora · 30 min = 1/2
+                  </span>
+                  <span
+                    className="text-xs font-mono-num font-bold px-3 py-1 rounded-xl"
+                    style={{ background: t.cardSubtle, color: t.primary }}
+                  >
+                    {eventosDoDiaSelecionado.length} evento(s)
+                  </span>
+                </div>
               </div>
 
-              <div className="max-h-[520px] overflow-y-auto space-y-1.5 pr-1">
-                {horasGrade.map((hora) => {
-                  const prefixoHora = String(hora).padStart(2, "0");
-                  const evsHora = eventosDoDiaSelecionado.filter((e) => {
-                    const hEv = parseInt(
-                      (e.horario || "09:00").split(":")[0],
-                      10
-                    );
-                    return hEv === hora;
-                  });
+              {/* RÉGUA PROPORCIONAL CONTÍNUA DO DIA: 1 HORA = 96px (4 FAIXAS DE 15 MIN = 24px CADA) */}
+              {(() => {
+                const HORA_ALTURA_PX = 96; // 96px por hora => 24px a cada 15 min (1.6px por minuto)
+                const PX_POR_MIN = HORA_ALTURA_PX / 60;
+                const horaMinimaGrade = horasGrade[0] ?? 7;
+                const totalHoras = horasGrade.length;
+                const alturaCanvasDiaPx = totalHoras * HORA_ALTURA_PX;
 
-                  return (
+                // Prepara eventos do dia com minutos de início/fim e colunas caso haja sobreposição no mesmo horário
+                const evsPosicionados = eventosDoDiaSelecionado
+                  .map((ev) => {
+                    const [hh, mm] = (ev.horario || "09:00")
+                      .split(":")
+                      .map(Number);
+                    const inicioMin =
+                      (isNaN(hh) ? 9 : hh) * 60 + (isNaN(mm) ? 0 : mm);
+                    const durMin = Math.max(
+                      10,
+                      ev.duracaoMin ||
+                        calcularDuracaoEntreHoras(ev.horario, ev.horaFim, 60)
+                    );
+                    const fimMin = inicioMin + durMin;
+                    return { ev, inicioMin, fimMin, durMin };
+                  })
+                  .sort(
+                    (a, b) =>
+                      a.inicioMin - b.inicioMin || b.durMin - a.durMin
+                  );
+
+                return (
+                  <div className="max-h-[580px] overflow-y-auto pr-1 no-scrollbar">
                     <div
-                      key={hora}
-                      onClick={() =>
-                        abrirModalCriacaoRapida(
-                          diaSelecionado,
-                          `${prefixoHora}:00`,
-                          "evento"
-                        )
-                      }
-                      className="grid grid-cols-[60px_1fr] gap-3 items-start p-2 rounded-2xl border transition-colors cursor-pointer"
+                      className="relative w-full rounded-2xl border overflow-hidden select-none"
                       style={{
-                        background: evsHora.length > 0 ? `${t.cardSubtle}` : t.bg,
+                        height: `${alturaCanvasDiaPx}px`,
+                        background: t.bg,
                         borderColor: t.border,
                       }}
                     >
-                      <span
-                        className="text-xs font-mono-num font-bold pt-1"
-                        style={{ color: t.textSoft }}
-                      >
-                        {prefixoHora}:00
-                      </span>
+                      {/* 1. FAIXAS DE HORA (96px) E SUB-FAIXAS CLICÁVEIS DE 15 MIN (24px CADA) */}
+                      {horasGrade.map((hora, idxHora) => {
+                        const prefixoHora = String(hora).padStart(2, "0");
+                        const topHoraPx = idxHora * HORA_ALTURA_PX;
 
-                      <div className="space-y-1.5">
-                        {evsHora.length === 0 ? (
-                          <p
-                            className="text-[11px] italic pt-1 flex items-center gap-1"
-                            style={{ color: `${t.textSoft}80` }}
+                        return (
+                          <div
+                            key={hora}
+                            className="absolute left-0 right-0 border-b"
+                            style={{
+                              top: `${topHoraPx}px`,
+                              height: `${HORA_ALTURA_PX}px`,
+                              borderColor: t.border,
+                            }}
                           >
-                            <Plus size={11} /> Clique para criar Evento ou Tarefa às {prefixoHora}:00
-                          </p>
-                        ) : (
-                          evsHora.map((ev) => {
-                            const corCat = getCorHexCategoria(
-                              ev.categoria,
-                              ev.corCustomHex
-                            );
-                            return (
-                              <div
-                                key={ev.id}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  abrirEventoNoCalendario(ev);
-                                }}
-                                className="p-2.5 rounded-xl flex items-center justify-between gap-2"
-                                style={{
-                                  background: `${corCat}18`,
-                                  borderLeft: `4px solid ${corCat}`,
-                                }}
+                            {/* Coluna Esquerda: Rótulo da Hora e Marcas :15, :30, :45 */}
+                            <div
+                              className="absolute left-0 top-0 bottom-0 w-[62px] border-r flex flex-col justify-between py-1 px-2 pointer-events-none"
+                              style={{
+                                borderColor: `${t.border}90`,
+                                background: `${t.card}90`,
+                              }}
+                            >
+                              <span
+                                className="text-xs font-mono-num font-bold leading-none"
+                                style={{ color: t.text }}
                               >
-                                <div className="min-w-0">
-                                  <div className="flex items-center gap-2">
+                                {prefixoHora}:00
+                              </span>
+                              <span
+                                className="text-[9px] font-mono-num leading-none opacity-65"
+                                style={{ color: t.textSoft }}
+                              >
+                                {prefixoHora}:30
+                              </span>
+                              <span className="text-[9px] opacity-0">.</span>
+                            </div>
+
+                            {/* 4 Sub-faixas de 15 minutos (:00, :15, :30, :45) — cada uma ocupa exatos 25% (24px) da hora */}
+                            {[0, 15, 30, 45].map((minutoQuarto, qIdx) => {
+                              const minStr = String(minutoQuarto).padStart(
+                                2,
+                                "0"
+                              );
+                              const horaQuartoStr = `${prefixoHora}:${minStr}`;
+                              const quartoInicioMin = hora * 60 + minutoQuarto;
+                              const quartoFimMin = quartoInicioMin + 15;
+                              const ocupadoNesseQuarto = evsPosicionados.some(
+                                (item) =>
+                                  item.inicioMin < quartoFimMin &&
+                                  item.fimMin > quartoInicioMin
+                              );
+
+                              return (
+                                <div
+                                  key={minutoQuarto}
+                                  onClick={() =>
+                                    abrirModalCriacaoRapida(
+                                      diaSelecionado,
+                                      horaQuartoStr,
+                                      tipoItemModal
+                                    )
+                                  }
+                                  className="group absolute left-[62px] right-0 flex items-center px-3 cursor-pointer transition-colors hover:bg-black/5"
+                                  style={{
+                                    top: `${qIdx * 24}px`,
+                                    height: "24px",
+                                    borderTop:
+                                      qIdx === 0
+                                        ? "none"
+                                        : qIdx === 2
+                                        ? `1px dashed ${t.border}`
+                                        : `1px dotted ${t.border}75`,
+                                  }}
+                                  title={`Clique para criar Evento ou Tarefa às ${horaQuartoStr}`}
+                                >
+                                  {!ocupadoNesseQuarto && (
+                                    <span
+                                      className={`text-[10px] italic flex items-center gap-1 transition-opacity ${
+                                        qIdx === 0
+                                          ? "opacity-55 group-hover:opacity-100"
+                                          : "opacity-0 group-hover:opacity-90"
+                                      }`}
+                                      style={{ color: t.textSoft }}
+                                    >
+                                      <Plus size={10} />{" "}
+                                      {qIdx === 0
+                                        ? `Clique para criar às ${horaQuartoStr}`
+                                        : `+ Agendar às ${horaQuartoStr}`}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+
+                      {/* 2. BLOCOS PROPORCIONAIS DE EVENTOS E TAREFAS (15 min = 24px = 1/4 da hora; 30 min = 48px = 1/2; 60 min = 96px = 1h) */}
+                      {evsPosicionados.map((item, idx) => {
+                        const { ev, inicioMin, fimMin, durMin } = item;
+                        const corCat = getCorHexCategoria(
+                          ev.categoria,
+                          ev.corCustomHex
+                        );
+                        const offsetMinDesdeTopo = Math.max(
+                          0,
+                          inicioMin - horaMinimaGrade * 60
+                        );
+                        const topPx = offsetMinDesdeTopo * PX_POR_MIN;
+                        // Altura estritamente proporcional aos minutos reais (15 min = 24px, 30 min = 48px, 60 min = 96px)
+                        const heightPx = Math.max(
+                          20,
+                          Math.round(durMin * PX_POR_MIN)
+                        );
+
+                        // Verifica sobreposição com outros eventos no mesmo intervalo para dividir largura lado a lado
+                        const concorrentes = evsPosicionados.filter(
+                          (outro) =>
+                            outro.inicioMin < fimMin &&
+                            outro.fimMin > inicioMin
+                        );
+                        const colIdx = Math.max(
+                          0,
+                          concorrentes.findIndex((c) => c.ev.id === ev.id)
+                        );
+                        const totalCols = Math.max(1, concorrentes.length);
+                        const larguraPct = 100 / totalCols;
+                        const leftPct = colIdx * larguraPct;
+
+                        const isCurto = durMin <= 20; // 15 min cabe em 1 linha compacta ocupando apenas 1/4 da hora
+                        const isMedio = durMin > 20 && durMin <= 45;
+
+                        return (
+                          <div
+                            key={ev.id || idx}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              abrirEventoNoCalendario(ev);
+                            }}
+                            style={{
+                              top: `${topPx + 1}px`,
+                              height: `${Math.max(18, heightPx - 2)}px`,
+                              left: `calc(66px + (100% - 74px) * ${
+                                leftPct / 100
+                              })`,
+                              width: `calc((100% - 74px) * ${
+                                larguraPct / 100
+                              } - 2px)`,
+                              background:
+                                t.mode === "light"
+                                  ? `${corCat}22`
+                                  : `${corCat}35`,
+                              borderColor: corCat,
+                              borderLeftWidth: "4px",
+                            }}
+                            className="absolute z-10 rounded-xl border px-2.5 overflow-hidden cursor-pointer shadow-2xs transition-opacity hover:opacity-95 flex items-center"
+                            title={`${ev.horario}${
+                              ev.horaFim ? `–${ev.horaFim}` : ""
+                            } (${durMin} min) · ${ev.titulo}`}
+                          >
+                            {isCurto ? (
+                              /* Bloco de 15 min: compacto em linha única para ocupar apenas 1/4 (24px) da hora e deixar os outros 45 min livres! */
+                              <div className="flex items-center justify-between gap-2 w-full min-w-0 leading-none">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span
+                                    className="text-[10px] font-mono-num font-bold shrink-0"
+                                    style={{ color: corCat }}
+                                  >
+                                    {ev.horario}
+                                    {ev.horaFim ? `–${ev.horaFim}` : ""}
+                                  </span>
+                                  <span
+                                    className="text-xs font-bold truncate"
+                                    style={{
+                                      color: t.text,
+                                      textDecoration: ev.concluido
+                                        ? "line-through"
+                                        : "none",
+                                    }}
+                                  >
+                                    {ev.titulo}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <span
+                                    className="text-[9px] font-mono-num font-bold px-1.5 py-0.5 rounded"
+                                    style={{
+                                      background: t.card,
+                                      color: corCat,
+                                    }}
+                                  >
+                                    {durMin}m
+                                  </span>
+                                  <span
+                                    className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded hidden sm:inline"
+                                    style={{
+                                      background: t.card,
+                                      color: corCat,
+                                    }}
+                                  >
+                                    {ev.categoria}
+                                  </span>
+                                  {ev.origem === "gcal" && (
+                                    <span
+                                      className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5"
+                                      style={{
+                                        background: t.card,
+                                        color: t.action,
+                                      }}
+                                    >
+                                      <Cloud size={9} /> Google
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : isMedio ? (
+                              /* Bloco de 30 a 45 min: ocupa 2/4 (48px) ou 3/4 (72px) da hora */
+                              <div className="w-full py-1 flex flex-col justify-center min-w-0">
+                                <div className="flex items-center justify-between gap-1.5">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span
+                                      className="text-[11px] font-mono-num font-bold shrink-0"
+                                      style={{ color: corCat }}
+                                    >
+                                      {ev.horario}
+                                      {ev.horaFim ? `–${ev.horaFim}` : ""} (
+                                      {durMin}m)
+                                    </span>
+                                    <span
+                                      className="text-xs font-bold truncate"
+                                      style={{
+                                        color: t.text,
+                                        textDecoration: ev.concluido
+                                          ? "line-through"
+                                          : "none",
+                                      }}
+                                    >
+                                      {ev.titulo}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <span
+                                      className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded"
+                                      style={{
+                                        background: t.card,
+                                        color: corCat,
+                                      }}
+                                    >
+                                      {ev.categoria}
+                                    </span>
+                                    {ev.origem === "gcal" && (
+                                      <span
+                                        className="text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1"
+                                        style={{
+                                          background: t.card,
+                                          color: t.action,
+                                        }}
+                                      >
+                                        <Cloud size={9} /> Google
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <p
+                                  className="text-[10px] truncate mt-0.5"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  {ev.subtitulo}
+                                </p>
+                              </div>
+                            ) : (
+                              /* Bloco de 60 min ou mais (1h = 96px, 2h = 192px): ocupa a(s) hora(s) inteira(s) proporcionalmente */
+                              <div className="w-full h-full py-2 flex flex-col justify-between min-w-0">
+                                <div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
                                     <span
                                       className="text-xs font-mono-num font-bold"
                                       style={{ color: corCat }}
                                     >
                                       {ev.horario}
-                                      {ev.horaFim ? `–${ev.horaFim}` : ""}
+                                      {ev.horaFim ? `–${ev.horaFim}` : ""} (
+                                      {durMin} min)
                                     </span>
                                     <span
                                       className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded"
@@ -2339,27 +2700,32 @@ export function AbaCalendario({
                                     )}
                                   </div>
                                   <p
-                                    className="text-xs sm:text-sm font-bold mt-0.5"
-                                    style={{ color: t.text }}
+                                    className="text-xs sm:text-sm font-bold mt-1 truncate"
+                                    style={{
+                                      color: t.text,
+                                      textDecoration: ev.concluido
+                                        ? "line-through"
+                                        : "none",
+                                    }}
                                   >
                                     {ev.titulo}
                                   </p>
-                                  <p
-                                    className="text-[11px]"
-                                    style={{ color: t.textSoft }}
-                                  >
-                                    {ev.subtitulo}
-                                  </p>
                                 </div>
+                                <p
+                                  className="text-[11px] truncate"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  {ev.subtitulo}
+                                </p>
                               </div>
-                            );
-                          })
-                        )}
-                      </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -2941,12 +3307,14 @@ export function AbaCalendario({
                     Duração
                   </label>
                   <select
-                    disabled={diaInteiroModal || tipoItemModal === "tarefa"}
+                    disabled={diaInteiroModal}
                     value={novaDuracao}
                     onChange={(e) => setNovaDuracao(Number(e.target.value))}
                     className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num outline-none border disabled:opacity-40"
                     style={{ background: t.bg, color: t.text, borderColor: t.border }}
                   >
+                    <option value={5}>5 min</option>
+                    <option value={10}>10 min</option>
                     <option value={15}>15 min</option>
                     <option value={30}>30 min</option>
                     <option value={45}>45 min</option>

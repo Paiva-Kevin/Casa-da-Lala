@@ -512,7 +512,7 @@ export default function App() {
               "O arquivo app_data.json no Google Drive possui uma data de modificação mais recente do que os dados salvos localmente neste dispositivo. Escolha qual versão deseja manter:",
           });
           setSyncModalOpen(true);
-        } else {
+        } else if (!silentIfNoChanges) {
           const pendingState = await updateSyncMetadata({
             syncStatus: "pending",
             driveFileId: remoteFile.id,
@@ -527,6 +527,14 @@ export default function App() {
               "Confirme a atualização do arquivo existente 'app_data.json' no seu Google Drive com os dados locais mais recentes deste dispositivo.",
           });
           setSyncModalOpen(true);
+        } else {
+          // Silent startup check: local data is already up to date with Drive
+          const synced = await updateSyncMetadata({
+            syncStatus: "synced",
+            driveFileId: remoteFile.id,
+            lastError: null,
+          });
+          setSyncMeta(synced);
         }
       } catch (err: unknown) {
         const msg =
@@ -2337,8 +2345,13 @@ export default function App() {
                 >
                   {tituloAbaAtiva}
                 </h2>
-                <p style={{ color: t.textSoft }} className="text-[11px] truncate">
-                  Dom, 27 Set · Prontidão {prontidaoInfo.scoreTotal}% · Livre R${" "}
+                <p style={{ color: t.textSoft }} className="text-[11px] truncate capitalize">
+                  {new Date().toLocaleDateString("pt-BR", {
+                    weekday: "short",
+                    day: "2-digit",
+                    month: "short",
+                  }).replace(".", "")}{" "}
+                  · Prontidão {prontidaoInfo.scoreTotal}% · Livre R${" "}
                   {dinheiroLivreInfo.livreHoje.toFixed(0)}
                 </p>
               </div>

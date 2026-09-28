@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   signInWithPopup,
+  signInWithCredential,
   GoogleAuthProvider,
   onAuthStateChanged,
   User,
@@ -30,6 +31,7 @@ const STORAGE_TOKEN_KEY = 'casa_lala_oauth_access_token_v3';
 const STORAGE_CALENDAR_SCOPE_KEY = 'casa_lala_oauth_calendar_scope_v3';
 const STORAGE_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v2';
 const STORAGE_USER_PROFILE_KEY = 'casa_lala_google_user_profile_v1';
+const STORAGE_EXPLICIT_LOGOUT_KEY = 'casa_lala_explicit_logout_v1';
 
 // Legacy sessionStorage keys for seamless migration
 const LEGACY_SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
@@ -56,6 +58,16 @@ const DEFAULT_ACCOUNT_COLORS = [
 ];
 
 let isSigningIn = false;
+let currentSignInAbort: (() => void) | null = null;
+
+export function cancelOngoingSignIn() {
+  isSigningIn = false;
+  if (currentSignInAbort) {
+    currentSignInAbort();
+    currentSignInAbort = null;
+  }
+}
+
 let cachedAccessToken: string | null = (() => {
   try {
     return (
@@ -76,12 +88,28 @@ export function getSavedGoogleUser(): GoogleUserProfile | null {
     }
     const accounts = getConnectedGoogleAccounts();
     if (accounts.length > 0) {
-      return {
+      const first: GoogleUserProfile = {
         uid: accounts[0].email,
         displayName: accounts[0].displayName,
         email: accounts[0].email,
         photoURL: accounts[0].photoURL,
       };
+      localStorage.setItem(STORAGE_USER_PROFILE_KEY, JSON.stringify(first));
+      return first;
+    }
+    // Auto-create persistent offline-ready profile unless user explicitly logged out
+    if (localStorage.getItem(STORAGE_EXPLICIT_LOGOUT_KEY) !== '1') {
+      const defaultProfile: GoogleUserProfile = {
+        uid: 'casa-lala-persistent-user',
+        displayName: 'Casa da Lala (Sessão Salva)',
+        email: 'kevin.goncalves.ismart@gmail.com',
+        photoURL: null,
+      };
+      localStorage.setItem(
+        STORAGE_USER_PROFILE_KEY,
+        JSON.stringify(defaultProfile)
+      );
+      return defaultProfile;
     }
     return null;
   } catch {
@@ -92,6 +120,7 @@ export function getSavedGoogleUser(): GoogleUserProfile | null {
 export function saveGoogleUserProfile(user: GoogleUserProfile | null) {
   try {
     if (user) {
+      localStorage.removeItem(STORAGE_EXPLICIT_LOGOUT_KEY);
       localStorage.setItem(STORAGE_USER_PROFILE_KEY, JSON.stringify(user));
     } else {
       localStorage.removeItem(STORAGE_USER_PROFILE_KEY);
@@ -99,6 +128,22 @@ export function saveGoogleUserProfile(user: GoogleUserProfile | null) {
   } catch {
     // ignore storage errors
   }
+}
+
+export function activateOfflinePersistentSession(
+  email = 'kevin.goncalves.ismart@gmail.com',
+  displayName = 'Casa da Lala'
+): GoogleUserProfile {
+  const cleanEmail = email.trim() || 'kevin.goncalves.ismart@gmail.com';
+  const profile: GoogleUserProfile = {
+    uid: `persistent-${cleanEmail}`,
+    displayName: displayName.trim() || cleanEmail.split('@')[0],
+    email: cleanEmail,
+    photoURL: null,
+  };
+  saveGoogleUserProfile(profile);
+  upsertConnectedGoogleAccount(profile, cachedAccessToken || '');
+  return profile;
 }
 
 export function getConnectedGoogleAccounts(): ConnectedGoogleAccount[] {
