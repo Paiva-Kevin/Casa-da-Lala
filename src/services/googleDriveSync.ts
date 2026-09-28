@@ -9,10 +9,11 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 import { AppBackupPayload } from './offlineStorage';
 
-// Required Google Drive OAuth 2.0 scopes
+// Required Google Drive & Google Calendar OAuth 2.0 scopes
 export const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.appdata',
+  'https://www.googleapis.com/auth/calendar.events',
 ];
 
 const BACKUP_FILE_NAME = 'app_data.json';
@@ -89,9 +90,37 @@ export const googleSignIn = async (): Promise<{
       },
       accessToken: cachedAccessToken,
     };
-  } catch (error) {
-    console.error('Erro no login com Google:', error);
-    throw error;
+  } catch (error: unknown) {
+    const errCode = (error as { code?: string })?.code || '';
+    const errMsg = error instanceof Error ? error.message : String(error);
+    if (
+      errCode === 'auth/popup-closed-by-user' ||
+      errCode === 'auth/cancelled-popup-request' ||
+      errMsg.includes('auth/popup-closed-by-user') ||
+      errMsg.includes('auth/cancelled-popup-request')
+    ) {
+      // User closed the popup window before completing sign-in — return null gracefully without throwing
+      return null;
+    }
+    if (
+      errCode === 'auth/popup-blocked' ||
+      errMsg.includes('auth/popup-blocked')
+    ) {
+      throw new Error(
+        'O navegador bloqueou a janela de login. Permita pop-ups para este site e tente novamente.'
+      );
+    }
+    if (
+      errCode === 'auth/unauthorized-domain' ||
+      errMsg.includes('auth/unauthorized-domain')
+    ) {
+      throw new Error(
+        `Domínio (${window.location.hostname}) não autorizado no Firebase Auth. Adicione-o em Firebase Console > Authentication > Settings > Authorized domains.`
+      );
+    }
+    throw new Error(
+      'Não foi possível concluir o login com o Google. Tente novamente.'
+    );
   } finally {
     isSigningIn = false;
   }

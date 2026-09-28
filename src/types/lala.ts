@@ -66,11 +66,32 @@ export interface AnexoLala {
   areaRepositorio?: ArquivoRepositorio["area"];
 }
 
+export interface ConfiguracaoCalendarioApp {
+  visaoPadrao: "dia" | "semana" | "mes" | "programacao";
+  horaInicioGrade: number; // ex: 6, 7, 8
+  mostrarAulasUERJ: boolean;
+  mostrarPets: boolean;
+  mostrarFinancas: boolean;
+  mostrarRadar: boolean;
+  mostrarGoogleAgenda: boolean;
+  sincronizarAoCriarNoGoogle: boolean;
+  coresCategorias: {
+    uerj: string;
+    trabalho: string;
+    pets: string;
+    financas: string;
+    saude: string;
+    pessoal: string;
+  };
+}
+
 export interface AcaoGovernanta {
   id: string;
   tipo:
     | "CRIAR_TAREFA"
+    | "AGENDAR_COMPROMISSO"
     | "REGISTRAR_GASTO"
+    | "REGISTRAR_RECEITA"
     | "ALIMENTAR_PETS"
     | "REGISTRAR_SRPE"
     | "GUARDAR_SEGUNDO_CEREBRO"
@@ -81,7 +102,14 @@ export interface AcaoGovernanta {
     | "ATUALIZAR_CONTAS_FINANCAS"
     | "ATUALIZAR_PETS"
     | "CRIAR_LISTA_COMPRAS"
-    | "ATUALIZAR_TREINO";
+    | "ATUALIZAR_TREINO"
+    | "ATUALIZAR_PROJETOS_TRABALHO"
+    | "ATUALIZAR_HABITOS"
+    | "ATUALIZAR_METAS_RADAR"
+    | "ATUALIZAR_PERFIL_CHECKIN"
+    | "ATUALIZAR_CHECKIN_SAUDE"
+    | "ATUALIZAR_PERFIL"
+    | "LIMPAR_DADOS_EXEMPLO";
   titulo: string;
   detalhe: string;
   executada: boolean;
@@ -92,6 +120,18 @@ export interface AcaoGovernanta {
     srpe?: number;
     areaNota?: ArquivoRepositorio["area"];
     anexo?: AnexoLala;
+    substituirExistentes?: boolean;
+    compromissos?: {
+      titulo: string;
+      hora: string;
+      duracaoMin?: number;
+      diaMes?: number;
+      mes?: number;
+      ano?: number;
+      local?: string;
+      categoria?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal";
+      sincronizarGoogle?: boolean;
+    }[];
     refeicoes?: {
       horario: string;
       nome: string;
@@ -117,6 +157,19 @@ export interface AcaoGovernanta {
       nome: string;
       saldoAtual: number;
     }[];
+    cartoesAjuste?: {
+      nome: string;
+      faturaAtual: number;
+      limiteTotal?: number;
+      vencimentoDia?: number;
+    }[];
+    petsAjuste?: {
+      nome: string;
+      racao?: string;
+      estoqueSaches?: number;
+      estoqueRacaoKg?: number;
+      proximaVet?: string;
+    }[];
     estoquePetsAjuste?: {
       estoqueSaches?: number;
       estoqueRacaoKg?: number;
@@ -131,6 +184,34 @@ export interface AcaoGovernanta {
         cargaKg: number;
         descansoSeg: number;
       }[];
+    };
+    projetos?: {
+      nome: string;
+      papel?: string;
+      tarefa: string;
+      prazo?: string;
+      prioridade?: "alta" | "média" | "baixa";
+    }[];
+    habitos?: {
+      titulo: string;
+      categoria?: "Saúde" | "Estudos" | "Casa & Pets" | "Mente";
+      metaTexto?: string;
+    }[];
+    metas?: {
+      titulo: string;
+      categoria?: string;
+      prazo?: string;
+      marcos?: string[];
+    }[];
+    perfilCheckin?: {
+      nomeUsuario?: string;
+      cursoUERJ?: string;
+      frentesTrabalho?: string;
+      horasSono?: number;
+      energiaFisica?: number;
+      focoMental?: number;
+      metaProteinaG?: number;
+      metaKcal?: number;
     };
   };
 }
@@ -210,10 +291,14 @@ export interface Compromisso {
   local?: string;
   cor: ColorTokenKey;
   aba: Exclude<TabId, "inicio">;
-  diaMes: number; // 1..30 (Setembro)
+  diaMes: number; // 1..31
+  mes?: number; // 1..12
+  ano?: number; // ex: 2026
   diaSemanaIdx: number; // 0=SEG .. 6=DOM
   notas?: string;
   gcalSynced?: boolean;
+  gcalEventId?: string;
+  categoriaCalendario?: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal";
   taskId?: number;
   concluido?: boolean;
 }

@@ -44,7 +44,7 @@ async function startServer() {
       });
 
       const systemInstruction = `Você é a Lala, a governanta pessoal de vida do aplicativo "Casa da Lala".
-Você é uma única inteligência completa, proativa e fluida: ao mesmo tempo executiva (registra gastos, tarefas, alimentação dos gatos, dieta, lista de compras, grade da UERJ, saldos bancários e treinos), acolhedora nos desabafos, criativa nos devaneios e estratégica nas orientações de rotina.
+Você é uma única inteligência completa, proativa e 100% fluida (NUNCA engessada): a usuária pode conversar com você a qualquer momento para preencher, cadastrar, alterar ou limpar qualquer informação do aplicativo apenas falando naturalmente, inclusive dizendo várias coisas na mesma mensagem!
 A usuária também pode te enviar ARQUIVOS ou IMAGENS (fotos de cardápio/dieta, PDF/foto da grade de horários da UERJ, comprovantes, fichas de treino, listas de mercado ou documentos para guardar no Segundo Cérebro).
 
 Contexto real da vida da usuária no app neste exato momento:
@@ -53,13 +53,21 @@ ${JSON.stringify(contextoApp || {})}
 Regras fundamentais:
 1. Responda sempre em Português do Brasil (pt-BR), de forma natural, calorosa, inteligente e prática.
 2. Classifique automaticamente em "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao".
-3. Se a usuária enviou um arquivo/imagem ou pediu ajuda com:
-   - DIETA / CARDÁPIO / NUTRIÇÃO: Interprete as refeições e ingredientes e inclua uma ação "ATUALIZAR_DIETA_E_COMPRAS" preenchendo "refeicoes" (horário, nome, descrição detalhada, proteinaG, kcal) E "itensCompras" (todos os alimentos necessários para comprar no mercado com quantidadeComprar, unidade e precoEstimado em R$).
-   - GRADE DA UERJ / DISCIPLINAS / HORÁRIOS DE AULA: Se ela subiu a grade ou pediu ajuda para montar/alterar a grade, inclua uma ação "ATUALIZAR_GRADE_UERJ" preenchendo "disciplinas" (nome, professor, horarioSala ex: "Seg/Qua 08h-10h · Sala 7012", aulasTotaisSemestre: 30, faltasMax: 7).
-   - FICHA DE TREINO: Inclua "ATUALIZAR_TREINO" com "fichaTreino" (nome, foco, exercicios).
-   - SALDO BANCÁRIO / CALIBRAÇÃO FINANCEIRA: Inclua "ATUALIZAR_CONTAS_FINANCAS" com "contasAjuste" (nome, saldoAtual).
-   - LISTA DE COMPRAS AVULSA: Inclua "CRIAR_LISTA_COMPRAS" com "itensCompras".
-   - GUARDAR ARQUIVO / IMAGEM / NOTA: Sempre que houver um anexo ou pedido de guardar, inclua também uma ação "GUARDAR_SEGUNDO_CEREBRO" (com areaNota: "UERJ" | "Artigos" | "CDT & RCR" | "Casa & Pets" | "Finanças" | "Pessoal") para salvar o arquivo no repositório.
+3. Sempre que a usuária mencionar dados da vida dela (mesmo em tom de conversa livre), extraia TODAS as ações correspondentes em "acoesPropostas" usando os dados EXATOS que ela falou (nunca invente matérias ou dados fixos se ela especificou os dela):
+   - LIMPAR / ZERAR DADOS DE EXEMPLO: Se ela pedir para limpar o app, apagar dados de exemplo ou começar do zero, inclua "LIMPAR_DADOS_EXEMPLO".
+   - COMPROMISSOS / AGENDA / GOOGLE AGENDA: Se ela mencionar qualquer evento, aula avulsa, consulta, reunião ou compromisso com dia/horário, inclua "AGENDAR_COMPROMISSO" preenchendo "compromissos" (titulo, hora no formato "HH:MM", duracaoMin, diaMes 1..31, mes 1..12, ano 2026, local, categoria: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal", sincronizarGoogle: true).
+   - TAREFAS / PENDÊNCIAS: Inclua "CRIAR_TAREFA" com "texto" para cada tarefa mencionada.
+   - GASTOS OU RECEITAS: Para despesas use "REGISTRAR_GASTO" (valor, categoriaGasto, texto). Para ganhos/salário/bolsa/pix recebido use "REGISTRAR_RECEITA" (valor, texto).
+   - SALDO BANCÁRIO E CARTÕES DE CRÉDITO: Se ela disser o saldo de alguma conta ou valor de fatura/limite de cartão, inclua "ATUALIZAR_CONTAS_FINANCAS" com "contasAjuste" (nome, saldoAtual) e/ou "cartoesAjuste" (nome, faturaAtual, limiteTotal, vencimentoDia).
+   - GRADE DA UERJ / DISCIPLINAS: Se ela falar suas matérias, professores ou horários (ou subir arquivo da grade), inclua "ATUALIZAR_GRADE_UERJ" com "disciplinas" (nome, professor, horarioSala, aulasTotaisSemestre, faltasMax) e defina "substituirExistentes": true se for a grade toda ou false se estiver apenas adicionando uma matéria.
+   - PROJETOS DE TRABALHO (CDT, RCR, IC, etc.): Se ela falar de projetos ou entregáveis do trabalho, inclua "ATUALIZAR_PROJETOS_TRABALHO" com "projetos" (nome, papel, tarefa, prazo, prioridade).
+   - DIETA / CARDÁPIO / LISTA DE COMPRAS: Se ela falar o que come nas refeições ou subir dieta, inclua "ATUALIZAR_DIETA_E_COMPRAS" com "refeicoes" e "itensCompras". Se falar apenas itens para comprar no mercado/petshop, inclua "CRIAR_LISTA_COMPRAS" com "itensCompras".
+   - PETS (NINA, TOBIAS OU OUTROS PETS): Se falar sobre estoque de sachês/ração, nomes dos pets, veterinário ou vacinas, inclua "ATUALIZAR_PETS" com "petsAjuste" (nome, racao, estoqueSaches, estoqueRacaoKg, proximaVet) e/ou "estoquePetsAjuste". Se disser que alimentou os pets agora, inclua "ALIMENTAR_PETS".
+   - HÁBITOS DIÁRIOS: Se quiser criar ou acompanhar hábitos (ex: beber água, ler, creatina, alongar), inclua "ATUALIZAR_HABITOS" com "habitos" (titulo, categoria, metaTexto).
+   - METAS: Se falar de objetivos ou metas do semestre/mês, inclua "ATUALIZAR_METAS_RADAR" com "metas" (titulo, categoria, prazo, marcos).
+   - PERFIL, SONO & PRONTIDÃO: Se falar quantas horas dormiu, como está a energia/foco, seu nome, curso ou metas de proteína/kcal, inclua "ATUALIZAR_PERFIL_CHECKIN" com "perfilCheckin".
+   - FICHA DE TREINO: Se falar seus exercícios/séries ou subir treino, inclua "ATUALIZAR_TREINO" com "fichaTreino".
+   - GUARDAR ARQUIVO / NOTA: Sempre que houver anexo ou pedido de salvar nota/ideia, inclua "GUARDAR_SEGUNDO_CEREBRO".
 4. Se ela estiver indecisa entre opções ou pedir conselho, preencha "matrizDecisao" com Cenário A, Cenário B e seu Veredito baseado na Prontidão Física e no Dinheiro Livre Hoje.`;
 
       // Build multimodal contents array
@@ -94,7 +102,7 @@ Regras fundamentais:
       parts.push({ text: promptFinal });
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.8-flash",
         contents: parts,
         config: {
           systemInstruction,
@@ -135,7 +143,7 @@ Regras fundamentais:
                     tipo: {
                       type: Type.STRING,
                       description:
-                        "CRIAR_TAREFA | REGISTRAR_GASTO | ALIMENTAR_PETS | REGISTRAR_SRPE | GUARDAR_SEGUNDO_CEREBRO | ALIVIAR_AGENDA_HOJE | ATIVAR_MODO_SOS | ATUALIZAR_DIETA_E_COMPRAS | ATUALIZAR_GRADE_UERJ | ATUALIZAR_CONTAS_FINANCAS | ATUALIZAR_PETS | CRIAR_LISTA_COMPRAS | ATUALIZAR_TREINO",
+                        "CRIAR_TAREFA | AGENDAR_COMPROMISSO | REGISTRAR_GASTO | REGISTRAR_RECEITA | ALIMENTAR_PETS | REGISTRAR_SRPE | GUARDAR_SEGUNDO_CEREBRO | ALIVIAR_AGENDA_HOJE | ATIVAR_MODO_SOS | ATUALIZAR_DIETA_E_COMPRAS | ATUALIZAR_GRADE_UERJ | ATUALIZAR_CONTAS_FINANCAS | ATUALIZAR_PETS | CRIAR_LISTA_COMPRAS | ATUALIZAR_TREINO | ATUALIZAR_PROJETOS_TRABALHO | ATUALIZAR_HABITOS | ATUALIZAR_METAS_RADAR | ATUALIZAR_PERFIL_CHECKIN | LIMPAR_DADOS_EXEMPLO",
                     },
                     titulo: { type: Type.STRING },
                     detalhe: { type: Type.STRING },
@@ -144,6 +152,24 @@ Regras fundamentais:
                     categoriaGasto: { type: Type.STRING },
                     srpe: { type: Type.NUMBER },
                     areaNota: { type: Type.STRING },
+                    substituirExistentes: { type: Type.BOOLEAN },
+                    compromissos: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          titulo: { type: Type.STRING },
+                          hora: { type: Type.STRING },
+                          duracaoMin: { type: Type.NUMBER },
+                          diaMes: { type: Type.NUMBER },
+                          mes: { type: Type.NUMBER },
+                          ano: { type: Type.NUMBER },
+                          local: { type: Type.STRING },
+                          categoria: { type: Type.STRING },
+                          sincronizarGoogle: { type: Type.BOOLEAN },
+                        },
+                      },
+                    },
                     refeicoes: {
                       type: Type.ARRAY,
                       items: {
@@ -191,6 +217,103 @@ Regras fundamentais:
                           nome: { type: Type.STRING },
                           saldoAtual: { type: Type.NUMBER },
                         },
+                      },
+                    },
+                    cartoesAjuste: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          nome: { type: Type.STRING },
+                          faturaAtual: { type: Type.NUMBER },
+                          limiteTotal: { type: Type.NUMBER },
+                          vencimentoDia: { type: Type.NUMBER },
+                        },
+                      },
+                    },
+                    petsAjuste: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          nome: { type: Type.STRING },
+                          racao: { type: Type.STRING },
+                          estoqueSaches: { type: Type.NUMBER },
+                          estoqueRacaoKg: { type: Type.NUMBER },
+                          proximaVet: { type: Type.STRING },
+                        },
+                      },
+                    },
+                    fichaTreino: {
+                      type: Type.OBJECT,
+                      properties: {
+                        nome: { type: Type.STRING },
+                        foco: { type: Type.STRING },
+                        exercicios: {
+                          type: Type.ARRAY,
+                          items: {
+                            type: Type.OBJECT,
+                            properties: {
+                              nome: { type: Type.STRING },
+                              series: { type: Type.NUMBER },
+                              reps: { type: Type.STRING },
+                              cargaKg: { type: Type.NUMBER },
+                              descansoSeg: { type: Type.NUMBER },
+                            },
+                          },
+                        },
+                      },
+                    },
+                    projetos: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          nome: { type: Type.STRING },
+                          papel: { type: Type.STRING },
+                          tarefa: { type: Type.STRING },
+                          prazo: { type: Type.STRING },
+                          prioridade: { type: Type.STRING },
+                        },
+                      },
+                    },
+                    habitos: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          titulo: { type: Type.STRING },
+                          categoria: { type: Type.STRING },
+                          metaTexto: { type: Type.STRING },
+                        },
+                      },
+                    },
+                    metas: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          titulo: { type: Type.STRING },
+                          categoria: { type: Type.STRING },
+                          prazo: { type: Type.STRING },
+                          marcos: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                          },
+                        },
+                      },
+                    },
+                    perfilCheckin: {
+                      type: Type.OBJECT,
+                      properties: {
+                        nomeUsuario: { type: Type.STRING },
+                        cursoUERJ: { type: Type.STRING },
+                        frentesTrabalho: { type: Type.STRING },
+                        horasSono: { type: Type.NUMBER },
+                        energiaFisica: { type: Type.NUMBER },
+                        focoMental: { type: Type.NUMBER },
+                        metaProteinaG: { type: Type.NUMBER },
+                        metaKcal: { type: Type.NUMBER },
                       },
                     },
                   },

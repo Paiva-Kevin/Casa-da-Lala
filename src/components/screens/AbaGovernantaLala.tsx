@@ -246,6 +246,36 @@ export function AbaGovernantaLala({
         ctx,
         anexoParaEnviar
       );
+
+      // Executa automaticamente as ações de preenchimento/atualização para que a conversa com a Lala preencha o app de forma livre e imediata
+      const acoesAutoExecutadas = (resultado.acoesPropostas || []).map((a) => {
+        const autoExecTypes: AcaoGovernanta["tipo"][] = [
+          "CRIAR_TAREFA",
+          "AGENDAR_COMPROMISSO",
+          "REGISTRAR_GASTO",
+          "REGISTRAR_RECEITA",
+          "ALIMENTAR_PETS",
+          "REGISTRAR_SRPE",
+          "GUARDAR_SEGUNDO_CEREBRO",
+          "ATUALIZAR_DIETA_E_COMPRAS",
+          "ATUALIZAR_GRADE_UERJ",
+          "ATUALIZAR_CONTAS_FINANCAS",
+          "ATUALIZAR_PETS",
+          "CRIAR_LISTA_COMPRAS",
+          "ATUALIZAR_TREINO",
+          "ATUALIZAR_PROJETOS_TRABALHO",
+          "ATUALIZAR_HABITOS",
+          "ATUALIZAR_METAS_RADAR",
+          "ATUALIZAR_PERFIL_CHECKIN",
+          "LIMPAR_DADOS_EXEMPLO",
+        ];
+        if (autoExecTypes.includes(a.tipo)) {
+          executarAcaoDaLala(a);
+          return { ...a, executada: true };
+        }
+        return a;
+      });
+
       const novaInteracao: InteracaoGovernanta = {
         id: Date.now(),
         dataHora: new Date().toLocaleTimeString("pt-BR", {
@@ -254,6 +284,7 @@ export function AbaGovernantaLala({
         }),
         mensagemUsuario: msgEfetiva,
         ...resultado,
+        acoesPropostas: acoesAutoExecutadas,
       };
       setInteracoes((prev) => [novaInteracao, ...prev]);
     } finally {

@@ -54,6 +54,7 @@ interface CalibrationWizardModalProps {
   setCheckin: React.Dispatch<React.SetStateAction<CheckinProntidao>>;
   onEnviarAnexoParaLala: (anexo: AnexoLala, promptInicial: string) => Promise<void>;
   onAbrirLalaComPrompt: (promptInicial: string) => void;
+  onLimparDadosExemplo?: () => void;
   showToast: (msg: string) => void;
 }
 
@@ -78,6 +79,7 @@ export function CalibrationWizardModal({
   setCheckin,
   onEnviarAnexoParaLala,
   onAbrirLalaComPrompt,
+  onLimparDadosExemplo,
   showToast,
 }: CalibrationWizardModalProps) {
   const [passo, setPasso] = useState<1 | 2 | 3 | 4 | 5>(1);
@@ -271,18 +273,38 @@ export function CalibrationWizardModal({
                 Vamos calibrar o app para a sua vida real
               </h2>
               <p style={{ color: t.textSoft }} className="text-xs">
-                Ajuste manualmente abaixo ou suba arquivos (Dieta, Grade UERJ, etc.)
-                para a Lala configurar tudo para você.
+                Você pode preencher conversando livremente com a Lala a qualquer
+                momento, subir arquivos ou ajustar abaixo.
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            style={{ backgroundColor: t.cardSubtle, color: t.textSoft }}
-            className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
-          >
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onLimparDadosExemplo && (
+              <button
+                onClick={() => {
+                  onLimparDadosExemplo();
+                  onClose();
+                }}
+                style={{
+                  backgroundColor: `${t.danger}16`,
+                  color: t.danger,
+                  borderColor: `${t.danger}40`,
+                }}
+                className="px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+                title="Apagar todos os dados de exemplo do app para começar limpo"
+              >
+                <Trash2 size={13} />
+                <span>Zerar Dados de Exemplo</span>
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              style={{ backgroundColor: t.cardSubtle, color: t.textSoft }}
+              className="w-8 h-8 rounded-full flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* Barra de Passos */}

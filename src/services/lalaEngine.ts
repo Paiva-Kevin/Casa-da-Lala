@@ -321,6 +321,38 @@ export function processarMensagemLocalLala(
   const acoes: AcaoGovernanta[] = [];
   let matrizDecisao: MatrizDecisaoLala | undefined;
 
+  // CASO 0: Limpar / Zerar dados de exemplo do app
+  if (
+    lower.includes("limpar dados") ||
+    lower.includes("zerar dados") ||
+    lower.includes("zerar o app") ||
+    lower.includes("zerar app") ||
+    lower.includes("excluir os dados") ||
+    lower.includes("excluir dados") ||
+    lower.includes("apagar dados") ||
+    lower.includes("começar do zero") ||
+    lower.includes("comecar do zero") ||
+    lower.includes("dados de exemplo")
+  ) {
+    acoes.push({
+      id: `act-${Date.now()}-clear-demo`,
+      tipo: "LIMPAR_DADOS_EXEMPLO",
+      titulo: "Limpar todos os dados de exemplo do app",
+      detalhe:
+        "Zera tarefas, matérias, compromissos e lançamentos de exemplo para você preencher do seu jeito",
+      executada: false,
+    });
+
+    return {
+      modo: "comando",
+      tituloCard: "Limpar Dados de Exemplo",
+      tags: ["Reset", "App Limpo", "Personalização"],
+      respostaLala:
+        "Entendido! Deixei engatilhada a limpeza completa dos dados de exemplo. A partir de agora você pode me falar qualquer coisa da sua rotina a qualquer momento — saldos, matérias, horários, compromissos do Google Agenda, gastos, treinos, dieta ou tarefas — e eu vou preenchendo tudo pra você na hora!",
+      acoesPropostas: acoes,
+    };
+  }
+
   // CASO 1: Usuário subiu um arquivo/imagem e escolheu "Só guardar" (ou pediu para guardar no Segundo Cérebro)
   if (
     anexo &&
@@ -700,6 +732,99 @@ export function processarMensagemLocalLala(
     });
   }
 
+  // Verifica se falou de agendar compromisso / evento no calendário
+  const matchHoraComp = texto.match(/(\d{1,2})[:h](\d{2})?/i);
+  if (
+    matchHoraComp &&
+    (lower.includes("agendar") ||
+      lower.includes("marcar") ||
+      lower.includes("reunião") ||
+      lower.includes("reuniao") ||
+      lower.includes("consulta") ||
+      lower.includes("dentista") ||
+      lower.includes("médico") ||
+      lower.includes("medico") ||
+      lower.includes("veterin") ||
+      lower.includes("compromisso") ||
+      lower.includes("evento") ||
+      lower.includes("prova"))
+  ) {
+    const hh = String(
+      Math.min(23, Math.max(0, parseInt(matchHoraComp[1], 10)))
+    ).padStart(2, "0");
+    const mm = matchHoraComp[2] ? matchHoraComp[2].padStart(2, "0") : "00";
+    const horaFormatada = `${hh}:${mm}`;
+    const matchDiaMes = texto.match(/dia\s+(\d{1,2})|(\d{1,2})\/(\d{1,2})/i);
+    const diaMesExtraido = matchDiaMes
+      ? parseInt(matchDiaMes[1] || matchDiaMes[2], 10)
+      : new Date().getDate();
+    const mesExtraido =
+      matchDiaMes && matchDiaMes[3]
+        ? parseInt(matchDiaMes[3], 10)
+        : new Date().getMonth() + 1;
+
+    const tituloLimpo =
+      texto
+        .replace(/^(lala,?\s*)?(agendar|marcar|coloca na agenda|cria evento)\s*/i, "")
+        .trim() || "Compromisso agendado";
+
+    acoes.push({
+      id: `act-${Date.now()}-comp`,
+      tipo: "AGENDAR_COMPROMISSO",
+      titulo: `Agendar "${tituloLimpo.slice(0, 40)}" (${diaMesExtraido}/${String(
+        mesExtraido
+      ).padStart(2, "0")} às ${horaFormatada})`,
+      detalhe: "Adiciona ao Calendário do App e sincroniza com seu Google Agenda",
+      executada: false,
+      payload: {
+        compromissos: [
+          {
+            titulo: tituloLimpo,
+            hora: horaFormatada,
+            duracaoMin: 60,
+            diaMes: diaMesExtraido,
+            mes: mesExtraido,
+            ano: new Date().getFullYear(),
+            sincronizarGoogle: true,
+          },
+        ],
+      },
+    });
+  }
+
+  // Verifica se falou de horas de sono ou check-in de prontidão
+  const matchSono = lower.match(/dormi\s*(\d+(?:[.,]\d+)?)\s*h/i);
+  if (matchSono) {
+    const horasSono = parseFloat(matchSono[1].replace(",", "."));
+    if (!isNaN(horasSono)) {
+      acoes.push({
+        id: `act-${Date.now()}-sono`,
+        tipo: "ATUALIZAR_PERFIL_CHECKIN",
+        titulo: `Atualizar sono de hoje para ${horasSono}h`,
+        detalhe: "Recalcula sua Prontidão Física imediatamente",
+        executada: false,
+        payload: {
+          perfilCheckin: { horasSono },
+        },
+      });
+    }
+  }
+
+  // Verifica se falou de hábito novo
+  if (lower.includes("criar hábito") || lower.includes("criar habito") || lower.includes("novo hábito")) {
+    const titHabito = texto.replace(/.*?(criar|novo)\s+h[áa]bito:?\s*/i, "").trim() || texto;
+    acoes.push({
+      id: `act-${Date.now()}-habito`,
+      tipo: "ATUALIZAR_HABITOS",
+      titulo: `Novo hábito: "${titHabito.slice(0, 40)}"`,
+      detalhe: "Adiciona nos seus Hábitos Diários",
+      executada: false,
+      payload: {
+        habitos: [{ titulo: titHabito, categoria: "Saúde", metaTexto: "Diário" }],
+      },
+    });
+  }
+
   // Verifica se falou de sRPE
   const matchSrpe = lower.match(/srpe\s*(\d+)/);
   if (matchSrpe) {
@@ -906,10 +1031,19 @@ export async function consultarLalaUnificada(
                   srpe: a.srpe,
                   areaNota: a.areaNota || anexo?.areaRepositorio,
                   anexo,
+                  substituirExistentes: a.substituirExistentes,
+                  compromissos: a.compromissos,
                   refeicoes: a.refeicoes,
                   itensCompras: a.itensCompras,
                   disciplinas: a.disciplinas,
                   contasAjuste: a.contasAjuste,
+                  cartoesAjuste: a.cartoesAjuste,
+                  petsAjuste: a.petsAjuste,
+                  fichaTreino: a.fichaTreino,
+                  projetos: a.projetos,
+                  habitos: a.habitos,
+                  metas: a.metas,
+                  perfilCheckin: a.perfilCheckin,
                 },
               }))
             : [];

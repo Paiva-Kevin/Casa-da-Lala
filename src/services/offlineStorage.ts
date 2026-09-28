@@ -247,6 +247,8 @@ export const ALL_STATE_KEYS = [
   'interacoes_lala',
   'tom_governanta',
   'perfil_calibrado',
+  'config_calendario',
+  'demo_limpo',
 ] as const;
 
 export async function exportFullBackupPayload(): Promise<AppBackupPayload> {

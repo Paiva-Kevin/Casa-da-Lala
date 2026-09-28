@@ -839,17 +839,52 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
           )}
 
           {activeTab === 'guide' && (
-            <div
-              style={{
-                backgroundColor: t.cardSubtle,
-                borderColor: t.border,
-              }}
-              className="p-4 rounded-2xl border space-y-3 text-xs leading-relaxed"
-            >
-              <h4 className="text-sm font-bold" style={{ color: t.primary }}>
-                Passo a Passo: Como Configurar API Key e Client ID no Google
-                Cloud Console
-              </h4>
+            <div className="space-y-3">
+              <div
+                style={{
+                  backgroundColor: `${t.primary}12`,
+                  borderColor: `${t.primary}40`,
+                }}
+                className="p-4 rounded-2xl border space-y-2 text-xs leading-relaxed"
+              >
+                <h4 className="text-sm font-bold" style={{ color: t.primary }}>
+                  🚀 Como Atualizar a Versão no Ar (Deploy / PWA)
+                </h4>
+                <ol className="list-decimal pl-4 space-y-1.5">
+                  <li>
+                    <strong>Publicar a nova versão no AI Studio:</strong> Sempre
+                    que fizermos melhorias no código por aqui, clique no botão{' '}
+                    <strong>Share / Publish (ou Deploy / Atualizar App)</strong>{' '}
+                    no canto superior direito do Google AI Studio para atualizar
+                    o link público (Cloud Run).
+                  </li>
+                  <li>
+                    <strong>No seu Celular ou Navegador (PWA instalado):</strong>{' '}
+                    Basta fechar e abrir o app ou recarregar a página (F5 / puxar
+                    para atualizar). O Service Worker detecta a versão nova
+                    automaticamente mantendo seus dados salvos!
+                  </li>
+                  <li>
+                    <strong>Se aparecer "Domínio Não Autorizado" no Login Google:</strong>{' '}
+                    No Console do Firebase (<code>console.firebase.google.com</code>),
+                    abra o projeto <code>gen-lang-client-0732041960</code> &gt;{' '}
+                    <strong>Authentication &gt; Settings &gt; Authorized domains (Domínios autorizados)</strong>{' '}
+                    e adicione o domínio do seu link publicado (ex:{' '}
+                    <code>ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app</code>).
+                  </li>
+                </ol>
+              </div>
+
+              <div
+                style={{
+                  backgroundColor: t.cardSubtle,
+                  borderColor: t.border,
+                }}
+                className="p-4 rounded-2xl border space-y-3 text-xs leading-relaxed"
+              >
+                <h4 className="text-sm font-bold" style={{ color: t.primary }}>
+                  Passo a Passo: Google Drive API & Google Calendar API no GCP
+                </h4>
               <ol className="list-decimal pl-4 space-y-2">
                 <li>
                   <strong>Criar ou Selecionar um Projeto:</strong> Acesse o{' '}
@@ -893,13 +928,15 @@ export const CloudSyncModal: React.FC<CloudSyncModalProps> = ({
                     <li>Copie o <strong>Client ID</strong> gerado.</li>
                   </ul>
                 </li>
-                <li>
-                  <strong>Criar a Chave de API (API Key):</strong> Em{' '}
-                  <strong>Credenciais &gt; + Criar Credenciais &gt; Chave de API</strong>,
-                  restrinja a chave por <em>Referenciadores HTTP</em> (seu
-                  domínio) e restrinja à <em>Google Drive API</em>.
-                </li>
-              </ol>
+                  <li>
+                    <strong>Criar a Chave de API (API Key):</strong> Em{' '}
+                    <strong>Credenciais &gt; + Criar Credenciais &gt; Chave de API</strong>,
+                    restrinja a chave por <em>Referenciadores HTTP</em> (seu
+                    domínio) e restrinja à <em>Google Drive API</em> e{' '}
+                    <em>Google Calendar API</em>.
+                  </li>
+                </ol>
+              </div>
             </div>
           )}
         </div>

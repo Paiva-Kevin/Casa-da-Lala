@@ -12,6 +12,7 @@ import {
   WifiOff,
   Sparkles,
   SlidersHorizontal,
+  Trash2,
 } from "lucide-react";
 import {
   ArquivoRepositorio,
@@ -21,6 +22,7 @@ import {
   CheckinProntidao,
   ComodoCasa,
   Compromisso,
+  ConfiguracaoCalendarioApp,
   ContaBancaria,
   Disciplina,
   FichaTreino,
@@ -124,6 +126,7 @@ import {
   NetworkAndSyncBadges,
   PendingConfirmationState,
 } from "./components/CloudSyncModal";
+import { criarEventoGoogleCalendar } from "./services/googleCalendarSync";
 
 const STORAGE_PREFIX = "casa_lala_v5_";
 
@@ -307,6 +310,31 @@ export default function App() {
       calibrado: false,
     });
   const [calibracaoOpen, setCalibracaoOpen] = useState<boolean>(false);
+
+  const [configCalendario, setConfigCalendario] =
+    useLocalStorageState<ConfiguracaoCalendarioApp>("config_calendario", {
+      visaoPadrao: "semana",
+      horaInicioGrade: 7,
+      mostrarAulasUERJ: true,
+      mostrarPets: true,
+      mostrarFinancas: true,
+      mostrarRadar: true,
+      mostrarGoogleAgenda: true,
+      sincronizarAoCriarNoGoogle: true,
+      coresCategorias: {
+        uerj: "#2E6F5E",
+        trabalho: "#D97706",
+        pets: "#4F46E5",
+        financas: "#0284C7",
+        saude: "#059669",
+        pessoal: "#7C3AED",
+      },
+    });
+
+  const [demoLimpo, setDemoLimpo] = useLocalStorageState<boolean>(
+    "demo_limpo",
+    false
+  );
 
   const [repositorio, setRepositorio] = useLocalStorageState<
     ArquivoRepositorio[]
@@ -669,6 +697,79 @@ export default function App() {
     }
   };
 
+  const limparDadosDeExemplo = useCallback(
+    (silencioso = false) => {
+      setTarefas([]);
+      setHabitos([]);
+      setCompromissos([]);
+      setRadarItens([]);
+      setMetas([]);
+      setDisciplinas([]);
+      setArtigos([]);
+      setLivros([]);
+      setProjetos([]);
+      setRefeicoes([]);
+      setFichasTreino([]);
+      setListaCompras([]);
+      setLancamentos([]);
+      setRepositorio([]);
+      setContas((prev) => prev.map((c) => ({ ...c, saldoAtual: 0 })));
+      setCartoes((prev) => prev.map((ct) => ({ ...ct, faturaAtual: 0 })));
+      setPetsPerfil((prev) =>
+        prev.map((p) => ({
+          ...p,
+          alimentadoHojeRefeicoes: 0,
+          sachesDadosHoje: 0,
+        }))
+      );
+      setInteracoesLala([
+        {
+          id: Date.now(),
+          dataHora: new Date().toLocaleTimeString("pt-BR", {
+            hour: "2-digit",
+            minute: "2-digit",
+          }),
+          modo: "informacao",
+          tituloCard: "App Limpo! Me conte sua rotina a qualquer momento",
+          tags: ["Começar do Zero", "Conversa Fluida", "Google Agenda"],
+          mensagemUsuario: "Lala, limpar dados de exemplo para começar com meus dados reais",
+          respostaLala:
+            "Prontinho! Excluí todos os dados de exemplo do aplicativo. Agora você não precisa preencher formulários engessados: basta clicar no botão 'Lala' (ou falar por voz/texto a qualquer momento) e me contar naturalmente suas aulas, gastos, saldo do banco, refeições da dieta, treinos, hábitos ou compromissos que eu preencho e atualizo cada aba e o Google Agenda para você!",
+          guardadoNoCofre: false,
+          acoesPropostas: [],
+        },
+      ]);
+      setDemoLimpo(true);
+      if (!silencioso) {
+        showToast(
+          "Dados de exemplo excluídos! Converse com a Lala a qualquer momento para preencher seu app."
+        );
+      }
+    },
+    [
+      setTarefas,
+      setHabitos,
+      setCompromissos,
+      setRadarItens,
+      setMetas,
+      setDisciplinas,
+      setArtigos,
+      setLivros,
+      setProjetos,
+      setRefeicoes,
+      setFichasTreino,
+      setListaCompras,
+      setLancamentos,
+      setRepositorio,
+      setContas,
+      setCartoes,
+      setPetsPerfil,
+      setInteracoesLala,
+      setDemoLimpo,
+      showToast,
+    ]
+  );
+
   const handleGoogleLoginClick = async () => {
     setIsLoggingIn(true);
     try {
@@ -676,11 +777,17 @@ export default function App() {
       if (result) {
         setGoogleUser(result.user);
         setNeedsAuth(false);
-        showToast("Conectado ao Google Drive com sucesso!");
-        await handleSyncCheckWithDrive(false);
-        if (!perfilCalibrado.calibrado) {
-          setCalibracaoOpen(true);
+        if (!demoLimpo) {
+          limparDadosDeExemplo(true);
+          showToast(
+            "Conectado ao Google! Dados de exemplo limpos — fale com a Lala a qualquer momento para preencher."
+          );
+        } else {
+          showToast("Conectado ao Google Drive & Agenda com sucesso!");
         }
+        await handleSyncCheckWithDrive(false);
+      } else {
+        showToast("Janela de login fechada. Clique novamente quando quiser conectar.");
       }
     } catch (err: unknown) {
       const msg =
@@ -697,11 +804,15 @@ export default function App() {
       const result = await signInWithCustomGISClient(clientId);
       setGoogleUser(result.user);
       setNeedsAuth(false);
-      showToast("Autenticado via Google Identity Services (GIS)!");
-      await handleSyncCheckWithDrive(false);
-      if (!perfilCalibrado.calibrado) {
-        setCalibracaoOpen(true);
+      if (!demoLimpo) {
+        limparDadosDeExemplo(true);
+        showToast(
+          "Autenticado! Dados de exemplo limpos — fale com a Lala para preencher."
+        );
+      } else {
+        showToast("Autenticado via Google Identity Services (GIS)!");
       }
+      await handleSyncCheckWithDrive(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Erro no login GIS";
       showToast(msg);
@@ -1466,15 +1577,149 @@ export default function App() {
       }
       case "ATUALIZAR_CONTAS_FINANCAS": {
         if (acao.payload?.contasAjuste && acao.payload.contasAjuste.length > 0) {
-          setContas((prev) =>
-            prev.map((c) => {
-              const match = acao.payload?.contasAjuste?.find((aj) =>
+          setContas((prev) => {
+            const copia = [...prev];
+            for (const aj of acao.payload?.contasAjuste || []) {
+              const idx = copia.findIndex((c) =>
                 c.nome.toLowerCase().includes(aj.nome.split(" ")[0].toLowerCase())
               );
-              return match ? { ...c, saldoAtual: match.saldoAtual } : c;
-            })
+              if (idx >= 0) {
+                copia[idx] = { ...copia[idx], saldoAtual: aj.saldoAtual };
+              } else {
+                copia.push({
+                  id: Date.now() + Math.floor(Math.random() * 1000),
+                  nome: aj.nome,
+                  tipo: "Conta Corrente",
+                  saldoAtual: aj.saldoAtual,
+                  cor: "primary",
+                });
+              }
+            }
+            return copia;
+          });
+        }
+        if (acao.payload?.cartoesAjuste && acao.payload.cartoesAjuste.length > 0) {
+          setCartoes((prev) => {
+            const copia = [...prev];
+            for (const aj of acao.payload?.cartoesAjuste || []) {
+              const idx = copia.findIndex((c) =>
+                c.nome.toLowerCase().includes(aj.nome.split(" ")[0].toLowerCase())
+              );
+              if (idx >= 0) {
+                copia[idx] = {
+                  ...copia[idx],
+                  faturaAtual: aj.faturaAtual,
+                  limiteTotal: aj.limiteTotal ?? copia[idx].limiteTotal,
+                  fechamentoDia: aj.fechamentoDia ?? copia[idx].fechamentoDia,
+                  vencimentoDia: aj.vencimentoDia ?? copia[idx].vencimentoDia,
+                };
+              } else {
+                copia.push({
+                  id: Date.now() + Math.floor(Math.random() * 1000),
+                  nome: aj.nome,
+                  limiteTotal: aj.limiteTotal || 3000,
+                  faturaAtual: aj.faturaAtual,
+                  fechamentoDia: aj.fechamentoDia || 20,
+                  vencimentoDia: aj.vencimentoDia || 28,
+                  cor: "alert",
+                });
+              }
+            }
+            return copia;
+          });
+        }
+        showToast(" Finanças e saldos atualizados pela Lala!");
+        break;
+      }
+      case "REGISTRAR_RECEITA": {
+        const val = acao.payload?.valor || 100;
+        adicionarLancamento(
+          val,
+          "Renda & Bolsa",
+          acao.payload?.texto || acao.titulo,
+          "Conta / Pix",
+          "realizado",
+          false,
+          1,
+          1,
+          "receita"
+        );
+        break;
+      }
+      case "AGENDAR_COMPROMISSO": {
+        const listaComps = acao.payload?.compromissos || [];
+        if (listaComps.length > 0) {
+          const hoje = new Date();
+          const novos: Compromisso[] = listaComps.map((c, idx) => {
+            const diaMes = c.diaMes || hoje.getDate();
+            const mes = c.mes !== undefined ? c.mes : hoje.getMonth();
+            const ano = c.ano || hoje.getFullYear();
+            const dataObj = new Date(ano, mes, diaMes);
+            const diaSemanaIdx = (dataObj.getDay() + 6) % 7;
+            const cat = c.categoriaCalendario || "rotina";
+            return {
+              id: Date.now() + idx,
+              hora: c.hora || "09:00",
+              duracaoMin: c.duracaoMin || 60,
+              titulo: c.titulo || acao.titulo,
+              local: c.local || "Agendado via Lala",
+              cor:
+                cat === "uerj"
+                  ? "primary"
+                  : cat === "pets"
+                  ? "action"
+                  : cat === "financas"
+                  ? "finance"
+                  : cat === "radar"
+                  ? "alert"
+                  : "primary",
+              aba:
+                cat === "uerj"
+                  ? "estudos_trabalho"
+                  : cat === "pets"
+                  ? "casa_rotinas"
+                  : cat === "financas"
+                  ? "financas"
+                  : "inicio",
+              diaMes,
+              mes,
+              ano,
+              diaSemanaIdx,
+              categoriaCalendario: cat,
+              gcalSynced: !!googleUser && !needsAuth,
+            };
+          });
+          setCompromissos((prev) =>
+            [...prev, ...novos].sort(
+              (a, b) => horaParaMinutos(a.hora) - horaParaMinutos(b.hora)
+            )
           );
-          showToast("Saldo bancário atualizado pela Lala!");
+          if (googleUser && !needsAuth) {
+            novos.forEach((nc) => {
+              criarEventoGoogleCalendar({
+                titulo: nc.titulo,
+                local: nc.local,
+                ano: nc.ano || new Date().getFullYear(),
+                mes: (nc.mes !== undefined ? nc.mes : new Date().getMonth()) + 1,
+                diaMes: nc.diaMes,
+                horaInicio: nc.hora,
+                duracaoMin: nc.duracaoMin,
+                categoria:
+                  nc.categoriaCalendario === "uerj"
+                    ? "uerj"
+                    : nc.categoriaCalendario === "pets"
+                    ? "pets"
+                    : nc.categoriaCalendario === "financas"
+                    ? "financas"
+                    : "pessoal",
+              }).catch(() => {});
+            });
+          }
+          showToast(
+            `${novos.length} compromisso(s) agendado(s) no Calendário${
+              googleUser && !needsAuth ? " e Google Agenda" : ""
+            }!`
+          );
         }
         break;
       }
@@ -1486,8 +1731,46 @@ export default function App() {
               prev.map((p) => ({ ...p, estoqueSaches: saches }))
             );
           }
-          showToast("Estoque dos Pets atualizado pela Lala!");
         }
+        if (acao.payload?.petsAjuste && acao.payload.petsAjuste.length > 0) {
+          setPetsPerfil((prev) => {
+            const copia = [...prev];
+            for (const pj of acao.payload?.petsAjuste || []) {
+              const idx = copia.findIndex(
+                (p) => p.nome.toLowerCase() === pj.nome.toLowerCase()
+              );
+              if (idx >= 0) {
+                copia[idx] = {
+                  ...copia[idx],
+                  racaoTipo: pj.racaoTipo ?? copia[idx].racaoTipo,
+                  estoqueSaches: pj.estoqueSaches ?? copia[idx].estoqueSaches,
+                  metaRefeicoesDia:
+                    pj.metaRefeicoesDia ?? copia[idx].metaRefeicoesDia,
+                  proximaVacina: pj.proximaVacina ?? copia[idx].proximaVacina,
+                };
+              } else {
+                copia.push({
+                  id: Date.now() + Math.floor(Math.random() * 1000),
+                  nome: pj.nome,
+                  especie: "Gato(a)",
+                  pesoKg: 4.2,
+                  racaoTipo: pj.racaoTipo || "Ração Super Premium",
+                  metaRefeicoesDia: pj.metaRefeicoesDia || 3,
+                  alimentadoHojeRefeicoes: 0,
+                  sachesDadosHoje: 0,
+                  metaSachesDia: 1,
+                  estoqueSaches: pj.estoqueSaches ?? 10,
+                  estoqueRacaoKg: 3,
+                  EstoqueAreiaKg: 4,
+                  proximaVacina: pj.proximaVacina || "Em dia",
+                  notasSaude: "Cadastrado via Lala",
+                });
+              }
+            }
+            return copia;
+          });
+        }
+        showToast("Dados dos Pets atualizados pela Lala!");
         break;
       }
       case "ATUALIZAR_TREINO": {
@@ -1504,18 +1787,169 @@ export default function App() {
               nome: ex.nome,
               modalidade: "Musculação",
               descansoSeg: ex.descansoSeg,
-              series: Array.from({ length: Math.max(1, ex.series || 3) }, (_, sIdx) => ({
-                id: Date.now() + idx * 10 + sIdx,
-                numero: sIdx + 1,
-                cargaOuDetalhe: ex.cargaKg ? `${ex.cargaKg} kg` : "Peso corporal",
-                repsOuTempo: ex.reps || "10",
-                concluida: false,
-              })),
+              series: Array.from(
+                { length: Math.max(1, ex.series || 3) },
+                (_, sIdx) => ({
+                  id: Date.now() + idx * 10 + sIdx,
+                  numero: sIdx + 1,
+                  cargaOuDetalhe: ex.cargaKg
+                    ? `${ex.cargaKg} kg`
+                    : "Peso corporal",
+                  repsOuTempo: ex.reps || "10",
+                  concluida: false,
+                })
+              ),
             })),
           };
           setFichasTreino((prev) => [novaFicha, ...prev]);
           showToast(`Ficha "${ft.nome}" importada para Saúde & Corpo!`);
         }
+        break;
+      }
+      case "ATUALIZAR_PROJETOS_TRABALHO": {
+        if (
+          acao.payload?.projetosTrabalho &&
+          acao.payload.projetosTrabalho.length > 0
+        ) {
+          const novosProjs: ProjetoTrabalho[] =
+            acao.payload.projetosTrabalho.map((p, idx) => ({
+              id: Date.now() + idx,
+              nome: p.nome,
+              papel: p.papel || "Responsável",
+              tarefa: p.tarefa,
+              status: "Em andamento",
+              prazo: p.prazo || "Esta semana",
+              progresso: p.progresso ?? 20,
+              subtarefas: (p.subtarefas || [p.tarefa]).map((st, sIdx) => ({
+                id: Date.now() + idx * 20 + sIdx,
+                texto: st,
+                feito: false,
+              })),
+              anotacoes: "Criado conversando com a Lala",
+            }));
+          setProjetos((prev) =>
+            acao.payload?.substituirExistentes
+              ? novosProjs
+              : [...novosProjs, ...prev]
+          );
+          showToast("Projetos de trabalho atualizados pela Lala!");
+        }
+        break;
+      }
+      case "ATUALIZAR_HABITOS": {
+        if (
+          acao.payload?.habitosLista &&
+          acao.payload.habitosLista.length > 0
+        ) {
+          const novosHabitos: HabitoDiario[] = acao.payload.habitosLista.map(
+            (h, idx) => ({
+              id: Date.now() + idx,
+              titulo: h.titulo,
+              icone: "sparkles",
+              categoria: h.categoria || "Rotina",
+              cor: "primary",
+              feitoHoje: false,
+              streakAtual: 0,
+              melhorStreak: 0,
+              historicoSemana: [false, false, false, false, false, false, false],
+              metaTexto: h.metaTexto || "Diário",
+            })
+          );
+          setHabitos((prev) =>
+            acao.payload?.substituirExistentes
+              ? novosHabitos
+              : [...prev, ...novosHabitos]
+          );
+          showToast("Hábitos diários atualizados pela Lala!");
+        }
+        break;
+      }
+      case "ATUALIZAR_METAS_RADAR": {
+        if (acao.payload?.metasLista && acao.payload.metasLista.length > 0) {
+          const novasMetas: MetaItem[] = acao.payload.metasLista.map(
+            (m, idx) => ({
+              id: Date.now() + idx,
+              titulo: m.titulo,
+              horizonte: m.horizonte || "mes",
+              progresso: m.progresso ?? 10,
+              metaAlvoTexto: m.metaAlvoTexto || "Concluir objetivo",
+              cor: "primary",
+            })
+          );
+          setMetas((prev) => [...novasMetas, ...prev]);
+        }
+        if (acao.payload?.radarLista && acao.payload.radarLista.length > 0) {
+          const novosRadar: ItemRadar[] = acao.payload.radarLista.map(
+            (r, idx) => ({
+              id: Date.now() + 200 + idx,
+              titulo: r.titulo,
+              area: r.area || "Pessoal",
+              dataEvento: r.dataEvento || "Em breve",
+              diasRestantes: r.diasRestantes ?? 7,
+              cor: "alert",
+              etapas: (r.etapas || ["Preparar entrega"]).map((et, eIdx) => ({
+                id: Date.now() + idx * 20 + eIdx,
+                acao: et,
+                quando: "Esta semana",
+                enviadaParaHoje: false,
+              })),
+            })
+          );
+          setRadarItens((prev) => [...novosRadar, ...prev]);
+        }
+        showToast("Metas e Radar de Prazos atualizados pela Lala!");
+        break;
+      }
+      case "ATUALIZAR_PERFIL_CHECKIN":
+      case "ATUALIZAR_CHECKIN_SAUDE": {
+        if (acao.payload?.checkinAjuste) {
+          const cj = acao.payload.checkinAjuste;
+          setCheckin((prev) => ({
+            ...prev,
+            horasSono: cj.horasSono ?? prev.horasSono,
+            energia: cj.energia ?? prev.energia,
+            dorMuscular: cj.dorMuscular ?? prev.dorMuscular,
+            estresse: cj.estresse ?? prev.estresse,
+            hidratacaoLitros: cj.hidratacaoLitros ?? prev.hidratacaoLitros,
+          }));
+        }
+        if (acao.payload?.perfilAjuste) {
+          const pf = acao.payload.perfilAjuste;
+          setPerfilCalibrado((prev) => ({
+            ...prev,
+            nomeUsuario: pf.nomeUsuario ?? prev.nomeUsuario,
+            cursoUERJ: pf.cursoUERJ ?? prev.cursoUERJ,
+            periodoUERJ: pf.periodoUERJ ?? prev.periodoUERJ,
+            frentesTrabalho: pf.frentesTrabalho ?? prev.frentesTrabalho,
+            metaHorasSono: pf.metaHorasSono ?? prev.metaHorasSono,
+            metaProteinaG: pf.metaProteinaG ?? prev.metaProteinaG,
+            metaKcal: pf.metaKcal ?? prev.metaKcal,
+            calibrado: true,
+          }));
+        }
+        showToast("Check-in de prontidão e perfil atualizados pela Lala!");
+        break;
+      }
+      case "ATUALIZAR_PERFIL": {
+        if (acao.payload?.perfilAjuste) {
+          const pf = acao.payload.perfilAjuste;
+          setPerfilCalibrado((prev) => ({
+            ...prev,
+            nomeUsuario: pf.nomeUsuario ?? prev.nomeUsuario,
+            cursoUERJ: pf.cursoUERJ ?? prev.cursoUERJ,
+            periodoUERJ: pf.periodoUERJ ?? prev.periodoUERJ,
+            frentesTrabalho: pf.frentesTrabalho ?? prev.frentesTrabalho,
+            metaHorasSono: pf.metaHorasSono ?? prev.metaHorasSono,
+            metaProteinaG: pf.metaProteinaG ?? prev.metaProteinaG,
+            metaKcal: pf.metaKcal ?? prev.metaKcal,
+            calibrado: true,
+          }));
+          showToast("Perfil atualizado pela Lala!");
+        }
+        break;
+      }
+      case "LIMPAR_DADOS_EXEMPLO": {
+        limparDadosDeExemplo();
         break;
       }
     }
@@ -1561,13 +1995,9 @@ export default function App() {
 
     const resultado = await consultarLalaUnificada(promptInicial, ctx, anexo);
 
-    // Já aplica automaticamente as ações de Dieta ou Grade quando enviado pelo Assistente de Calibração!
+    // Aplica automaticamente todas as ações de preenchimento/atualização do app
     const acoesComExecucao = (resultado.acoesPropostas || []).map((ac) => {
-      if (
-        ac.tipo === "ATUALIZAR_DIETA_E_COMPRAS" ||
-        ac.tipo === "ATUALIZAR_GRADE_UERJ" ||
-        ac.tipo === "GUARDAR_SEGUNDO_CEREBRO"
-      ) {
+      if (ac.tipo !== "ATIVAR_MODO_SOS") {
         executarAcaoDaLala(ac);
         return { ...ac, executada: true };
       }
@@ -1962,7 +2392,7 @@ export default function App() {
           </header>
 
           <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
-            {!perfilCalibrado.calibrado && (
+            {(!perfilCalibrado.calibrado || !demoLimpo) && (
               <div
                 style={{
                   backgroundColor: `${t.primary}14`,
@@ -1982,25 +2412,43 @@ export default function App() {
                       className="text-xs sm:text-sm font-bold"
                       style={{ color: t.text }}
                     >
-                      Vamos calibrar o app com os dados reais da sua vida?
+                      {!demoLimpo
+                        ? "O app está com dados de demonstração — limpe com 1 clique ou faça login!"
+                        : "Preencha conversando livremente com a Lala a qualquer momento!"}
                     </p>
                     <p
                       className="text-xs mt-0.5"
                       style={{ color: t.textSoft }}
                     >
-                      Responda 5 passos rápidos ou suba o PDF/foto da sua Dieta
-                      e da sua Grade da UERJ para a Lala montar suas refeições,
-                      lista de compras, matérias e saldos automaticamente!
+                      Você pode zerar os exemplos agora e conversar com a Lala a
+                      qualquer momento (por voz, texto ou arquivos) para cadastrar
+                      aulas, gastos, compromissos do Google Agenda, dieta, treinos
+                      e rotina sem formulários engessados.
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  {!demoLimpo && (
+                    <button
+                      onClick={() => limparDadosDeExemplo(false)}
+                      style={{
+                        backgroundColor: `${t.danger}15`,
+                        color: t.danger,
+                        borderColor: `${t.danger}40`,
+                      }}
+                      className="px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer hover:opacity-90"
+                    >
+                      <Trash2 size={13} />
+                      Zerar Dados de Exemplo
+                    </button>
+                  )}
                   <button
-                    onClick={() => setCalibracaoOpen(true)}
+                    onClick={() => setBrainModalOpen(true)}
                     style={{ backgroundColor: t.primary, color: "#fff" }}
-                    className="px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+                    className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
-                    Calibrar Agora com a Lala
+                    <Mic size={13} />
+                    Falar com a Lala
                   </button>
                 </div>
               </div>
@@ -2088,6 +2536,10 @@ export default function App() {
                 radarItens={radarItens}
                 openCard={(p) => setBottomSheet(p)}
                 showToast={showToast}
+                configCalendario={configCalendario}
+                setConfigCalendario={setConfigCalendario}
+                googleConnected={!!googleUser && !needsAuth}
+                onConnectGoogle={handleGoogleLoginClick}
               />
             )}
 
@@ -2371,6 +2823,7 @@ export default function App() {
             promptInicial
           );
         }}
+        onLimparDadosExemplo={() => limparDadosDeExemplo(false)}
         showToast={showToast}
       />
 
