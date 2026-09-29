@@ -351,11 +351,11 @@ export default function App() {
       id: 1,
       dataHora: "08:30",
       modo: "informacao",
-      tituloCard: "Bom dia! Briefing Inicial da Governanta Lala",
+      tituloCard: "Bate-Papo com a Lala",
       tags: ["Governanta", "Rotina", "Bem-vinda"],
-      mensagemUsuario: "Lala, como está organizado o meu dia hoje?",
+      mensagemUsuario: "Oi Lala! Como está organizado o meu dia hoje?",
       respostaLala:
-        "Bom dia, querida! Já revisei toda a casa, suas matérias da UERJ, o estoque da Nina e do Tobias e seu orçamento do dia. Use os botões de sintonia acima quando quiser me dar comandos diretos, guardar um devaneio, desabafar sem filtro ou pedir uma Matriz de Decisão!",
+        "Bom dia! Já revisei toda a casa, suas matérias da UERJ, o estoque da Nina e do Tobias e seu orçamento de hoje. Pode conversar comigo livremente aqui no bate-papo: me conte como está se sentindo, peça para agendar ou mudar tarefas, lance gastos ou anexe qualquer arquivo no clipe 📎 abaixo!",
       guardadoNoCofre: true,
       acoesPropostas: [
         {
@@ -2474,6 +2474,28 @@ export default function App() {
               <PWAInstallButton t={t} compact />
 
               <button
+                onClick={() =>
+                  setActiveTab(
+                    activeTab === "governanta_lala"
+                      ? "inicio"
+                      : "governanta_lala"
+                  )
+                }
+                style={{
+                  backgroundColor:
+                    activeTab === "governanta_lala" ? t.primary : t.card,
+                  color: activeTab === "governanta_lala" ? "#fff" : t.primary,
+                  borderColor:
+                    activeTab === "governanta_lala" ? t.primary : `${t.primary}45`,
+                }}
+                className="px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                title="Abrir Bate-Papo com a Lala"
+              >
+                <Sparkles size={13} />
+                <span>Lala</span>
+              </button>
+
+              <button
                 onClick={() => setCalibracaoOpen(true)}
                 style={{
                   backgroundColor: !perfilCalibrado.calibrado
@@ -2486,7 +2508,7 @@ export default function App() {
                 title="Calibrar informações, subir dieta ou grade da UERJ"
               >
                 <SlidersHorizontal size={13} />
-                <span>Calibrar</span>
+                <span className="hidden sm:inline">Calibrar</span>
               </button>
 
               <button
@@ -2511,7 +2533,8 @@ export default function App() {
           </header>
 
           <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
-            {(!perfilCalibrado.calibrado || !demoLimpo) && (
+            {activeTab !== "governanta_lala" &&
+              (!perfilCalibrado.calibrado || !demoLimpo) && (
               <div
                 style={{
                   backgroundColor: `${t.primary}14`,
@@ -2562,12 +2585,12 @@ export default function App() {
                     </button>
                   )}
                   <button
-                    onClick={() => setBrainModalOpen(true)}
+                    onClick={() => setActiveTab("governanta_lala")}
                     style={{ backgroundColor: t.primary, color: "#fff" }}
                     className="px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Mic size={13} />
-                    Falar com a Lala
+                    <Sparkles size={13} />
+                    Bate-Papo com a Lala
                   </button>
                 </div>
               </div>
@@ -2763,22 +2786,24 @@ export default function App() {
         </div>
       </div>
 
-      {/* BOTÃO FLUTUANTE UNIFICADO DA LALA (FAB — VOZ, TEXTO E ACESSO RÁPIDO) */}
-      <button
-        onClick={() => setBrainModalOpen(true)}
-        style={{
-          background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-          color: "#fff",
-        }}
-        className="fixed bottom-20 right-4 lg:bottom-8 lg:right-8 z-40 h-14 px-5 rounded-full shadow-xl flex items-center gap-2.5 font-bold text-sm hover:opacity-95 active:scale-95 transition-all cursor-pointer select-none"
-        aria-label="Falar com a Lala — Entrada rápida por voz ou texto"
-        title="Falar com a Lala (Voz, Comandos, Gastos, Tarefas, Devaneios e Desabafos)"
-      >
-        <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
-          <Mic size={16} />
-        </div>
-        <span>Lala</span>
-      </button>
+      {/* BOTÃO FLUTUANTE UNIFICADO DA LALA (OCULTO QUANDO JÁ ESTÁ NA ABA DA LALA) */}
+      {activeTab !== "governanta_lala" && (
+        <button
+          onClick={() => setBrainModalOpen(true)}
+          style={{
+            background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+            color: "#fff",
+          }}
+          className="fixed bottom-20 right-4 lg:bottom-8 lg:right-8 z-40 h-14 px-5 rounded-full shadow-xl flex items-center gap-2.5 font-bold text-sm hover:opacity-95 active:scale-95 transition-all cursor-pointer select-none"
+          aria-label="Falar com a Lala — Entrada rápida por voz ou texto"
+          title="Bate-Papo Rápido com a Lala"
+        >
+          <div className="w-7 h-7 rounded-full bg-white/20 flex items-center justify-center">
+            <Mic size={16} />
+          </div>
+          <span>Lala</span>
+        </button>
+      )}
 
       {/* BARRA DE NAVEGAÇÃO MOBILE (EXATAMENTE 5 ÍCONES ERGONÔMICOS) */}
       <nav

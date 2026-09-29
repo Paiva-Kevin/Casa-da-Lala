@@ -29,10 +29,22 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
+          if ('caches' in window) {
+            caches.keys().then((names) => {
+              names.forEach((name) => {
+                if (name.includes('v5') || name.includes('v4') || name.includes('v3')) {
+                  caches.delete(name);
+                }
+              });
+            });
+          }
           navigator.serviceWorker
             .register('/sw.js', { scope: '/' })
             .then((reg) => {
               reg.update();
+              if (reg.waiting) {
+                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+              }
             })
             .catch((err) => {
               console.debug('Service Worker registration fallback:', err);

@@ -363,27 +363,30 @@ export function AbaGovernantaLala({
         ];
 
   return (
-    <div className="space-y-4">
-      {/* CABEÇALHO + PULSO VIVO + JANELA INTEGRADA DE BATE-PAPO COM A LALA */}
+    <div className="space-y-3">
+      {/* CONTAINER PRINCIPAL DO BATE-PAPO COM A LALA */}
       <div
         style={{ backgroundColor: t.card, borderColor: t.border }}
-        className="p-4 sm:p-5 rounded-3xl border shadow-xs space-y-4"
+        className="rounded-3xl border shadow-sm overflow-hidden flex flex-col"
       >
-        {/* Top Header da Lala */}
-        <div className="flex items-start justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-3.5">
-            <div className="relative">
+        {/* 1. CABEÇALHO COMPACTO ESTILO MENSAGEIRO (WHATSAPP / CHAT) */}
+        <div
+          style={{ backgroundColor: t.card, borderColor: t.border }}
+          className="px-4 py-3 border-b flex items-center justify-between gap-2 flex-wrap"
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="relative shrink-0">
               <div
                 style={{
                   background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
                   color: "#fff",
                 }}
-                className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm font-bold text-lg"
+                className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-xs font-bold text-base"
               >
                 L
               </div>
               <span
-                className="w-3 h-3 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
+                className="w-2.5 h-2.5 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
                 style={{
                   backgroundColor: "#22c55e",
                   borderColor: t.card,
@@ -391,41 +394,39 @@ export function AbaGovernantaLala({
                 title="Lala Online"
               />
             </div>
-            <div>
+
+            <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h1
-                  className="text-base sm:text-lg font-bold tracking-tight"
+                  className="text-sm sm:text-base font-bold tracking-tight truncate"
                   style={{ color: t.text }}
                 >
                   Bate-Papo com a Lala
                 </h1>
                 <span
                   style={{
-                    backgroundColor: `${t.primary}15`,
-                    color: t.primary,
+                    backgroundColor: "#22c55e20",
+                    color: "#16a34a",
                   }}
-                  className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full"
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                 >
-                  Tom: {perfilCalibrado?.tomLala || "Equilibrada"} ·{" "}
-                  {perfilCalibrado?.autonomiaLala === "confirmar"
-                    ? "Pedir confirmação"
-                    : "Ação automática"}
+                  Online agora
                 </span>
               </div>
               <p
                 style={{ color: t.textSoft }}
-                className="text-xs mt-0.5 leading-relaxed"
+                className="text-[11px] truncate mt-0.5"
               >
-                Converse naturalmente como no WhatsApp: troque ideias, desabafe,
-                planeje o dia, lance gastos ou envie qualquer arquivo/foto.
+                Prontidão {prontidaoScore}% · Livre R${" "}
+                {dinheiroLivreHoje.toFixed(0)} · {sachesRestantes} sachês · Tom:{" "}
+                {perfilCalibrado?.tomLala || "Equilibrada"}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {/* Alternador Visão Chat vs Visão Cards */}
+          <div className="flex items-center gap-1.5 shrink-0">
             <div
-              className="flex items-center p-1 rounded-xl border"
+              className="flex items-center p-0.5 rounded-xl border"
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
             >
               <button
@@ -439,7 +440,7 @@ export function AbaGovernantaLala({
                 className="px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
               >
                 <MessageCircle size={12} />
-                <span>Bate-Papo</span>
+                <span>Chat</span>
               </button>
               <button
                 type="button"
@@ -456,6 +457,25 @@ export function AbaGovernantaLala({
               </button>
             </div>
 
+            {interacoes.length > 1 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setInteracoes((prev) => prev.slice(0, 1));
+                  showToast("Conversas anteriores limpas!");
+                }}
+                style={{
+                  backgroundColor: t.cardSubtle,
+                  color: t.textSoft,
+                  borderColor: t.border,
+                }}
+                className="p-2 rounded-xl border hover:opacity-80 cursor-pointer"
+                title="Limpar histórico antigo do bate-papo"
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
+
             <button
               type="button"
               onClick={onOpenCalibracao}
@@ -464,137 +484,22 @@ export function AbaGovernantaLala({
                 color: t.primary,
                 borderColor: `${t.primary}35`,
               }}
-              className="px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer shrink-0"
+              className="px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
             >
-              <SlidersHorizontal size={13} />
-              <span>Calibrar</span>
+              <SlidersHorizontal size={12} />
+              <span className="hidden sm:inline">Calibrar</span>
             </button>
           </div>
         </div>
 
-        {/* Pulso Vivo em 1 Linha */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <div
-            style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-            className="p-2.5 rounded-2xl border"
-          >
-            <p
-              style={{ color: t.textSoft }}
-              className="text-[10px] font-bold uppercase"
-            >
-              Prontidão
-            </p>
-            <p
-              style={{ color: t.primary }}
-              className="text-xs sm:text-sm font-bold font-mono mt-0.5"
-            >
-              {prontidaoScore}% ({checkin.horasSono}h sono)
-            </p>
-          </div>
-          <div
-            style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-            className="p-2.5 rounded-2xl border"
-          >
-            <p
-              style={{ color: t.textSoft }}
-              className="text-[10px] font-bold uppercase"
-            >
-              Livre Hoje
-            </p>
-            <p
-              style={{ color: t.finance }}
-              className="text-xs sm:text-sm font-bold font-mono mt-0.5"
-            >
-              R$ {dinheiroLivreHoje.toFixed(2).replace(".", ",")}
-            </p>
-          </div>
-          <div
-            style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-            className="p-2.5 rounded-2xl border"
-          >
-            <p
-              style={{ color: t.textSoft }}
-              className="text-[10px] font-bold uppercase"
-            >
-              Nina & Tobias
-            </p>
-            <p
-              style={{ color: sachesRestantes <= 4 ? t.danger : t.text }}
-              className="text-xs sm:text-sm font-bold font-mono mt-0.5"
-            >
-              {sachesRestantes} sachês
-            </p>
-          </div>
-          <div
-            style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-            className="p-2.5 rounded-2xl border"
-          >
-            <p
-              style={{ color: t.textSoft }}
-              className="text-[10px] font-bold uppercase"
-            >
-              Prioridade #1
-            </p>
-            <p className="text-xs font-bold truncate mt-0.5">
-              {tarefaP1 ? tarefaP1.texto : "Tudo em dia!"}
-            </p>
-          </div>
-        </div>
-
-        {/* Filtros Rápidos do Bate-Papo */}
-        <div className="flex items-center justify-between gap-2 flex-wrap pt-0.5">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {(
-              [
-                { id: "tudo", label: "Toda a Conversa" },
-                { id: "comando", label: "Comandos & Arquivos" },
-                { id: "orientacao", label: "Orientações" },
-                { id: "devaneio", label: "Ideias" },
-                { id: "desabafo", label: "Acolhimento" },
-              ] as const
-            ).map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setFiltroHistorico(f.id)}
-                style={{
-                  backgroundColor:
-                    filtroHistorico === f.id ? t.primary : t.cardSubtle,
-                  color: filtroHistorico === f.id ? "#fff" : t.textSoft,
-                  borderColor: t.border,
-                }}
-                className="px-2.5 py-1 rounded-xl border text-[11px] font-bold cursor-pointer transition-colors"
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-
-          {interacoes.length > 1 && (
-            <button
-              type="button"
-              onClick={() => {
-                setInteracoes((prev) => prev.slice(0, 1));
-                showToast("Histórico anterior do bate-papo limpo!");
-              }}
-              style={{ color: t.textSoft }}
-              className="text-[11px] font-semibold flex items-center gap-1 hover:opacity-80 cursor-pointer"
-              title="Manter apenas a mensagem mais recente"
-            >
-              <Trash2 size={12} /> Limpar histórico antigo
-            </button>
-          )}
-        </div>
-
-        {/* JANELA DE MENSAGENS DO BATE-PAPO (VISÃO CHAT DIRETO NO CAMPO EXISTENTE) */}
+        {/* 2. JANELA DE MENSAGENS DO BATE-PAPO (LOGO NO TOPO, SEM POLUIÇÃO) */}
         {modoVisualizacao === "chat" && (
           <div
             ref={chatScrollRef}
             style={{
               backgroundColor: t.bg,
-              borderColor: t.border,
             }}
-            className="rounded-3xl border p-3.5 sm:p-4 space-y-4 max-h-[460px] min-h-[280px] overflow-y-auto"
+            className="p-3.5 sm:p-5 space-y-4 max-h-[52vh] min-h-[300px] overflow-y-auto"
           >
             {mensagensChatCronologicas.length === 0 && (
               <div className="py-12 text-center space-y-2">
@@ -611,7 +516,7 @@ export function AbaGovernantaLala({
                   style={{ color: t.textSoft }}
                 >
                   Mande um "Oi Lala", conte como foi seu dia, peça ajuda para
-                  decidir algo ou envie qualquer comando/arquivo abaixo.
+                  decidir algo ou envie qualquer comando/arquivo no campo abaixo.
                 </p>
               </div>
             )}
@@ -625,8 +530,12 @@ export function AbaGovernantaLala({
                       background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
                       color: "#fff",
                     }}
-                    className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-xs px-3.5 py-2.5 shadow-xs space-y-2"
+                    className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-tr-xs px-3.5 py-2.5 shadow-xs space-y-1.5"
                   >
+                    <div className="flex items-center justify-between gap-2 text-[10px] opacity-85 font-semibold">
+                      <span>Você</span>
+                      <span className="font-mono">{item.dataHora}</span>
+                    </div>
                     <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-line">
                       {item.mensagemUsuario}
                     </p>
@@ -672,12 +581,6 @@ export function AbaGovernantaLala({
                         )}
                       </div>
                     )}
-
-                    <div className="flex justify-end">
-                      <span className="text-[10px] font-mono opacity-80">
-                        {item.dataHora}
-                      </span>
-                    </div>
                   </div>
                 </div>
 
@@ -713,18 +616,6 @@ export function AbaGovernantaLala({
                           <Sparkles size={10} />
                           {item.tituloCard || "Lala"}
                         </span>
-                        {item.tags?.slice(0, 3).map((tg) => (
-                          <span
-                            key={tg}
-                            style={{
-                              backgroundColor: t.cardSubtle,
-                              color: t.textSoft,
-                            }}
-                            className="text-[10px] font-medium px-1.5 py-0.5 rounded-md"
-                          >
-                            #{tg}
-                          </span>
-                        ))}
                       </div>
                       <span
                         style={{ color: t.textSoft }}
@@ -914,7 +805,7 @@ export function AbaGovernantaLala({
                           }}
                           className="px-2.5 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
                         >
-                          <FolderOpen size={11} /> Guardar no Segundo Cérebro
+                          <FolderOpen size={11} /> Guardar Nota
                         </button>
                       </div>
                     )}
@@ -940,22 +831,20 @@ export function AbaGovernantaLala({
                   className="rounded-2xl rounded-tl-xs px-4 py-3 border text-xs font-medium flex items-center gap-2"
                 >
                   <Sparkles size={13} style={{ color: t.primary }} />
-                  <span>A Lala está pensando e respondendo...</span>
+                  <span>A Lala está digitando...</span>
                 </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Sugestões de Resposta Rápida para Continuar o Bate-Papo com 1 Toque */}
-        <div className="space-y-1.5">
-          <p
-            style={{ color: t.textSoft }}
-            className="text-[10px] font-bold uppercase tracking-wider px-1"
-          >
-            Continuar bate-papo (toque para enviar ou digite abaixo):
-          </p>
-          <div className="flex flex-wrap gap-1.5">
+        {/* 3. RODAPÉ DE DIGITAÇÃO DO BATE-PAPO (SEMPRE VISÍVEL E INTEGRADO) */}
+        <div
+          style={{ backgroundColor: t.card, borderColor: t.border }}
+          className="p-3.5 sm:p-4 border-t space-y-2.5"
+        >
+          {/* Sugestões rápidas em 1 linha horizontal para continuar o papo */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
             {sugestoesAtivas.map((sug) => (
               <button
                 key={sug}
@@ -967,46 +856,44 @@ export function AbaGovernantaLala({
                   borderColor: `${t.primary}35`,
                   color: t.primary,
                 }}
-                className="px-3 py-1.5 rounded-full border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer hover:opacity-90 active:scale-98 transition-all disabled:opacity-50"
+                className="px-3 py-1 rounded-full border text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer hover:opacity-90 active:scale-98 transition-all disabled:opacity-50"
               >
                 <MessageCircle size={11} />
                 <span>{sug}</span>
               </button>
             ))}
           </div>
-        </div>
 
-        {/* Input oculto para qualquer arquivo ou foto */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
-          onChange={handleSelecionarArquivo}
-          className="hidden"
-        />
-
-        {/* Card Universal de Escolha de Ação / Importação quando há arquivo anexado */}
-        {anexoAtual && (
-          <FileImportChooserCard
-            t={t}
-            anexo={anexoAtual}
-            onClear={() => setAnexoAtual(null)}
-            onConfirmImport={(
-              intencao,
-              instrucao,
-              pastaDestino,
-              guardarCopia
-            ) =>
-              enviarParaLala(instrucao, intencao, pastaDestino, guardarCopia)
-            }
-            onSaveOnly={(pastaDestino, tituloCustom) =>
-              guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
-            }
+          {/* Input oculto para qualquer arquivo ou foto */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
+            onChange={handleSelecionarArquivo}
+            className="hidden"
           />
-        )}
 
-        {/* CAMPO DE BATE-PAPO ATUALIZADO (Voz, Texto Fluido e Anexo Universal) */}
-        <div className="space-y-2.5">
+          {/* Card Universal de Escolha de Ação / Importação quando há arquivo anexado */}
+          {anexoAtual && (
+            <FileImportChooserCard
+              t={t}
+              anexo={anexoAtual}
+              onClear={() => setAnexoAtual(null)}
+              onConfirmImport={(
+                intencao,
+                instrucao,
+                pastaDestino,
+                guardarCopia
+              ) =>
+                enviarParaLala(instrucao, intencao, pastaDestino, guardarCopia)
+              }
+              onSaveOnly={(pastaDestino, tituloCustom) =>
+                guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
+              }
+            />
+          )}
+
+          {/* Barra de Mensagem Estilo Chat */}
           <div className="flex gap-2 items-end">
             <button
               type="button"
@@ -1016,7 +903,7 @@ export function AbaGovernantaLala({
                 color: t.primary,
                 borderColor: anexoAtual ? t.primary : t.border,
               }}
-              className="w-11 h-12 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
+              className="w-11 h-11 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
               title="Anexar Arquivo ou Foto no bate-papo"
             >
               <Paperclip size={18} />
@@ -1033,13 +920,13 @@ export function AbaGovernantaLala({
                   enviarParaLala();
                 }
               }}
-              placeholder="Escreva sua mensagem para bater papo com a Lala (Enter envia, Shift+Enter quebra linha)..."
+              placeholder="Digite aqui para bater papo com a Lala..."
               style={{
                 backgroundColor: t.cardSubtle,
                 color: t.text,
                 borderColor: t.border,
               }}
-              className="flex-1 p-3 rounded-2xl border text-xs sm:text-sm outline-none resize-none leading-relaxed"
+              className="flex-1 px-3.5 py-2.5 rounded-2xl border text-xs sm:text-sm outline-none resize-none leading-relaxed"
             />
 
             <button
@@ -1050,7 +937,7 @@ export function AbaGovernantaLala({
                 color: gravandoVoz ? "#fff" : t.action,
                 borderColor: t.border,
               }}
-              className="w-11 h-12 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
+              className="w-11 h-11 rounded-2xl border flex items-center justify-center cursor-pointer shrink-0 transition-transform active:scale-95"
               title="Falar por áudio com a Lala"
             >
               <Mic size={18} />
@@ -1061,7 +948,7 @@ export function AbaGovernantaLala({
               onClick={() => enviarParaLala()}
               disabled={processando || (!mensagem.trim() && !anexoAtual)}
               style={{ backgroundColor: t.primary, color: "#fff" }}
-              className="px-4 h-12 rounded-2xl flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shrink-0 disabled:opacity-50 transition-transform active:scale-95"
+              className="px-4 h-11 rounded-2xl flex items-center justify-center gap-1.5 text-xs font-bold cursor-pointer shrink-0 disabled:opacity-50 transition-transform active:scale-95"
               title="Enviar mensagem para a Lala"
             >
               <Send size={15} />
@@ -1074,13 +961,15 @@ export function AbaGovernantaLala({
               className="p-2.5 rounded-xl flex items-center justify-between text-xs animate-pulse"
               style={{ background: t.cardSubtle, color: t.action }}
             >
-              <span>🎙️ A Lala está te ouvindo no bate-papo... fale naturalmente</span>
+              <span>
+                🎙️ A Lala está te ouvindo no bate-papo... fale naturalmente
+              </span>
               <span className="font-mono">PT-BR</span>
             </div>
           )}
 
-          {/* Atalhos Rápidos de Ação & Conversa */}
-          <div className="flex flex-wrap gap-1.5">
+          {/* Atalhos Rápidos Compactos */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pt-0.5 no-scrollbar">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -1089,9 +978,9 @@ export function AbaGovernantaLala({
                 borderColor: `${t.primary}40`,
                 color: t.primary,
               }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded-xl border text-[10px] font-bold flex items-center gap-1 shrink-0 cursor-pointer"
             >
-              <Paperclip size={13} />
+              <Paperclip size={11} />
               Subir Arquivo / Foto
             </button>
 
@@ -1104,10 +993,10 @@ export function AbaGovernantaLala({
                 )
               }
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded-xl border text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
             >
-              <Utensils size={13} style={{ color: t.primary }} />
-              Dieta → Lista de Compras
+              <Utensils size={11} style={{ color: t.primary }} />
+              Dieta → Compras
             </button>
 
             <button
@@ -1118,10 +1007,10 @@ export function AbaGovernantaLala({
                 )
               }
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded-xl border text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
             >
-              <BatteryCharging size={13} style={{ color: t.danger }} />
-              Dia pesado (Aliviar agenda)
+              <BatteryCharging size={11} style={{ color: t.danger }} />
+              Aliviar agenda
             </button>
 
             <button
@@ -1132,10 +1021,10 @@ export function AbaGovernantaLala({
                 )
               }
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded-xl border text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
             >
-              <Compass size={13} style={{ color: t.action }} />
-              Me orienta no que focar
+              <Compass size={11} style={{ color: t.action }} />
+              Me orienta no foco
             </button>
 
             <button
@@ -1144,18 +1033,45 @@ export function AbaGovernantaLala({
                 enviarParaLala("Alimentei a Nina e o Tobias agora com sachê")
               }
               style={{ backgroundColor: t.cardSubtle, borderColor: t.border }}
-              className="px-3 py-1.5 rounded-xl border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer"
+              className="px-2.5 py-1 rounded-xl border text-[10px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
             >
-              <PawPrint size={13} style={{ color: t.finance }} />
-              Dei sachê pra Nina e Tobias
+              <PawPrint size={11} style={{ color: t.finance }} />
+              Dei sachê pros gatos
             </button>
           </div>
         </div>
       </div>
 
-      {/* VISÃO ALTERNATIVA EM CARDS (CASO A USUÁRIA PREFIRA VER EM LISTA DE CARDS) */}
+      {/* VISÃO ALTERNATIVA EM CARDS + FILTROS (SE A USUÁRIA CLICAR EM "CARDS") */}
       {modoVisualizacao === "cards" && (
         <div className="space-y-3">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {(
+              [
+                { id: "tudo", label: "Tudo" },
+                { id: "comando", label: "Comandos & Arquivos" },
+                { id: "orientacao", label: "Orientações" },
+                { id: "devaneio", label: "Ideias" },
+                { id: "desabafo", label: "Acolhimento" },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFiltroHistorico(f.id)}
+                style={{
+                  backgroundColor:
+                    filtroHistorico === f.id ? t.primary : t.cardSubtle,
+                  color: filtroHistorico === f.id ? "#fff" : t.textSoft,
+                  borderColor: t.border,
+                }}
+                className="px-2.5 py-1 rounded-xl border text-[11px] font-bold cursor-pointer transition-colors"
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
           {interacoesFiltradas.map((item) => (
             <div
               key={item.id}
