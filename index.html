@@ -20,8 +20,6 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <!-- Google Identity Services (GIS) OAuth 2.0 Library -->
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
   </head>
   <body>
     <div id="root"></div>
@@ -32,7 +30,7 @@
           if ('caches' in window) {
             caches.keys().then((names) => {
               names.forEach((name) => {
-                if (name.includes('v5') || name.includes('v4') || name.includes('v3')) {
+                if (name.includes('v6') || name.includes('v5') || name.includes('v4') || name.includes('v3')) {
                   caches.delete(name);
                 }
               });

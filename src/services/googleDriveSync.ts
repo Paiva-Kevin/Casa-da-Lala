@@ -347,101 +347,14 @@ export function invalidateExpiredToken(expiredToken?: string | null) {
   }
 }
 
-let silentRefreshPromise: Promise<string | null> | null = null;
-
-// Attempts a silent (zero-popup) token renewal via Google Identity Services if available
+// Note: Direct GIS initTokenClient cannot be used with Firebase's oAuthClientId
+// because Google Cloud only registers <project>.firebaseapp.com as an Authorized JS Origin
+// for Firebase Web Clients, causing "Erro 400: origin_mismatch" on any other origin.
+// All OAuth token acquisitions must go through Firebase Auth signInWithPopup().
 export function trySilentTokenRefresh(
-  hintEmail?: string | null
+  _hintEmail?: string | null
 ): Promise<string | null> {
-  if (silentRefreshPromise) return silentRefreshPromise;
-
-  silentRefreshPromise = new Promise<string | null>((resolve) => {
-    try {
-      const win = window as unknown as {
-        google?: {
-          accounts?: {
-            oauth2?: {
-              initTokenClient: (config: {
-                client_id: string;
-                scope: string;
-                hint?: string;
-                prompt?: string;
-                callback: (resp: {
-                  access_token?: string;
-                  error?: string;
-                }) => void;
-                error_callback?: () => void;
-              }) => { requestAccessToken: (opts?: { prompt?: string; hint?: string }) => void };
-            };
-          };
-        };
-      };
-
-      const customClientId = (() => {
-        try {
-          return localStorage.getItem('casa_lala_custom_gis_client_id') || '';
-        } catch {
-          return '';
-        }
-      })();
-      const clientId =
-        customClientId.trim() ||
-        (firebaseConfig as { oAuthClientId?: string }).oAuthClientId ||
-        '';
-
-      if (!win.google?.accounts?.oauth2 || !clientId) {
-        resolve(null);
-        return;
-      }
-
-      const emailHint =
-        hintEmail ||
-        auth.currentUser?.email ||
-        getSavedGoogleUser()?.email ||
-        undefined;
-
-      let settled = false;
-      const finish = (tok: string | null) => {
-        if (settled) return;
-        settled = true;
-        resolve(tok);
-      };
-
-      const timer = window.setTimeout(() => finish(null), 2800);
-
-      const tokenClient = win.google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope: SCOPES.join(' '),
-        hint: emailHint,
-        prompt: '',
-        callback: (resp) => {
-          window.clearTimeout(timer);
-          if (resp?.access_token && !resp.error) {
-            setCachedToken(resp.access_token, true);
-            const saved = getSavedGoogleUser();
-            if (saved) {
-              upsertConnectedGoogleAccount(saved, resp.access_token);
-            }
-            finish(resp.access_token);
-          } else {
-            finish(null);
-          }
-        },
-        error_callback: () => {
-          window.clearTimeout(timer);
-          finish(null);
-        },
-      });
-
-      tokenClient.requestAccessToken({ prompt: '', hint: emailHint });
-    } catch {
-      resolve(null);
-    }
-  }).finally(() => {
-    silentRefreshPromise = null;
-  });
-
-  return silentRefreshPromise;
+  return Promise.resolve(null);
 }
 
 export function hasCalendarScopeGranted(): boolean {
@@ -481,13 +394,6 @@ export const initAuth = (
       saveGoogleUserProfile(profile);
       if (cachedAccessToken) {
         upsertConnectedGoogleAccount(profile, cachedAccessToken);
-      } else {
-        // Attempt silent token renewal in background without blocking or showing errors
-        trySilentTokenRefresh(user.email).then((renewed) => {
-          if (renewed) {
-            upsertConnectedGoogleAccount(profile, renewed);
-          }
-        });
       }
       if (onAuthSuccess) {
         onAuthSuccess(profile, cachedAccessToken || '');
@@ -595,66 +501,27 @@ export const googleSignIn = async (
   }
 };
 
-// Optional fallback: Sign in directly via Google Identity Services (GIS) if user provides custom Client ID
-export const signInWithCustomGISClient = (
+// Fallback: Sign in via Firebase Auth Popup (avoids Erro 400: origin_mismatch)
+export const signInWithCustomGISClient = async (
   customClientId: string
 ): Promise<{ user: GoogleUserProfile; accessToken: string }> => {
-  return new Promise((resolve, reject) => {
-    const win = window as unknown as {
-      google?: {
-        accounts?: {
-          oauth2?: {
-            initTokenClient: (config: {
-              client_id: string;
-              scope: string;
-              callback: (resp: {
-                access_token?: string;
-                error?: string;
-              }) => void;
-            }) => { requestAccessToken: (opts?: { prompt?: string }) => void };
-          };
-        };
-      };
-    };
-
-    if (!win.google?.accounts?.oauth2) {
-      reject(
-        new Error(
-          'Biblioteca Google Identity Services (GIS) ainda não carregada ou bloqueada offline.'
-        )
-      );
-      return;
+  const fbClientId =
+    (firebaseConfig as { oAuthClientId?: string }).oAuthClientId || '';
+  if (!customClientId.trim() || customClientId.trim() === fbClientId) {
+    const res = await googleSignIn(true, false);
+    if (!res) {
+      throw new Error('Janela de login fechada antes de concluir.');
     }
+    return res;
+  }
 
-    const tokenClient = win.google.accounts.oauth2.initTokenClient({
-      client_id: customClientId.trim(),
-      scope: SCOPES.join(' '),
-      callback: (response) => {
-        if (response.error || !response.access_token) {
-          reject(
-            new Error(
-              response.error || 'Falha ao autenticar via GIS TokenClient'
-            )
-          );
-          return;
-        }
-        setCachedToken(response.access_token, true);
-        const gisUser: GoogleUserProfile = {
-          uid: 'gis-user',
-          displayName: 'Conta Google Conectada (GIS)',
-          email: null,
-          photoURL: null,
-        };
-        saveGoogleUserProfile(gisUser);
-        resolve({
-          user: gisUser,
-          accessToken: response.access_token,
-        });
-      },
-    });
-
-    tokenClient.requestAccessToken({ prompt: 'consent' });
-  });
+  // Always prefer Firebase signInWithPopup first since it routes via firebaseapp.com/__/auth/handler
+  // and does not require registering every dynamic origin in Google Cloud Console
+  const fbRes = await googleSignIn(true, false);
+  if (fbRes) {
+    return fbRes;
+  }
+  throw new Error('Não foi possível concluir o login com o Google.');
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
@@ -679,9 +546,6 @@ export const getAccessToken = async (): Promise<string | null> => {
   } catch {
     // ignore
   }
-  // Attempt a non-interactive silent refresh before returning null
-  const refreshed = await trySilentTokenRefresh();
-  if (refreshed) return refreshed;
   return null;
 };
 
