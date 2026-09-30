@@ -12,6 +12,8 @@ import {
   Paperclip,
   SlidersHorizontal,
   MessageCircle,
+  Volume2,
+  Square,
 } from "lucide-react";
 import {
   AcaoGovernanta,
@@ -34,10 +36,12 @@ import {
 import { parseGastoNatural } from "../data/initialData";
 import {
   consultarLalaUnificada,
+  falarTextoComVozDaLala,
   formatarTamanhoBytes,
   lerArquivoParaAnexo,
+  pararVozDaLala,
 } from "../services/lalaEngine";
-import { FileImportChooserCard } from "./FileImportChooserCard";
+import { LalaAppActionCard } from "./LalaAppActionCard";
 
 interface SmartBrainModalProps {
   t: ThemeTokens;
@@ -103,11 +107,15 @@ export function SmartBrainModal({
   const [textoLivre, setTextoLivre] = useState("");
   const [gravandoVoz, setGravandoVoz] = useState(false);
   const [processando, setProcessando] = useState(false);
-  const [anexoAtual, setAnexoAtual] = useState<AnexoLala | null>(null);
+  const [anexosAtuais, setAnexosAtuais] = useState<AnexoLala[]>([]);
   const [pastaGuardar] = useState<ArquivoRepositorio["area"]>("Pessoal");
+  const [falandoId, setFalandoId] = useState<number | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const miniChatScrollRef = useRef<HTMLDivElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
 
   // Campos manuais rápidos para Gasto
   const [gastoValor, setGastoValor] = useState("");
@@ -146,13 +154,18 @@ export function SmartBrainModal({
   const handleSelecionarArquivo = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const filesArray: File[] = Array.from(files);
     try {
-      const lido = await lerArquivoParaAnexo(file, "auto", pastaGuardar);
-      setAnexoAtual(lido);
+      const lidos = await Promise.all(
+        filesArray.map((f) => lerArquivoParaAnexo(f, "auto", pastaGuardar))
+      );
+      setAnexosAtuais((prev) => [...prev, ...lidos]);
       showToast(
-        `Arquivo "${file.name}" carregado! Escolha o que deseja fazer com ele.`
+        lidos.length === 1
+          ? `"${lidos[0].nome}" anexado!`
+          : `${lidos.length} imagens/arquivos anexados!`
       );
     } catch {
       showToast("Não foi possível ler este arquivo.");
@@ -161,36 +174,17 @@ export function SmartBrainModal({
     }
   };
 
-  const guardarAnexoDiretoNoSegundoCerebro = (
-    pastaEscolhida?: ArquivoRepositorio["area"],
-    tituloCustom?: string
-  ) => {
-    if (!anexoAtual) return;
-    const pastaAlvo = pastaEscolhida || pastaGuardar;
-    const isImg = anexoAtual.mimeType.startsWith("image/");
-    const novoArq: ArquivoRepositorio = {
-      id: Date.now(),
-      titulo: tituloCustom || textoLivre.trim() || anexoAtual.nome,
-      area: pastaAlvo,
-      tipo: isImg ? "Imagem / Foto" : "PDF / Doc",
-      urlOuConteudo:
-        anexoAtual.textoExtraido?.slice(0, 240) ||
-        `Arquivo anexado (${formatarTamanhoBytes(anexoAtual.tamanhoBytes)}) — salvo via Bate-Papo Rápido da Lala`,
-      dataCriacao: "Hoje (via Lala)",
-      fixado: true,
-      statusLeitura: "Para Ler",
-      anexoBase64: anexoAtual.base64,
-      mimeType: anexoAtual.mimeType,
-      nomeArquivoOriginal: anexoAtual.nome,
-      tamanhoBytes: anexoAtual.tamanhoBytes,
-    };
-    setRepositorio((prev) => [novoArq, ...prev]);
-    showToast(`"${anexoAtual.nome}" guardado em ${pastaAlvo}!`);
-    setAnexoAtual(null);
-    setTextoLivre("");
-  };
+  const iniciarReconhecimentoVoz = async () => {
+    if (gravandoVoz && mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+      return;
+    }
 
-  const iniciarReconhecimentoVoz = () => {
+    pararVozDaLala();
+    setFalandoId(null);
+    audioChunksRef.current = [];
+    let transcricaoCapturada = "";
+
     const SpeechRec =
       (
         window as unknown as {
@@ -201,72 +195,119 @@ export function SmartBrainModal({
       (window as unknown as { webkitSpeechRecognition?: unknown })
         .webkitSpeechRecognition;
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let recognition: any = null;
     if (SpeechRec) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const recognition = new (SpeechRec as any)();
+        recognition = new (SpeechRec as any)();
         recognition.lang = "pt-BR";
-        recognition.interimResults = false;
-        setGravandoVoz(true);
+        recognition.continuous = true;
+        recognition.interimResults = true;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         recognition.onresult = (event: any) => {
-          const transcript = event.results?.[0]?.[0]?.transcript || "";
-          setTextoLivre((prev) =>
-            prev ? `${prev} ${transcript}` : transcript
-          );
-          setGravandoVoz(false);
+          let parcial = "";
+          for (let i = 0; i < event.results.length; i++) {
+            parcial += event.results[i][0].transcript + " ";
+          }
+          transcricaoCapturada = parcial.trim();
+          setTextoLivre(transcricaoCapturada);
         };
-        recognition.onerror = () => {
-          setGravandoVoz(false);
-        };
-        recognition.onend = () => setGravandoVoz(false);
         recognition.start();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+        const recorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = recorder;
+        recorder.ondataavailable = (ev) => {
+          if (ev.data && ev.data.size > 0) {
+            audioChunksRef.current.push(ev.data);
+          }
+        };
+        recorder.onstop = async () => {
+          setGravandoVoz(false);
+          if (recognition) {
+            try {
+              recognition.stop();
+            } catch {
+              // ignore
+            }
+          }
+          if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach((tr) => tr.stop());
+            mediaStreamRef.current = null;
+          }
+          const mimeType = recorder.mimeType || "audio/webm";
+          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          if (blob.size > 0) {
+            const base64 = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(String(reader.result || ""));
+              reader.readAsDataURL(blob);
+            });
+            const anexoAudio: AnexoLala = {
+              nome: "Áudio de voz",
+              mimeType,
+              tamanhoBytes: blob.size,
+              base64,
+              intencao: "auto",
+              guardarCopiaNoSegundoCerebro: false,
+            };
+            await falarComALala(
+              "auto",
+              transcricaoCapturada || "🎤 [Mensagem de Áudio]",
+              undefined,
+              false,
+              anexoAudio,
+              true
+            );
+          }
+        };
+        recorder.start();
+        setGravandoVoz(true);
         return;
       } catch {
         setGravandoVoz(false);
       }
     }
 
-    setGravandoVoz(true);
-    setTimeout(() => {
-      setGravandoVoz(false);
-      const frases = [
-        "Gastei 18,50 na padaria com café no Pix",
-        "Alimentei a Nina e o Tobias agora",
-        "Agendar reunião amanhã às 15h",
-        "Estou cansada hoje, alivia minha agenda?",
-      ];
-      setTextoLivre(frases[Math.floor(Math.random() * frases.length)]);
-    }, 700);
+    showToast("Toque no microfone e permita o acesso para conversar por áudio com a Lala.");
   };
 
-  // Falar com a Lala (Unificado: voz, texto ou arquivo/imagem anexado)
+  // Falar com a Lala (Unificado: voz, texto ou 1/vários arquivos/imagens anexados)
   const falarComALala = async (
     intencaoForcada?: IntencaoImportacaoArquivo,
     promptForcado?: string,
     pastaEscolhida?: ArquivoRepositorio["area"],
-    guardarCopia = true
+    guardarCopia = true,
+    anexoAudioDireto?: AnexoLala,
+    responderEmVoz = false
   ) => {
     const txt = (promptForcado ?? textoLivre).trim();
-    if (!txt && !anexoAtual) return;
+    const listaBase = anexoAudioDireto ? [anexoAudioDireto] : anexosAtuais;
+    if (!txt && listaBase.length === 0) return;
     const lower = txt.toLowerCase();
 
-    const anexoParaEnviar: AnexoLala | undefined = anexoAtual
-      ? {
-          ...anexoAtual,
-          intencao: intencaoForcada || anexoAtual.intencao || "auto",
-          areaRepositorio: pastaEscolhida || pastaGuardar,
-          guardarCopiaNoSegundoCerebro: guardarCopia,
-        }
-      : undefined;
+    const listaParaEnviar: AnexoLala[] = listaBase.map((ab) => ({
+      ...ab,
+      intencao: intencaoForcada || ab.intencao || "auto",
+      areaRepositorio: pastaEscolhida || pastaGuardar,
+      guardarCopiaNoSegundoCerebro: anexoAudioDireto ? false : guardarCopia,
+    }));
 
     setProcessando(true);
     setTextoLivre("");
-    setAnexoAtual(null);
+    if (!anexoAudioDireto) setAnexosAtuais([]);
 
     let executouDireto = false;
 
-    if (!anexoParaEnviar) {
+    if (listaParaEnviar.length === 0) {
       if (
         (lower.includes("alimentei") ||
           lower.includes("dei sachê") ||
@@ -343,15 +384,17 @@ export function SmartBrainModal({
     try {
       const msgEfetiva =
         txt ||
-        (anexoParaEnviar
-          ? `Lala, enviei o arquivo "${anexoParaEnviar.nome}" (${
-              intencaoForcada || "analisar"
-            }).`
+        (listaParaEnviar.length > 0
+          ? `Lala, analise ${
+              listaParaEnviar.length === 1
+                ? `a imagem/arquivo "${listaParaEnviar[0].nome}"`
+                : `estas ${listaParaEnviar.length} imagens/arquivos`
+            } e atualize o aplicativo para mim.`
           : "");
       const resultado = await consultarLalaUnificada(
         msgEfetiva,
         ctx,
-        anexoParaEnviar
+        listaParaEnviar
       );
 
       // Respeita a calibração de autonomia da Lala (auto vs confirmar)
@@ -387,18 +430,44 @@ export function SmartBrainModal({
         return a;
       });
 
+      const idNova = Date.now();
       const novaInteracao: InteracaoGovernanta = {
-        id: Date.now(),
+        id: idNova,
         dataHora: new Date().toLocaleTimeString("pt-BR", {
           hour: "2-digit",
           minute: "2-digit",
         }),
-        mensagemUsuario: msgEfetiva,
+        mensagemUsuario:
+          resultado.transcricaoAudioUsuario ||
+          (msgEfetiva === "🎤 [Mensagem de Áudio]"
+            ? "🎤 Mensagem de áudio enviada"
+            : msgEfetiva),
         ...resultado,
         acoesPropostas: acoesMarcadas,
       };
 
       setInteracoesLala((prev) => [novaInteracao, ...prev]);
+
+      const vozAtivaSalva =
+        typeof window !== "undefined" &&
+        window.localStorage.getItem("casa_lala_voz_ativa") !== "0";
+      if (responderEmVoz || vozAtivaSalva) {
+        setFalandoId(idNova);
+        falarTextoComVozDaLala(
+          resultado.respostaLala,
+          perfilCalibrado?.tomLala,
+          undefined,
+          () => setFalandoId((curr) => (curr === idNova ? null : curr))
+        ).then(({ audioBase64 }) => {
+          if (audioBase64) {
+            setInteracoesLala((prev) =>
+              prev.map((it) =>
+                it.id === idNova ? { ...it, audioLalaBase64: audioBase64 } : it
+              )
+            );
+          }
+        });
+      }
     } finally {
       setProcessando(false);
     }
@@ -516,13 +585,13 @@ export function SmartBrainModal({
             <button
               onClick={() => {
                 onClose();
-                onOpenCalibracao();
+                irParaLalaCompleta();
               }}
               style={{ background: t.cardSubtle, color: t.primary }}
               className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-              title="Calibrar informações do app"
+              title="Abrir tela cheia do Bate-Papo com a Lala"
             >
-              <SlidersHorizontal size={12} /> Calibrar
+              <ExternalLink size={12} /> Tela Cheia
             </button>
             <button
               onClick={onClose}
@@ -608,12 +677,52 @@ export function SmartBrainModal({
                       className="max-w-[88%] rounded-2xl rounded-tl-xs p-3 border space-y-2 shadow-2xs"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <span
-                          style={{ color: t.primary }}
-                          className="text-[10px] font-bold flex items-center gap-1"
-                        >
-                          <Sparkles size={10} /> {item.tituloCard || "Lala"}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            style={{ color: t.primary }}
+                            className="text-[10px] font-bold flex items-center gap-1"
+                          >
+                            <Sparkles size={10} /> {item.tituloCard || "Lala"}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (falandoId === item.id) {
+                                pararVozDaLala();
+                                setFalandoId(null);
+                                return;
+                              }
+                              setFalandoId(item.id);
+                              await falarTextoComVozDaLala(
+                                item.respostaLala,
+                                perfilCalibrado?.tomLala,
+                                item.audioLalaBase64,
+                                () =>
+                                  setFalandoId((curr) =>
+                                    curr === item.id ? null : curr
+                                  )
+                              );
+                            }}
+                            style={{
+                              backgroundColor:
+                                falandoId === item.id
+                                  ? t.action
+                                  : `${t.action}15`,
+                              color: falandoId === item.id ? "#fff" : t.action,
+                            }}
+                            className="px-2 py-0.5 rounded-full text-[9px] font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            {falandoId === item.id ? (
+                              <>
+                                <Square size={8} fill="currentColor" /> Parar
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 size={10} /> Ouvir
+                              </>
+                            )}
+                          </button>
+                        </div>
                         <span
                           style={{ color: t.textSoft }}
                           className="text-[9px] font-mono"
@@ -628,54 +737,17 @@ export function SmartBrainModal({
 
                       {item.acoesPropostas &&
                         item.acoesPropostas.length > 0 && (
-                          <div className="space-y-1.5 pt-1">
+                          <div className="space-y-1.5 pt-1.5">
                             {item.acoesPropostas.map((ac) => (
-                              <div
+                              <LalaAppActionCard
                                 key={ac.id}
-                                style={{
-                                  backgroundColor: t.cardSubtle,
-                                  borderColor: ac.executada
-                                    ? t.primary
-                                    : t.border,
-                                }}
-                                className="p-2 rounded-xl border flex items-center justify-between gap-2"
-                              >
-                                <div className="min-w-0">
-                                  <p className="text-[11px] font-bold truncate">
-                                    {ac.titulo}
-                                  </p>
-                                  <p
-                                    style={{ color: t.textSoft }}
-                                    className="text-[10px] truncate"
-                                  >
-                                    {ac.detalhe}
-                                  </p>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    executarAcaoDaLala(ac, item.id)
-                                  }
-                                  disabled={ac.executada}
-                                  style={{
-                                    backgroundColor: ac.executada
-                                      ? t.primary
-                                      : t.action,
-                                    color: "#fff",
-                                  }}
-                                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold shrink-0 flex items-center gap-1 cursor-pointer disabled:opacity-80"
-                                >
-                                  {ac.executada ? (
-                                    <>
-                                      <CheckCircle2 size={11} /> Feito
-                                    </>
-                                  ) : (
-                                    <>
-                                      Confirmar <ArrowRight size={11} />
-                                    </>
-                                  )}
-                                </button>
-                              </div>
+                                t={t}
+                                acao={ac}
+                                compact
+                                onExecutar={() =>
+                                  executarAcaoDaLala(ac, item.id)
+                                }
+                              />
                             ))}
                           </div>
                         )}
@@ -694,39 +766,63 @@ export function SmartBrainModal({
               )}
             </div>
 
-            {/* Input oculto para qualquer arquivo ou foto */}
+            {/* Input oculto para 1 ou vários arquivos/fotos */}
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
               onChange={handleSelecionarArquivo}
               className="hidden"
             />
 
-            {/* Card universal quando um arquivo ou imagem está anexado */}
-            {anexoAtual && (
-              <FileImportChooserCard
-                t={t}
-                anexo={anexoAtual}
-                compact
-                onClear={() => setAnexoAtual(null)}
-                onConfirmImport={(
-                  intencao,
-                  instrucao,
-                  pastaDestino,
-                  guardarCopia
-                ) =>
-                  falarComALala(
-                    intencao,
-                    instrucao,
-                    pastaDestino,
-                    guardarCopia
-                  )
-                }
-                onSaveOnly={(pastaDestino, tituloCustom) =>
-                  guardarAnexoDiretoNoSegundoCerebro(pastaDestino, tituloCustom)
-                }
-              />
+            {/* Tira compacta de miniaturas quando há imagens anexadas */}
+            {anexosAtuais.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                {anexosAtuais.map((anx, idx) => (
+                  <div
+                    key={`${anx.nome}-${idx}`}
+                    style={{
+                      backgroundColor: t.cardSubtle,
+                      borderColor: t.border,
+                    }}
+                    className="relative shrink-0 rounded-xl border p-1.5 flex items-center gap-2 pr-7"
+                  >
+                    {anx.mimeType.startsWith("image/") && anx.base64 ? (
+                      <img
+                        src={anx.base64}
+                        alt={anx.nome}
+                        className="w-10 h-10 rounded-lg object-cover shrink-0"
+                      />
+                    ) : (
+                      <Paperclip size={14} style={{ color: t.primary }} />
+                    )}
+                    <div className="max-w-[95px] min-w-0">
+                      <p className="text-[11px] font-semibold truncate">
+                        {anx.nome}
+                      </p>
+                      <p
+                        style={{ color: t.textSoft }}
+                        className="text-[9px] font-mono"
+                      >
+                        {formatarTamanhoBytes(anx.tamanhoBytes)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAnexosAtuais((prev) =>
+                          prev.filter((_, i) => i !== idx)
+                        )
+                      }
+                      style={{ backgroundColor: t.card, color: t.text }}
+                      className="w-5 h-5 rounded-full border flex items-center justify-center absolute top-1 right-1 cursor-pointer"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
 
             {/* Barra de entrada do Bate-Papo */}
@@ -734,19 +830,28 @@ export function SmartBrainModal({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer border"
+                className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer border relative"
                 style={{
-                  background: anexoAtual ? `${t.primary}20` : t.cardSubtle,
+                  background:
+                    anexosAtuais.length > 0 ? `${t.primary}20` : t.cardSubtle,
                   color: t.primary,
-                  borderColor: anexoAtual ? t.primary : t.border,
+                  borderColor: anexosAtuais.length > 0 ? t.primary : t.border,
                 }}
-                title="Anexar qualquer arquivo ou imagem"
+                title="Anexar 1 ou várias imagens/arquivos"
               >
                 <Paperclip size={18} />
+                {anexosAtuais.length > 0 && (
+                  <span
+                    style={{ backgroundColor: t.primary, color: "#fff" }}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center"
+                  >
+                    {anexosAtuais.length}
+                  </span>
+                )}
               </button>
 
               <textarea
-                rows={2}
+                rows={1}
                 value={textoLivre}
                 onChange={(e) => setTextoLivre(e.target.value)}
                 onKeyDown={(e) => {
@@ -755,15 +860,15 @@ export function SmartBrainModal({
                     falarComALala();
                   }
                 }}
-                placeholder="Bata um papo com a Lala, tire dúvidas, peça ações ou anexe no clipe 📎..."
-                className="flex-1 p-3 rounded-2xl text-xs outline-none resize-none leading-relaxed"
+                placeholder="Mensagem para a Lala..."
+                className="flex-1 px-3.5 py-2.5 rounded-2xl text-xs outline-none resize-none leading-relaxed min-h-[44px]"
                 style={{ background: t.cardSubtle, color: t.text }}
               />
 
               <button
                 type="button"
                 onClick={iniciarReconhecimentoVoz}
-                className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer"
+                className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer"
                 style={{
                   background: gravandoVoz ? t.danger : t.action,
                   color: "#fff",
@@ -776,8 +881,11 @@ export function SmartBrainModal({
               <button
                 type="button"
                 onClick={() => falarComALala()}
-                disabled={processando || (!textoLivre.trim() && !anexoAtual)}
-                className="w-11 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
+                disabled={
+                  processando ||
+                  (!textoLivre.trim() && anexosAtuais.length === 0)
+                }
+                className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer disabled:opacity-50"
                 style={{
                   background: t.primary,
                   color: "#fff",
@@ -793,38 +901,12 @@ export function SmartBrainModal({
                 className="p-2.5 rounded-xl flex items-center justify-between text-xs animate-pulse"
                 style={{ background: t.cardSubtle, color: t.action }}
               >
-                <span>🎙️ A Lala está te ouvindo... fale naturalmente</span>
+                <span>
+                  🎙️ Gravando áudio... toque novamente no microfone para enviar
+                </span>
                 <span className="font-mono">PT-BR</span>
               </div>
             )}
-
-            {/* Sugestões Rápidas Clicáveis para Continuar o Bate-Papo */}
-            <div className="flex flex-wrap gap-1.5">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="text-[11px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1 cursor-pointer border"
-                style={{
-                  background: `${t.primary}14`,
-                  color: t.primary,
-                  borderColor: `${t.primary}35`,
-                }}
-              >
-                <Paperclip size={11} /> Subir Arquivo / Foto
-              </button>
-              {sugestoesRapidas.map((sug) => (
-                <button
-                  key={sug}
-                  type="button"
-                  disabled={processando}
-                  onClick={() => falarComALala(undefined, sug)}
-                  className="text-[11px] px-2.5 py-1 rounded-full cursor-pointer hover:opacity-90"
-                  style={{ background: t.cardSubtle, color: t.textSoft }}
-                >
-                  "{sug}"
-                </button>
-              ))}
-            </div>
 
             <button
               type="button"
@@ -837,9 +919,9 @@ export function SmartBrainModal({
                 color: t.primary,
                 borderColor: `${t.primary}35`,
               }}
-              className="w-full py-2.5 rounded-2xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full py-2 rounded-2xl border text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              <span>Abrir Bate-Papo em Tela Cheia na Aba da Lala</span>
+              <span>Abrir Bate-Papo em Tela Cheia</span>
               <ExternalLink size={13} />
             </button>
           </div>

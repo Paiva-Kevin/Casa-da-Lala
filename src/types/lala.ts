@@ -300,8 +300,13 @@ export interface InteracaoGovernanta {
   modo: ModoInteracaoLala;
   humorUsuario?: string;
   mensagemUsuario: string;
+  transcricaoAudioUsuario?: string;
+  audioUsuarioBase64?: string;
+  audioLalaBase64?: string;
+  enviadoPorAudio?: boolean;
   nomeAnexo?: string;
   anexo?: AnexoLala;
+  anexos?: AnexoLala[];
   respostaLala: string;
   tags?: string[];
   tituloCard?: string;
@@ -643,12 +648,36 @@ export interface ProjetoTrabalho {
 // ---------- FINANÇAS ----------
 export type MesFinanceiroKey = "2026-08" | "2026-09" | "2026-10";
 
+export type BancoId =
+  | "nubank"
+  | "itau"
+  | "inter"
+  | "bradesco"
+  | "santander"
+  | "bb"
+  | "caixa"
+  | "c6"
+  | "picpay"
+  | "mercadopago"
+  | "xp"
+  | "btg"
+  | "carteira"
+  | "outro";
+
 export interface ContaBancaria {
   id: number;
   nome: string;
-  tipo: "Corrente / Pix" | "Recebimento" | "Reserva";
+  tipo:
+    | "Corrente / Pix"
+    | "Recebimento"
+    | "Reserva"
+    | "Investimentos"
+    | "Carteira Física";
   saldoAtual: number;
   cor: string;
+  bancoId?: BancoId;
+  agenciaConta?: string;
+  metaReserva?: number;
 }
 
 export interface CartaoCredito {
@@ -659,6 +688,8 @@ export interface CartaoCredito {
   fechamentoDia: number;
   vencimentoDia: number;
   statusFatura: "aberta" | "fechada" | "paga";
+  bancoId?: BancoId;
+  cor?: string;
 }
 
 export interface OrcamentoCategoria {

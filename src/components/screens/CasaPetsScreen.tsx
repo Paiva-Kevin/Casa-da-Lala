@@ -34,12 +34,14 @@ interface CasaRotinasScreenProps {
   comodos: ComodoCasa[];
   setComodos: React.Dispatch<React.SetStateAction<ComodoCasa[]>>;
   estoqueCasa: ItemEstoqueCasa[];
+  setEstoqueCasa?: React.Dispatch<React.SetStateAction<ItemEstoqueCasa[]>>;
   ajustarItemEstoqueCasa: (itemId: number, delta: number) => void;
   listaCompras: ItemListaCompras[];
   setListaCompras: React.Dispatch<React.SetStateAction<ItemListaCompras[]>>;
   comprarItemDaListaEReporEstoque: (itemCompra: ItemListaCompras) => void;
   enviarRotinaParaHoje: (rotina: RotinaComodo, comodoNome: string) => void;
   petsPerfil: PetPerfil[];
+  setPetsPerfil?: React.Dispatch<React.SetStateAction<PetPerfil[]>>;
   alimentarPet: (petId: number) => void;
   registrarCompraSaches: (pet: PetPerfil) => void;
   showToast: (msg: string) => void;
@@ -58,12 +60,14 @@ export function CasaPetsScreen({
   comodos,
   setComodos,
   estoqueCasa,
+  setEstoqueCasa,
   ajustarItemEstoqueCasa,
   listaCompras,
   setListaCompras,
   comprarItemDaListaEReporEstoque,
   enviarRotinaParaHoje,
   petsPerfil,
+  setPetsPerfil,
   alimentarPet,
   registrarCompraSaches,
   showToast,
@@ -72,6 +76,11 @@ export function CasaPetsScreen({
     "rotinas_ambientes" | "estoque_compras"
   >("rotinas_ambientes");
   const [filtroComodoId, setFiltroComodoId] = useState<number | "todos">("todos");
+  const [novoComodoNome, setNovoComodoNome] = useState("");
+  const [mostrarNovoComodo, setMostrarNovoComodo] = useState(false);
+  const [novoEstoqueNome, setNovoEstoqueNome] = useState("");
+  const [novoEstoqueMin, setNovoEstoqueMin] = useState("1");
+  const [novoEstoqueUn, setNovoEstoqueUn] = useState("un");
 
   // Edição inline de uma rotina recorrente
   const [rotinaEditandoId, setRotinaEditandoId] = useState<number | null>(null);
@@ -869,7 +878,52 @@ export function CasaPetsScreen({
                     {c.nome}
                   </button>
                 ))}
+                <button
+                  onClick={() => setMostrarNovoComodo((v) => !v)}
+                  className="px-3 py-2 rounded-xl text-xs font-bold shrink-0 border cursor-pointer"
+                  style={{
+                    background: `${t.primary}15`,
+                    color: t.primary,
+                    borderColor: `${t.primary}40`,
+                  }}
+                >
+                  + Ambiente
+                </button>
               </div>
+
+              {mostrarNovoComodo && (
+                <div
+                  className="p-3.5 rounded-2xl border flex gap-2"
+                  style={{ background: t.card, borderColor: t.border }}
+                >
+                  <input
+                    value={novoComodoNome}
+                    onChange={(e) => setNovoComodoNome(e.target.value)}
+                    placeholder="Nome do novo ambiente (ex: Varanda, Escritório)..."
+                    className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!novoComodoNome.trim()) return;
+                      setComodos((prev) => [
+                        ...prev,
+                        {
+                          id: Date.now(),
+                          nome: novoComodoNome.trim(),
+                          rotinas: [],
+                        },
+                      ]);
+                      setNovoComodoNome("");
+                      setMostrarNovoComodo(false);
+                    }}
+                    className="px-4 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
+                    style={{ background: t.primary }}
+                  >
+                    Criar
+                  </button>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 gap-4">
                 {comodosVisiveis.map((comodo) => {
@@ -1262,15 +1316,32 @@ export function CasaPetsScreen({
                           </span>
                         )}
                       </div>
-                      <p
-                        className="text-xs sm:text-sm font-bold mt-0.5 truncate"
-                        style={{ color: t.text }}
-                      >
-                        {item.nome}
-                      </p>
+                      {setEstoqueCasa ? (
+                        <input
+                          value={item.nome}
+                          onChange={(e) =>
+                            setEstoqueCasa((prev) =>
+                              prev.map((x) =>
+                                x.id === item.id
+                                  ? { ...x, nome: e.target.value }
+                                  : x
+                              )
+                            )
+                          }
+                          className="w-full text-xs sm:text-sm font-bold mt-0.5 bg-transparent outline-none border-b border-transparent focus:border-current"
+                          style={{ color: t.text }}
+                        />
+                      ) : (
+                        <p
+                          className="text-xs sm:text-sm font-bold mt-0.5 truncate"
+                          style={{ color: t.text }}
+                        >
+                          {item.nome}
+                        </p>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         onClick={() =>
                           ajustarItemEstoqueCasa(
@@ -1304,10 +1375,65 @@ export function CasaPetsScreen({
                       >
                         +
                       </button>
+                      {setEstoqueCasa && (
+                        <button
+                          onClick={() =>
+                            setEstoqueCasa((prev) =>
+                              prev.filter((x) => x.id !== item.id)
+                            )
+                          }
+                          className="p-1.5 rounded-lg cursor-pointer"
+                          style={{ color: t.danger }}
+                          title="Excluir item do estoque"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
               })}
+
+              {setEstoqueCasa && (
+                <div className="flex gap-2 pt-1">
+                  <input
+                    value={novoEstoqueNome}
+                    onChange={(e) => setNovoEstoqueNome(e.target.value)}
+                    placeholder="+ Novo item de estoque (ex: Sabão líquido)..."
+                    className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <input
+                    value={novoEstoqueUn}
+                    onChange={(e) => setNovoEstoqueUn(e.target.value)}
+                    placeholder="un/kg"
+                    className="w-16 px-2 py-2 rounded-xl text-xs border outline-none text-center"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!novoEstoqueNome.trim()) return;
+                      setEstoqueCasa((prev) => [
+                        ...prev,
+                        {
+                          id: Date.now(),
+                          nome: novoEstoqueNome.trim(),
+                          categoria: "Despensa & Meal Prep",
+                          quantidadeAtual: 2,
+                          quantidadeMinima: Math.max(1, Number(novoEstoqueMin) || 1),
+                          unidade: novoEstoqueUn.trim() || "un",
+                          precoEstimado: 18,
+                        },
+                      ]);
+                      setNovoEstoqueNome("");
+                    }}
+                    className="px-3.5 rounded-xl text-xs font-semibold text-white cursor-pointer"
+                    style={{ background: t.primary }}
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
+              )}
             </div>
           </section>
 
@@ -1332,38 +1458,82 @@ export function CasaPetsScreen({
                   style={{ background: t.bg, borderColor: t.border }}
                 >
                   <div className="min-w-0 flex-1">
-                    <p
-                      className={`text-xs sm:text-sm font-semibold ${
+                    <input
+                      value={item.nome}
+                      onChange={(e) =>
+                        setListaCompras((prev) =>
+                          prev.map((x) =>
+                            x.id === item.id
+                              ? { ...x, nome: e.target.value }
+                              : x
+                          )
+                        )
+                      }
+                      className={`w-full text-xs sm:text-sm font-semibold bg-transparent outline-none border-b border-transparent focus:border-current ${
                         item.comprado ? "line-through" : ""
                       }`}
                       style={{ color: item.comprado ? t.textSoft : t.text }}
-                    >
-                      {item.nome}
-                    </p>
-                    <p
-                      className="text-[11px] font-mono-num"
+                    />
+                    <div
+                      className="flex items-center gap-1.5 text-[11px] font-mono-num"
                       style={{ color: t.textSoft }}
                     >
-                      {item.categoria} · R$ {item.precoEstimado.toFixed(2)}
-                    </p>
+                      <span>{item.categoria} · R$</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={item.precoEstimado}
+                        onChange={(e) =>
+                          setListaCompras((prev) =>
+                            prev.map((x) =>
+                              x.id === item.id
+                                ? {
+                                    ...x,
+                                    precoEstimado: Math.max(
+                                      0,
+                                      Number(e.target.value) || 0
+                                    ),
+                                  }
+                                : x
+                            )
+                          )
+                        }
+                        className="w-16 bg-transparent outline-none border-b border-transparent focus:border-current"
+                        style={{ color: t.textSoft }}
+                      />
+                    </div>
                   </div>
 
-                  {!item.comprado ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {!item.comprado ? (
+                      <button
+                        onClick={() => comprarItemDaListaEReporEstoque(item)}
+                        className="px-3 py-2 rounded-xl text-xs font-semibold text-white shrink-0 cursor-pointer"
+                        style={{ background: t.finance }}
+                      >
+                        Comprar & Repor
+                      </button>
+                    ) : (
+                      <span
+                        className="text-xs font-semibold"
+                        style={{ color: t.primary }}
+                      >
+                        Reposto ✓
+                      </span>
+                    )}
                     <button
-                      onClick={() => comprarItemDaListaEReporEstoque(item)}
-                      className="px-3 py-2 rounded-xl text-xs font-semibold text-white shrink-0 cursor-pointer"
-                      style={{ background: t.finance }}
+                      onClick={() =>
+                        setListaCompras((prev) =>
+                          prev.filter((x) => x.id !== item.id)
+                        )
+                      }
+                      className="p-1.5 rounded-lg cursor-pointer"
+                      style={{ color: t.danger }}
+                      title="Remover da lista"
                     >
-                      Comprar & Repor
+                      <Trash2 size={13} />
                     </button>
-                  ) : (
-                    <span
-                      className="text-xs font-semibold"
-                      style={{ color: t.primary }}
-                    >
-                      Reposto ✓
-                    </span>
-                  )}
+                  </div>
                 </div>
               ))}
             </div>

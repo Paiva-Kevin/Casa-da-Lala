@@ -23,6 +23,7 @@ import {
   Star,
   Clock,
   Search,
+  Trash2,
 } from "lucide-react";
 import {
   BottomSheetPayload,
@@ -65,6 +66,7 @@ interface HomeScreenProps {
     diaMes?: number
   ) => void;
   habitos: HabitoDiario[];
+  setHabitos?: React.Dispatch<React.SetStateAction<HabitoDiario[]>>;
   toggleHabitoHoje: (id: number) => void;
   adicionarHabito: (titulo: string, metaTexto: string) => void;
   compromissos: Compromisso[];
@@ -107,6 +109,7 @@ export function HomeScreen({
   moverTarefaHorizonte,
   agendarTarefaNoHorario,
   habitos,
+  setHabitos,
   toggleHabitoHoje,
   adicionarHabito,
   compromissos,
@@ -1169,15 +1172,14 @@ export function HomeScreen({
                 />
               </div>
 
-              {/* Lista Visual de Hábitos Diários */}
+              {/* Lista Visual de Hábitos Diários (Editável) */}
               <div className="space-y-2.5">
                 {habitos.map((hab) => {
                   const diasLabels = ["S", "T", "Q", "Q", "S", "S", "D"];
                   return (
                     <div
                       key={hab.id}
-                      onClick={() => toggleHabitoHoje(hab.id)}
-                      className="p-3.5 rounded-2xl border flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.99]"
+                      className="p-3.5 rounded-2xl border flex items-center justify-between gap-3 transition-all"
                       style={{
                         background: hab.feitoHoje
                           ? t.mode === "light"
@@ -1189,8 +1191,9 @@ export function HomeScreen({
                     >
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         {/* Botão de 1 Toque */}
-                        <div
-                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors"
+                        <button
+                          onClick={() => toggleHabitoHoje(hab.id)}
+                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 transition-colors cursor-pointer"
                           style={{
                             background: hab.feitoHoje ? t.primary : t.cardSubtle,
                             color: hab.feitoHoje ? "#fff" : t[hab.cor],
@@ -1201,10 +1204,27 @@ export function HomeScreen({
                           ) : (
                             renderHabitoIcon(hab.icone, t[hab.cor])
                           )}
-                        </div>
+                        </button>
 
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                          {setHabitos ? (
+                            <input
+                              value={hab.titulo}
+                              onChange={(e) =>
+                                setHabitos((prev) =>
+                                  prev.map((h) =>
+                                    h.id === hab.id
+                                      ? { ...h, titulo: e.target.value }
+                                      : h
+                                  )
+                                )
+                              }
+                              className={`w-full text-xs sm:text-sm font-bold bg-transparent outline-none border-b border-transparent focus:border-current ${
+                                hab.feitoHoje ? "line-through opacity-85" : ""
+                              }`}
+                              style={{ color: t.text }}
+                            />
+                          ) : (
                             <p
                               className={`text-xs sm:text-sm font-bold truncate ${
                                 hab.feitoHoje ? "line-through opacity-85" : ""
@@ -1213,7 +1233,7 @@ export function HomeScreen({
                             >
                               {hab.titulo}
                             </p>
-                          </div>
+                          )}
 
                           <div
                             className="flex items-center gap-2 text-[11px] font-mono-num mt-0.5"
@@ -1227,17 +1247,35 @@ export function HomeScreen({
                             </span>
                             <span>·</span>
                             <span>Recorde {hab.melhorStreak}d</span>
-                            {hab.metaTexto && (
-                              <>
-                                <span>·</span>
-                                <span>{hab.metaTexto}</span>
-                              </>
+                            {setHabitos ? (
+                              <input
+                                value={hab.metaTexto || ""}
+                                onChange={(e) =>
+                                  setHabitos((prev) =>
+                                    prev.map((h) =>
+                                      h.id === hab.id
+                                        ? { ...h, metaTexto: e.target.value }
+                                        : h
+                                    )
+                                  )
+                                }
+                                placeholder="Meta..."
+                                className="w-20 bg-transparent outline-none border-b border-transparent focus:border-current"
+                                style={{ color: t.textSoft }}
+                              />
+                            ) : (
+                              hab.metaTexto && (
+                                <>
+                                  <span>·</span>
+                                  <span>{hab.metaTexto}</span>
+                                </>
+                              )
                             )}
                           </div>
                         </div>
                       </div>
 
-                      {/* Mini-histórico de 7 dias da semana */}
+                      {/* Mini-histórico de 7 dias da semana + Excluir */}
                       <div className="flex items-center gap-1 shrink-0">
                         {hab.historicoSemana.map((feitoDia, idxDia) => (
                           <div
@@ -1260,6 +1298,20 @@ export function HomeScreen({
                             </span>
                           </div>
                         ))}
+                        {setHabitos && (
+                          <button
+                            onClick={() =>
+                              setHabitos((prev) =>
+                                prev.filter((h) => h.id !== hab.id)
+                              )
+                            }
+                            className="p-1 ml-1 rounded-lg cursor-pointer"
+                            style={{ color: t.danger }}
+                            title="Excluir hábito"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   );
@@ -1358,35 +1410,83 @@ export function HomeScreen({
                       style={{ background: t.bg, borderColor: t.border }}
                     >
                       <div className="flex items-start justify-between gap-2">
-                        <div>
+                        <div className="flex-1 min-w-0">
                           <div
                             className="flex items-center gap-1.5 text-[11px] font-medium"
                             style={{ color: t[meta.cor] }}
                           >
-                            <span>{meta.categoria}</span>
-                            <span>·</span>
-                            <span>Prazo {meta.prazo}</span>
+                            <input
+                              value={meta.categoria}
+                              onChange={(e) =>
+                                setMetas((prev) =>
+                                  prev.map((mt) =>
+                                    mt.id === meta.id
+                                      ? { ...mt, categoria: e.target.value }
+                                      : mt
+                                  )
+                                )
+                              }
+                              className="w-28 bg-transparent outline-none border-b border-transparent focus:border-current"
+                              style={{ color: t[meta.cor] }}
+                            />
+                            <span>· Prazo</span>
+                            <input
+                              value={meta.prazo}
+                              onChange={(e) =>
+                                setMetas((prev) =>
+                                  prev.map((mt) =>
+                                    mt.id === meta.id
+                                      ? { ...mt, prazo: e.target.value }
+                                      : mt
+                                  )
+                                )
+                              }
+                              className="w-20 bg-transparent outline-none border-b border-transparent focus:border-current"
+                              style={{ color: t[meta.cor] }}
+                            />
                           </div>
-                          <p
-                            className="text-xs sm:text-sm font-bold mt-0.5"
+                          <input
+                            value={meta.titulo}
+                            onChange={(e) =>
+                              setMetas((prev) =>
+                                prev.map((mt) =>
+                                  mt.id === meta.id
+                                    ? { ...mt, titulo: e.target.value }
+                                    : mt
+                                )
+                              )
+                            }
+                            className="w-full text-xs sm:text-sm font-bold mt-0.5 bg-transparent outline-none border-b border-transparent focus:border-current"
                             style={{ color: t.text }}
-                          >
-                            {meta.titulo}
-                          </p>
+                          />
                         </div>
-                        <div className="text-right shrink-0">
-                          <span
-                            className="text-sm font-mono-num font-bold"
-                            style={{ color: t[meta.cor] }}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="text-right">
+                            <span
+                              className="text-sm font-mono-num font-bold"
+                              style={{ color: t[meta.cor] }}
+                            >
+                              {pct}%
+                            </span>
+                            <span
+                              className="block text-[10px] font-mono-num"
+                              style={{ color: t.textSoft }}
+                            >
+                              {feitos}/{meta.marcos.length} marcos
+                            </span>
+                          </div>
+                          <button
+                            onClick={() =>
+                              setMetas((prev) =>
+                                prev.filter((mt) => mt.id !== meta.id)
+                              )
+                            }
+                            className="p-1 rounded-lg cursor-pointer"
+                            style={{ color: t.danger }}
+                            title="Excluir meta"
                           >
-                            {pct}%
-                          </span>
-                          <span
-                            className="block text-[10px] font-mono-num"
-                            style={{ color: t.textSoft }}
-                          >
-                            {feitos}/{meta.marcos.length} marcos
-                          </span>
+                            <Trash2 size={12} />
+                          </button>
                         </div>
                       </div>
 

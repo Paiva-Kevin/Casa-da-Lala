@@ -30,7 +30,7 @@
           if ('caches' in window) {
             caches.keys().then((names) => {
               names.forEach((name) => {
-                if (name.includes('v6') || name.includes('v5') || name.includes('v4') || name.includes('v3')) {
+                if (name.includes('v8') || name.includes('v7') || name.includes('v6') || name.includes('v5') || name.includes('v4') || name.includes('v3')) {
                   caches.delete(name);
                 }
               });

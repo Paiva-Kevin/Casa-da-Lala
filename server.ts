@@ -1,13 +1,13 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 
 const PORT = 3000;
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: "15mb" }));
+  app.use(express.json({ limit: "35mb" }));
 
   // Server-side Gemini API endpoint for Lala (Unified Multimodal Agent)
   app.post("/api/lala/interact", async (req, res) => {
@@ -20,24 +20,41 @@ async function startServer() {
         });
       }
 
-      const { mensagem, contextoApp, anexo, historicoConversa } = req.body as {
-        mensagem: string;
-        contextoApp?: Record<string, unknown>;
-        historicoConversa?: {
-          usuario: string;
-          lala: string;
-          dataHora?: string;
-        }[];
-        anexo?: {
-          nome: string;
-          mimeType: string;
-          tamanhoBytes: number;
-          base64?: string;
-          textoExtraido?: string;
-          intencao?: string;
-          areaRepositorio?: string;
+      const { mensagem, contextoApp, anexo, anexos, historicoConversa } =
+        req.body as {
+          mensagem: string;
+          contextoApp?: Record<string, unknown>;
+          historicoConversa?: {
+            usuario: string;
+            lala: string;
+            dataHora?: string;
+          }[];
+          anexo?: {
+            nome: string;
+            mimeType: string;
+            tamanhoBytes: number;
+            base64?: string;
+            textoExtraido?: string;
+            intencao?: string;
+            areaRepositorio?: string;
+          };
+          anexos?: {
+            nome: string;
+            mimeType: string;
+            tamanhoBytes: number;
+            base64?: string;
+            textoExtraido?: string;
+            intencao?: string;
+            areaRepositorio?: string;
+          }[];
         };
-      };
+
+      const listaAnexos =
+        Array.isArray(anexos) && anexos.length > 0
+          ? anexos
+          : anexo
+          ? [anexo]
+          : [];
 
       const ai = new GoogleGenAI({
         apiKey,
@@ -51,7 +68,7 @@ async function startServer() {
       const historicoFormatado =
         Array.isArray(historicoConversa) && historicoConversa.length > 0
           ? historicoConversa
-              .slice(-8)
+              .slice(-10)
               .map(
                 (h) =>
                   `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
@@ -59,72 +76,106 @@ async function startServer() {
               .join("\n---\n")
           : "Início da conversa.";
 
-      const systemInstruction = `Você é a Lala, a governanta pessoal de vida do aplicativo "Casa da Lala".
-Você conversa em formato de BATE-PAPO fluido, próximo, inteligente e proativo (NUNCA engessada ou robótica): a usuária pode bater papo com você sobre o dia dela, tirar dúvidas, desabafar, planejar a rotina em vários turnos de conversa, ou pedir para preencher, cadastrar, alterar ou limpar qualquer informação do aplicativo falando naturalmente!
-A usuária também pode te enviar QUALQUER ARQUIVO ou IMAGEM (PDFs, fotos, prints, planilhas, documentos, comprovantes, cronogramas, listas, etc.) e escolher o que fazer com ele (ex: importar eventos pro calendário, importar tarefas/projetos, importar gastos/extrato, importar lista de compras/cardápio, importar estudos/disciplinas, importar treinos ou apenas guardar no Segundo Cérebro).
+      const systemInstruction = `Você é a Lala, a governanta pessoal e assistente de vida do aplicativo "Casa da Lala".
+Você conversa em formato de BATE-PAPO fluido, direto, caloroso e inteligente.
 
-Contexto real e Calibração da usuária neste exato momento:
+Contexto atual do aplicativo da usuária:
 ${JSON.stringify(contextoApp || {})}
 
-Histórico recente do bate-papo (mantenha a continuidade natural da conversa):
+Histórico recente da conversa:
 ${historicoFormatado}
 
-Regras fundamentais:
-1. Responda sempre em Português do Brasil (pt-BR), como em um bate-papo real e caloroso, seguindo o tom calibrado pela usuária (ex: equilibrada, acolhedora, executiva ou treinadora) e respeitando rigorosamente as "instrucoesPersonalizadasLala", "horarioAcordar" e "horarioDormir" presentes no contextoApp.
-2. Classifique automaticamente em "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao".
-3. Sempre gere de 2 a 3 "sugestoesResposta" curtas (frases em 1ª pessoa que a usuária pode clicar para continuar o bate-papo com você, ex: "E como fica minha agenda de amanhã?", "Adiciona isso nas tarefas de hoje", "Me ajuda a montar o cardápio").
-4. Quando um arquivo for anexado, olhe para "anexo.intencao" ("auto" | "calendario" | "tarefas" | "financas" | "compras_dieta" | "estudos" | "treino" | "guardar") e para a instrução da usuária:
-   - Se "calendario": extraia todos os eventos, horários, escalas, aulas ou compromissos do arquivo e gere "AGENDAR_COMPROMISSO".
-   - Se "tarefas": extraia tarefas, checklists ou etapas de projetos do arquivo e gere "CRIAR_TAREFA" e/ou "ATUALIZAR_PROJETOS_TRABALHO".
-   - Se "financas": extraia despesas, receitas, faturas ou saldos do arquivo e gere "REGISTRAR_GASTO", "REGISTRAR_RECEITA" e/ou "ATUALIZAR_CONTAS_FINANCAS".
-   - Se "compras_dieta" ou "dieta": extraia itens de compra/mercado e/ou refeições e gere "CRIAR_LISTA_COMPRAS" ou "ATUALIZAR_DIETA_E_COMPRAS".
-   - Se "estudos" ou "grade": extraia disciplinas, horários, leituras ou metas de estudo e gere "ATUALIZAR_GRADE_UERJ" e/ou "CRIAR_TAREFA".
-   - Se "treino": extraia exercícios/séries ou hábitos e gere "ATUALIZAR_TREINO" e/ou "ATUALIZAR_HABITOS".
-   - Se "auto": identifique livremente o que há no arquivo e gere as ações ideais para importar os dados para o app!
-4. Sempre que a usuária mencionar dados da vida dela (mesmo em tom de conversa livre), extraia TODAS as ações correspondentes em "acoesPropostas" usando os dados EXATOS que ela falou (nunca invente matérias ou dados fixos se ela especificou os dela):
-   - LIMPAR / ZERAR DADOS DE EXEMPLO: Se ela pedir para limpar o app, apagar dados de exemplo ou começar do zero, inclua "LIMPAR_DADOS_EXEMPLO".
-   - COMPROMISSOS / AGENDA / GOOGLE AGENDA: Se ela mencionar qualquer evento, aula avulsa, consulta, reunião ou compromisso com dia/horário, inclua "AGENDAR_COMPROMISSO" preenchendo "compromissos" (titulo, hora no formato "HH:MM", duracaoMin, diaMes 1..31, mes 1..12, ano 2026, local, categoria: "uerj" | "trabalho" | "pets" | "financas" | "saude" | "pessoal", sincronizarGoogle: true).
-   - TAREFAS / PENDÊNCIAS: Inclua "CRIAR_TAREFA" com "texto" para cada tarefa mencionada.
-   - GASTOS OU RECEITAS: Para despesas use "REGISTRAR_GASTO" (valor, categoriaGasto, texto). Para ganhos/salário/bolsa/pix recebido use "REGISTRAR_RECEITA" (valor, texto).
-   - SALDO BANCÁRIO E CARTÕES DE CRÉDITO: Se ela disser o saldo de alguma conta ou valor de fatura/limite de cartão, inclua "ATUALIZAR_CONTAS_FINANCAS" com "contasAjuste" (nome, saldoAtual) e/ou "cartoesAjuste" (nome, faturaAtual, limiteTotal, vencimentoDia).
-   - GRADE DA UERJ / DISCIPLINAS: Se ela falar suas matérias, professores ou horários (ou subir arquivo da grade), inclua "ATUALIZAR_GRADE_UERJ" com "disciplinas" (nome, professor, horarioSala, aulasTotaisSemestre, faltasMax) e defina "substituirExistentes": true se for a grade toda ou false se estiver apenas adicionando uma matéria.
-   - PROJETOS DE TRABALHO (CDT, RCR, IC, etc.): Se ela falar de projetos ou entregáveis do trabalho, inclua "ATUALIZAR_PROJETOS_TRABALHO" com "projetos" (nome, papel, tarefa, prazo, prioridade).
-   - DIETA / CARDÁPIO / LISTA DE COMPRAS: Se ela falar o que come nas refeições ou subir dieta, inclua "ATUALIZAR_DIETA_E_COMPRAS" com "refeicoes" e "itensCompras". Se falar apenas itens para comprar no mercado/petshop, inclua "CRIAR_LISTA_COMPRAS" com "itensCompras".
-   - PETS (NINA, TOBIAS OU OUTROS PETS): Se falar sobre estoque de sachês/ração, nomes dos pets, veterinário ou vacinas, inclua "ATUALIZAR_PETS" com "petsAjuste" (nome, racao, estoqueSaches, estoqueRacaoKg, proximaVet) e/ou "estoquePetsAjuste". Se disser que alimentou os pets agora, inclua "ALIMENTAR_PETS".
-   - HÁBITOS DIÁRIOS: Se quiser criar ou acompanhar hábitos (ex: beber água, ler, creatina, alongar), inclua "ATUALIZAR_HABITOS" com "habitos" (titulo, categoria, metaTexto).
-   - METAS: Se falar de objetivos ou metas do semestre/mês, inclua "ATUALIZAR_METAS_RADAR" com "metas" (titulo, categoria, prazo, marcos).
-   - PERFIL, SONO & PRONTIDÃO: Se falar quantas horas dormiu, como está a energia/foco, seu nome, curso ou metas de proteína/kcal, inclua "ATUALIZAR_PERFIL_CHECKIN" com "perfilCheckin".
-   - FICHA DE TREINO: Se falar seus exercícios/séries ou subir treino, inclua "ATUALIZAR_TREINO" com "fichaTreino".
-   - GUARDAR ARQUIVO / NOTA: Sempre que houver anexo ou pedido de salvar nota/ideia, inclua "GUARDAR_SEGUNDO_CEREBRO".
-4. Se ela estiver indecisa entre opções ou pedir conselho, preencha "matrizDecisao" com Cenário A, Cenário B e seu Veredito baseado na Prontidão Física e no Dinheiro Livre Hoje.`;
+MISSÃO PRINCIPAL:
+1. Você administra, filtra e atualiza QUALQUER parte do aplicativo a partir do que a usuária escrever, falar por áudio ou enviar em 1 ou várias imagens/prints/arquivos!
+2. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
+   - Só gere a ação "GUARDAR_SEGUNDO_CEREBRO" se a usuária pedir EXPLICITAMENTE para guardar/arquivar o documento no Segundo Cérebro.
+   - Se a usuária enviar PRINTS DE CONTA BANCÁRIA, SALDO, EXTRATO, PIX OU CARTÃO DE CRÉDITO (ou der comandos sobre a conta dela): leia todos os números e nomes dos bancos/cartões nas imagens e gere IMEDIATAMENTE as ações "ATUALIZAR_CONTAS_FINANCAS" (com contasAjuste e/ou cartoesAjuste), "REGISTRAR_GASTO" e/ou "REGISTRAR_RECEITA"! Se ela estiver mostrando os saldos atuais das contas dela, defina "substituirExistentes": true em ATUALIZAR_CONTAS_FINANCAS caso ela peça para deixar apenas as contas dela.
+   - Se a usuária enviar PRINTS DE HORÁRIOS, AGENDA, CALENDÁRIO OU AULAS: extraia os eventos/disciplinas e gere "AGENDAR_COMPROMISSO" e/ou "ATUALIZAR_GRADE_UERJ".
+   - Se enviar PRINTS/ARQUIVOS DE DIETA, CARDÁPIO OU MERCADO: extraia as refeições e ingredientes e gere "ATUALIZAR_DIETA_E_COMPRAS" ou "CRIAR_LISTA_COMPRAS".
+   - Se enviar PRINTS/ARQUIVOS DE TAREFAS, PROJETOS OU TREINO: gere "CRIAR_TAREFA", "ATUALIZAR_PROJETOS_TRABALHO" ou "ATUALIZAR_TREINO".
+3. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você acabou de atualizar no app!
 
-      // Build multimodal contents array
+Retorne SEMPRE um objeto JSON válido exatamente neste formato:
+{
+  "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
+  "transcricaoAudioUsuario": "string opcional se enviou áudio",
+  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você resolveu/atualizou",
+  "tituloCard": "Resumo curto em até 5 palavras",
+  "tags": ["Tag1", "Tag2"],
+  "matrizDecisao": {
+    "cenarioA": "string opcional",
+    "cenarioB": "string opcional",
+    "vereditoLala": "string opcional"
+  },
+  "acoesPropostas": [
+    {
+      "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
+      "titulo": "Título claro da ação executada (ex: Atualizar saldo Nubank para R$ 1.450,00)",
+      "detalhe": "Explicação curta",
+      "substituirExistentes": false,
+      "texto": "string opcional (para CRIAR_TAREFA, REGISTRAR_GASTO, REGISTRAR_RECEITA)",
+      "valor": 0,
+      "categoriaGasto": "Mercado" | "Pets" | "Transporte & UERJ" | "Saúde & Corpo" | "Lazer & Outros" | "Fixos & Reserva",
+      "srpe": 0,
+      "contasAjuste": [{ "nome": "Nome do Banco/Conta", "saldoAtual": 1234.56 }],
+      "cartoesAjuste": [{ "nome": "Nome do Cartão", "faturaAtual": 500.00, "limiteTotal": 3000.00, "vencimentoDia": 10 }],
+      "compromissos": [{ "titulo": "Nome do evento", "hora": "14:00", "duracaoMin": 60, "diaMes": 30, "mes": 9, "ano": 2026, "local": "", "categoria": "pessoal", "sincronizarGoogle": true }],
+      "refeicoes": [{ "horario": "08:00", "nome": "Café da Manhã", "descricao": "Itens", "proteinaG": 30, "kcal": 400 }],
+      "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],
+      "disciplinas": [{ "nome": "Matéria", "professor": "Prof", "horarioSala": "Seg 08h-10h", "aulasTotaisSemestre": 30, "faltasMax": 7 }],
+      "petsAjuste": [{ "nome": "Nina", "racao": "Royal Canin", "estoqueSaches": 12, "estoqueRacaoKg": 4, "proximaVet": "Em dia" }],
+      "fichaTreino": { "nome": "Treino A", "foco": "Força", "exercicios": [{ "nome": "Agachamento", "series": 4, "reps": "10", "cargaKg": 40, "descansoSeg": 90 }] },
+      "projetos": [{ "nome": "Projeto", "papel": "Autora", "tarefa": "Entrega", "prazo": "Sexta", "prioridade": "alta" }],
+      "habitos": [{ "titulo": "Hábito", "categoria": "Saúde", "metaTexto": "Diário" }],
+      "metas": [{ "titulo": "Meta", "categoria": "Finanças", "prazo": "Dezembro", "marcos": ["Passo 1"] }],
+      "perfilCheckin": { "nomeUsuario": "Nome", "horasSono": 7.5, "energiaFisica": 8, "focoMental": 8 }
+    }
+  ]
+}`;
+
+      // Build multimodal contents array supporting 1 or multiple images/files
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const parts: any[] = [];
 
-      if (anexo?.base64 && anexo.mimeType) {
-        const cleanBase64 = anexo.base64.includes(",")
-          ? anexo.base64.split(",")[1]
-          : anexo.base64;
+      for (const itemAnexo of listaAnexos) {
+        if (itemAnexo?.base64 && itemAnexo.mimeType) {
+          const cleanBase64 = itemAnexo.base64.includes(",")
+            ? itemAnexo.base64.split(",")[1]
+            : itemAnexo.base64;
 
-        if (
-          anexo.mimeType.startsWith("image/") ||
-          anexo.mimeType === "application/pdf"
-        ) {
-          parts.push({
-            inlineData: {
-              mimeType: anexo.mimeType,
-              data: cleanBase64,
-            },
-          });
+          if (
+            itemAnexo.mimeType.startsWith("image/") ||
+            itemAnexo.mimeType.startsWith("audio/") ||
+            itemAnexo.mimeType === "application/pdf"
+          ) {
+            parts.push({
+              inlineData: {
+                mimeType: itemAnexo.mimeType.split(";")[0],
+                data: cleanBase64,
+              },
+            });
+          }
         }
       }
 
-      let promptFinal = mensagem || "Analise o arquivo em anexo e execute as ações necessárias.";
-      if (anexo) {
-        promptFinal += `\n\n[Arquivo anexado: "${anexo.nome}" (${anexo.mimeType}), intenção indicada: ${anexo.intencao || "auto"}]`;
-        if (anexo.textoExtraido) {
-          promptFinal += `\nConteúdo de texto extraído do arquivo:\n${anexo.textoExtraido.slice(0, 12000)}`;
+      const temAudio = listaAnexos.some((a) => a.mimeType?.startsWith("audio/"));
+      let promptFinal =
+        mensagem ||
+        (temAudio
+          ? "Ouça com atenção esta mensagem de voz da usuária, transcreva o que ela disse em 'transcricaoAudioUsuario', responda em 'respostaLala' e gere todas as ações correspondentes."
+          : "Analise detalhadamente a(s) imagem(ns) / arquivo(s) em anexo, extraia todos os valores, saldos, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
+
+      const anexosNaoAudio = listaAnexos.filter(
+        (a) => !a.mimeType?.startsWith("audio/")
+      );
+      if (anexosNaoAudio.length > 0) {
+        promptFinal += `\n\n[${anexosNaoAudio.length} arquivo(s)/imagem(ns) anexado(s): ${anexosNaoAudio
+          .map((a) => `"${a.nome}" (${a.mimeType})`)
+          .join(", ")}]`;
+        for (const a of anexosNaoAudio) {
+          if (a.textoExtraido) {
+            promptFinal += `\nConteúdo de "${a.nome}":\n${a.textoExtraido.slice(0, 10000)}`;
+          }
         }
       }
       parts.push({ text: promptFinal });
@@ -135,232 +186,13 @@ Regras fundamentais:
         config: {
           systemInstruction,
           responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              modoDetectado: {
-                type: Type.STRING,
-                description:
-                  "comando | devaneio | desabafo | orientacao | informacao",
-              },
-              respostaLala: {
-                type: Type.STRING,
-                description: "Resposta natural e completa da Lala em pt-BR.",
-              },
-              tituloCard: {
-                type: Type.STRING,
-                description: "Resumo curto em até 6 palavras.",
-              },
-              tags: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-              },
-              sugestoesResposta: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description:
-                  "2 a 3 sugestões curtas de resposta rápida para a usuária continuar o bate-papo.",
-              },
-              matrizDecisao: {
-                type: Type.OBJECT,
-                properties: {
-                  cenarioA: { type: Type.STRING },
-                  cenarioB: { type: Type.STRING },
-                  vereditoLala: { type: Type.STRING },
-                },
-              },
-              acoesPropostas: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    tipo: {
-                      type: Type.STRING,
-                      description:
-                        "CRIAR_TAREFA | AGENDAR_COMPROMISSO | REGISTRAR_GASTO | REGISTRAR_RECEITA | ALIMENTAR_PETS | REGISTRAR_SRPE | GUARDAR_SEGUNDO_CEREBRO | ALIVIAR_AGENDA_HOJE | ATIVAR_MODO_SOS | ATUALIZAR_DIETA_E_COMPRAS | ATUALIZAR_GRADE_UERJ | ATUALIZAR_CONTAS_FINANCAS | ATUALIZAR_PETS | CRIAR_LISTA_COMPRAS | ATUALIZAR_TREINO | ATUALIZAR_PROJETOS_TRABALHO | ATUALIZAR_HABITOS | ATUALIZAR_METAS_RADAR | ATUALIZAR_PERFIL_CHECKIN | LIMPAR_DADOS_EXEMPLO",
-                    },
-                    titulo: { type: Type.STRING },
-                    detalhe: { type: Type.STRING },
-                    texto: { type: Type.STRING },
-                    valor: { type: Type.NUMBER },
-                    categoriaGasto: { type: Type.STRING },
-                    srpe: { type: Type.NUMBER },
-                    areaNota: { type: Type.STRING },
-                    substituirExistentes: { type: Type.BOOLEAN },
-                    compromissos: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          titulo: { type: Type.STRING },
-                          hora: { type: Type.STRING },
-                          duracaoMin: { type: Type.NUMBER },
-                          diaMes: { type: Type.NUMBER },
-                          mes: { type: Type.NUMBER },
-                          ano: { type: Type.NUMBER },
-                          local: { type: Type.STRING },
-                          categoria: { type: Type.STRING },
-                          sincronizarGoogle: { type: Type.BOOLEAN },
-                        },
-                      },
-                    },
-                    refeicoes: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          horario: { type: Type.STRING },
-                          nome: { type: Type.STRING },
-                          descricao: { type: Type.STRING },
-                          proteinaG: { type: Type.NUMBER },
-                          kcal: { type: Type.NUMBER },
-                        },
-                      },
-                    },
-                    itensCompras: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          categoria: { type: Type.STRING },
-                          quantidadeComprar: { type: Type.NUMBER },
-                          unidade: { type: Type.STRING },
-                          precoEstimado: { type: Type.NUMBER },
-                        },
-                      },
-                    },
-                    disciplinas: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          professor: { type: Type.STRING },
-                          horarioSala: { type: Type.STRING },
-                          aulasTotaisSemestre: { type: Type.NUMBER },
-                          faltasMax: { type: Type.NUMBER },
-                        },
-                      },
-                    },
-                    contasAjuste: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          saldoAtual: { type: Type.NUMBER },
-                        },
-                      },
-                    },
-                    cartoesAjuste: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          faturaAtual: { type: Type.NUMBER },
-                          limiteTotal: { type: Type.NUMBER },
-                          vencimentoDia: { type: Type.NUMBER },
-                        },
-                      },
-                    },
-                    petsAjuste: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          racao: { type: Type.STRING },
-                          estoqueSaches: { type: Type.NUMBER },
-                          estoqueRacaoKg: { type: Type.NUMBER },
-                          proximaVet: { type: Type.STRING },
-                        },
-                      },
-                    },
-                    fichaTreino: {
-                      type: Type.OBJECT,
-                      properties: {
-                        nome: { type: Type.STRING },
-                        foco: { type: Type.STRING },
-                        exercicios: {
-                          type: Type.ARRAY,
-                          items: {
-                            type: Type.OBJECT,
-                            properties: {
-                              nome: { type: Type.STRING },
-                              series: { type: Type.NUMBER },
-                              reps: { type: Type.STRING },
-                              cargaKg: { type: Type.NUMBER },
-                              descansoSeg: { type: Type.NUMBER },
-                            },
-                          },
-                        },
-                      },
-                    },
-                    projetos: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          nome: { type: Type.STRING },
-                          papel: { type: Type.STRING },
-                          tarefa: { type: Type.STRING },
-                          prazo: { type: Type.STRING },
-                          prioridade: { type: Type.STRING },
-                        },
-                      },
-                    },
-                    habitos: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          titulo: { type: Type.STRING },
-                          categoria: { type: Type.STRING },
-                          metaTexto: { type: Type.STRING },
-                        },
-                      },
-                    },
-                    metas: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          titulo: { type: Type.STRING },
-                          categoria: { type: Type.STRING },
-                          prazo: { type: Type.STRING },
-                          marcos: {
-                            type: Type.ARRAY,
-                            items: { type: Type.STRING },
-                          },
-                        },
-                      },
-                    },
-                    perfilCheckin: {
-                      type: Type.OBJECT,
-                      properties: {
-                        nomeUsuario: { type: Type.STRING },
-                        cursoUERJ: { type: Type.STRING },
-                        frentesTrabalho: { type: Type.STRING },
-                        horasSono: { type: Type.NUMBER },
-                        energiaFisica: { type: Type.NUMBER },
-                        focoMental: { type: Type.NUMBER },
-                        metaProteinaG: { type: Type.NUMBER },
-                        metaKcal: { type: Type.NUMBER },
-                      },
-                    },
-                  },
-                  required: ["tipo", "titulo", "detalhe"],
-                },
-              },
-            },
-            required: ["modoDetectado", "respostaLala", "tituloCard", "tags"],
-          },
         },
       });
 
-      const rawText = response.text || "{}";
+      const rawText = (response.text || "{}")
+        .replace(/^```json\s*/i, "")
+        .replace(/```\s*$/i, "")
+        .trim();
       const parsed = JSON.parse(rawText);
       return res.json(parsed);
     } catch (error: unknown) {
@@ -371,6 +203,99 @@ Regras fundamentais:
             ? error.message
             : "Erro ao processar resposta da Lala",
         fallbackToLocal: true,
+      });
+    }
+  });
+
+  // Server-side Gemini TTS endpoint so Lala can speak back with natural voice
+  app.post("/api/lala/tts", async (req, res) => {
+    try {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        return res.status(503).json({
+          error: "GEMINI_API_KEY not configured on server",
+          fallbackToBrowserTTS: true,
+        });
+      }
+
+      const { texto, tomLala } = req.body as {
+        texto?: string;
+        tomLala?: string;
+      };
+
+      const cleanText = (texto || "")
+        .replace(/\*\*/g, "")
+        .replace(/[#_`~]/g, "")
+        .trim()
+        .slice(0, 1800);
+
+      if (!cleanText) {
+        return res.status(400).json({ error: "Texto vazio para síntese de voz" });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            "User-Agent": "aistudio-build",
+          },
+        },
+      });
+
+      const stylePrompt =
+        tomLala === "acolhedora"
+          ? "Calorosa, carinhosa, calma e acolhedora em Português do Brasil"
+          : tomLala === "executiva"
+          ? "Clara, objetiva, dinâmica e prestativa em Português do Brasil"
+          : tomLala === "treinadora"
+          ? "Energética, motivadora e animada em Português do Brasil"
+          : "Natural, simpática, próxima e expressiva em Português do Brasil";
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.8-flash-lite-tts",
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: cleanText,
+                speechMetadata: {
+                  style: stylePrompt,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: "Kore" },
+            },
+          },
+        },
+      });
+
+      const base64Audio =
+        response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+      if (!base64Audio) {
+        return res.status(500).json({
+          error: "Nenhum áudio retornado pelo modelo TTS",
+          fallbackToBrowserTTS: true,
+        });
+      }
+
+      return res.json({
+        audioBase64: `data:audio/wav;base64,${base64Audio}`,
+        mimeType: "audio/wav",
+      });
+    } catch (error: unknown) {
+      console.error("Erro em /api/lala/tts:", error);
+      return res.status(500).json({
+        error:
+          error instanceof Error ? error.message : "Erro ao gerar voz da Lala",
+        fallbackToBrowserTTS: true,
       });
     }
   });

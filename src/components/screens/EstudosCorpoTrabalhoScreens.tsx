@@ -19,6 +19,7 @@ import {
   Activity,
   Moon,
   Brain,
+  Trash2,
 } from "lucide-react";
 import {
   Artigo,
@@ -51,6 +52,7 @@ interface EstudosTrabalhoScreenProps {
   artigos: Artigo[];
   setArtigos: React.Dispatch<React.SetStateAction<Artigo[]>>;
   livros: LivroLeitura[];
+  setLivros?: React.Dispatch<React.SetStateAction<LivroLeitura[]>>;
   streakLeitura: number;
   projetos: ProjetoTrabalho[];
   setProjetos: React.Dispatch<React.SetStateAction<ProjetoTrabalho[]>>;
@@ -73,6 +75,7 @@ export function EstudosTrabalhoScreen({
   artigos,
   setArtigos,
   livros,
+  setLivros,
   streakLeitura,
   projetos,
   setProjetos,
@@ -86,6 +89,10 @@ export function EstudosTrabalhoScreen({
   const [novaDiscNome, setNovaDiscNome] = useState("");
   const [novaDiscHorario, setNovaDiscHorario] = useState("SEG/QUA · 07:30 · Sala 302");
   const [novaDiscProf, setNovaDiscProf] = useState("");
+  const [mostrarNovoLivro, setMostrarNovoLivro] = useState(false);
+  const [novoLivroTitulo, setNovoLivroTitulo] = useState("");
+  const [novoLivroAutor, setNovoLivroAutor] = useState("");
+  const [novoLivroPags, setNovoLivroPags] = useState("250");
 
   const [novoSubEntregavel, setNovoSubEntregavel] = useState<
     Record<number, string>
@@ -1147,9 +1154,75 @@ export function EstudosTrabalhoScreen({
 
           {/* Leituras & Livros (5 cols) */}
           <div className="xl:col-span-5 space-y-3.5">
-            <h3 className="text-sm font-bold" style={{ color: t.text }}>
-              Leituras Ativas & Progresso de Páginas
-            </h3>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-bold" style={{ color: t.text }}>
+                Leituras Ativas & Progresso de Páginas
+              </h3>
+              {setLivros && (
+                <button
+                  onClick={() => setMostrarNovoLivro((v) => !v)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1 cursor-pointer"
+                  style={{ background: t.cardSubtle, color: t.primary }}
+                >
+                  <Plus size={13} /> + Livro
+                </button>
+              )}
+            </div>
+
+            {mostrarNovoLivro && setLivros && (
+              <div
+                className="p-4 rounded-3xl border space-y-2"
+                style={{ background: t.card, borderColor: t.border }}
+              >
+                <input
+                  value={novoLivroTitulo}
+                  onChange={(e) => setNovoLivroTitulo(e.target.value)}
+                  placeholder="Título do livro..."
+                  className="w-full px-3 py-2 rounded-xl text-xs outline-none border"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                />
+                <div className="flex gap-2">
+                  <input
+                    value={novoLivroAutor}
+                    onChange={(e) => setNovoLivroAutor(e.target.value)}
+                    placeholder="Autor..."
+                    className="flex-1 px-3 py-2 rounded-xl text-xs outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <input
+                    type="number"
+                    value={novoLivroPags}
+                    onChange={(e) => setNovoLivroPags(e.target.value)}
+                    placeholder="Páginas"
+                    className="w-20 px-2.5 py-2 rounded-xl text-xs font-mono-num outline-none border"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!novoLivroTitulo.trim()) return;
+                      setLivros((prev) => [
+                        ...prev,
+                        {
+                          id: Date.now(),
+                          titulo: novoLivroTitulo.trim(),
+                          autor: novoLivroAutor.trim() || "Autor",
+                          tipo: "Acadêmico",
+                          paginasLidas: 0,
+                          paginasTotal: Math.max(10, Number(novoLivroPags) || 200),
+                        },
+                      ]);
+                      setNovoLivroTitulo("");
+                      setNovoLivroAutor("");
+                      setMostrarNovoLivro(false);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
+                    style={{ background: t.primary }}
+                  >
+                    Salvar
+                  </button>
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-1 gap-3.5">
               {livros.map((lv) => {
                 const pct = Math.round(
@@ -1228,6 +1301,7 @@ export function EstudosTrabalhoScreen({
 interface SaudePetsScreenProps {
   t: ThemeTokens;
   fichasTreino: FichaTreino[];
+  setFichasTreino?: React.Dispatch<React.SetStateAction<FichaTreino[]>>;
   iniciarTreinoAoVivo: (ficha: FichaTreino) => void;
   refeicoes: ItemRefeicao[];
   setRefeicoes: React.Dispatch<React.SetStateAction<ItemRefeicao[]>>;
@@ -1245,6 +1319,7 @@ interface SaudePetsScreenProps {
 export function SaudePetsScreen({
   t,
   fichasTreino,
+  setFichasTreino,
   iniciarTreinoAoVivo,
   refeicoes,
   setRefeicoes,
@@ -1261,6 +1336,11 @@ export function SaudePetsScreen({
   const [filtroModalidade, setFiltroModalidade] = useState<
     "Todas" | ModalidadeTreino
   >("Todas");
+  const [mostrarNovaFicha, setMostrarNovaFicha] = useState(false);
+  const [novaFichaNome, setNovaFichaNome] = useState("");
+  const [novaFichaMod, setNovaFichaMod] = useState<ModalidadeTreino>("Musculação");
+  const [novaFichaFoco, setNovaFichaFoco] = useState("");
+  const [refeicaoEditandoId, setRefeicaoEditandoId] = useState<number | null>(null);
 
   // Mapa Articular Stitch (Cheerleading, Stunt & Ginástica)
   const [statusArticulacoes, setStatusArticulacoes] = useState<
@@ -1516,7 +1596,7 @@ export function SaudePetsScreen({
               </p>
             </div>
 
-            <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar items-center">
               {(
                 ["Todas", "Cheerleading", "Ginástica", "Musculação"] as const
               ).map((mod) => (
@@ -1534,8 +1614,99 @@ export function SaudePetsScreen({
                   {mod}
                 </button>
               ))}
+              {setFichasTreino && (
+                <button
+                  onClick={() => setMostrarNovaFicha((v) => !v)}
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border cursor-pointer"
+                  style={{
+                    background: `${t.primary}15`,
+                    color: t.primary,
+                    borderColor: `${t.primary}40`,
+                  }}
+                >
+                  + Ficha
+                </button>
+              )}
             </div>
           </div>
+
+          {mostrarNovaFicha && setFichasTreino && (
+            <div
+              className="p-4 rounded-3xl border space-y-2.5"
+              style={{ background: t.card, borderColor: t.border }}
+            >
+              <p className="text-xs font-bold" style={{ color: t.text }}>
+                Criar Nova Ficha de Treino
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <input
+                  value={novaFichaNome}
+                  onChange={(e) => setNovaFichaNome(e.target.value)}
+                  placeholder="Nome (ex: Treino C · Core & Tumbling)"
+                  className="px-3 py-2 rounded-xl text-xs border outline-none"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                />
+                <select
+                  value={novaFichaMod}
+                  onChange={(e) => setNovaFichaMod(e.target.value as ModalidadeTreino)}
+                  className="px-3 py-2 rounded-xl text-xs border outline-none"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                >
+                  <option value="Musculação">Musculação</option>
+                  <option value="Cheerleading">Cheerleading</option>
+                  <option value="Ginástica">Ginástica</option>
+                </select>
+                <div className="flex gap-2">
+                  <input
+                    value={novaFichaFoco}
+                    onChange={(e) => setNovaFichaFoco(e.target.value)}
+                    placeholder="Foco / Subtítulo..."
+                    className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (!novaFichaNome.trim()) return;
+                      setFichasTreino((prev) => [
+                        ...prev,
+                        {
+                          id: Date.now(),
+                          nome: novaFichaNome.trim(),
+                          modalidade: novaFichaMod,
+                          foco: novaFichaFoco.trim() || "Força & Técnica",
+                          duracaoEstimadaMin: 50,
+                          ultimaRealizacao: "Novo",
+                          exercicios: [
+                            {
+                              id: Date.now() + 1,
+                              nome: "Exercício Principal 1",
+                              descansoSeg: 60,
+                              series: [
+                                {
+                                  id: Date.now() + 2,
+                                  numero: 1,
+                                  repsOuTempo: "10 reps",
+                                  cargaOuDetalhe: "Livre",
+                                  concluida: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ]);
+                      setNovaFichaNome("");
+                      setNovaFichaFoco("");
+                      setMostrarNovaFicha(false);
+                    }}
+                    className="px-3.5 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
+                    style={{ background: t.action }}
+                  >
+                    Salvar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="space-y-3.5">
             {fichasFiltradas.map((ficha) => {
@@ -1555,7 +1726,7 @@ export function SaudePetsScreen({
                   style={{ background: t.card, borderColor: t.border }}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <span
                         className="text-xs font-semibold"
                         style={{ color: t.action }}
@@ -1563,16 +1734,64 @@ export function SaudePetsScreen({
                         {ficha.modalidade} · Última sessão:{" "}
                         {ficha.ultimaRealizacao || "—"}
                       </span>
-                      <h4
-                        className="text-sm sm:text-base font-bold mt-0.5"
-                        style={{ color: t.text }}
-                      >
-                        {ficha.nome}
-                      </h4>
-                      <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
-                        {ficha.foco}
-                      </p>
+                      {setFichasTreino ? (
+                        <input
+                          value={ficha.nome}
+                          onChange={(e) =>
+                            setFichasTreino((prev) =>
+                              prev.map((x) =>
+                                x.id === ficha.id
+                                  ? { ...x, nome: e.target.value }
+                                  : x
+                              )
+                            )
+                          }
+                          className="w-full text-sm sm:text-base font-bold mt-0.5 bg-transparent outline-none border-b border-transparent focus:border-current"
+                          style={{ color: t.text }}
+                        />
+                      ) : (
+                        <h4
+                          className="text-sm sm:text-base font-bold mt-0.5"
+                          style={{ color: t.text }}
+                        >
+                          {ficha.nome}
+                        </h4>
+                      )}
+                      {setFichasTreino ? (
+                        <input
+                          value={ficha.foco}
+                          onChange={(e) =>
+                            setFichasTreino((prev) =>
+                              prev.map((x) =>
+                                x.id === ficha.id
+                                  ? { ...x, foco: e.target.value }
+                                  : x
+                              )
+                            )
+                          }
+                          className="w-full text-xs mt-0.5 bg-transparent outline-none border-b border-transparent focus:border-current"
+                          style={{ color: t.textSoft }}
+                        />
+                      ) : (
+                        <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                          {ficha.foco}
+                        </p>
+                      )}
                     </div>
+                    {setFichasTreino && (
+                      <button
+                        onClick={() =>
+                          setFichasTreino((prev) =>
+                            prev.filter((x) => x.id !== ficha.id)
+                          )
+                        }
+                        className="p-1.5 rounded-xl cursor-pointer shrink-0"
+                        style={{ background: `${t.danger}12`, color: t.danger }}
+                        title="Excluir ficha de treino"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
@@ -1738,67 +1957,197 @@ export function SaudePetsScreen({
             </div>
 
             <div className="space-y-2">
-              {refeicoes.map((ref) => (
-                <button
-                  key={ref.id}
-                  onClick={() =>
-                    setRefeicoes((prev) =>
-                      prev.map((r) =>
-                        r.id === ref.id ? { ...r, feito: !r.feito } : r
-                      )
-                    )
-                  }
-                  className="w-full p-3 rounded-2xl border flex items-center justify-between gap-2.5 text-left transition-colors cursor-pointer"
-                  style={{ background: t.bg, borderColor: t.border }}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                    <span
-                      className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-                      style={{
-                        background: ref.feito ? t.primary : "transparent",
-                        border: `2px solid ${
-                          ref.feito ? t.primary : t.textSoft
-                        }`,
-                      }}
-                    >
-                      {ref.feito && <Check size={12} color="#fff" />}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="text-[11px] font-mono-num font-bold"
-                          style={{ color: t.action }}
-                        >
-                          {ref.horario}
-                        </span>
-                        <span
-                          className={`text-xs font-bold truncate ${
-                            ref.feito ? "line-through" : ""
-                          }`}
-                          style={{ color: ref.feito ? t.textSoft : t.text }}
-                        >
-                          {ref.nome}
-                        </span>
-                      </div>
-                      <p
-                        className="text-[11px] truncate"
-                        style={{ color: t.textSoft }}
+              {refeicoes.map((ref) => {
+                const editando = refeicaoEditandoId === ref.id;
+                return (
+                  <div
+                    key={ref.id}
+                    className="p-3 rounded-2xl border space-y-2"
+                    style={{ background: t.bg, borderColor: t.border }}
+                  >
+                    <div className="flex items-center justify-between gap-2.5">
+                      <button
+                        onClick={() =>
+                          setRefeicoes((prev) =>
+                            prev.map((r) =>
+                              r.id === ref.id ? { ...r, feito: !r.feito } : r
+                            )
+                          )
+                        }
+                        className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer"
                       >
-                        {ref.descricao}
-                      </p>
-                    </div>
-                  </div>
+                        <span
+                          className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                          style={{
+                            background: ref.feito ? t.primary : "transparent",
+                            border: `2px solid ${
+                              ref.feito ? t.primary : t.textSoft
+                            }`,
+                          }}
+                        >
+                          {ref.feito && <Check size={12} color="#fff" />}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className="text-[11px] font-mono-num font-bold"
+                              style={{ color: t.action }}
+                            >
+                              {ref.horario}
+                            </span>
+                            <span
+                              className={`text-xs font-bold truncate ${
+                                ref.feito ? "line-through" : ""
+                              }`}
+                              style={{ color: ref.feito ? t.textSoft : t.text }}
+                            >
+                              {ref.nome}
+                            </span>
+                          </div>
+                          <p
+                            className="text-[11px] truncate"
+                            style={{ color: t.textSoft }}
+                          >
+                            {ref.descricao}
+                          </p>
+                        </div>
+                      </button>
 
-                  {ref.proteinaG > 0 && (
-                    <span
-                      className="text-[11px] font-mono-num font-semibold shrink-0"
-                      style={{ color: t.text }}
-                    >
-                      {ref.proteinaG}g P
-                    </span>
-                  )}
-                </button>
-              ))}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {ref.proteinaG > 0 && (
+                          <span
+                            className="text-[11px] font-mono-num font-semibold"
+                            style={{ color: t.text }}
+                          >
+                            {ref.proteinaG}g P
+                          </span>
+                        )}
+                        <button
+                          onClick={() =>
+                            setRefeicaoEditandoId(editando ? null : ref.id)
+                          }
+                          className="px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer"
+                          style={{
+                            background: editando ? t.action : t.card,
+                            color: editando ? "#fff" : t.textSoft,
+                          }}
+                        >
+                          {editando ? "OK" : "Editar"}
+                        </button>
+                        <button
+                          onClick={() =>
+                            setRefeicoes((prev) =>
+                              prev.filter((r) => r.id !== ref.id)
+                            )
+                          }
+                          className="p-1 rounded-lg cursor-pointer"
+                          style={{ color: t.danger }}
+                          title="Excluir refeição"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {editando && (
+                      <div
+                        className="pt-2 border-t grid grid-cols-2 sm:grid-cols-5 gap-1.5"
+                        style={{ borderColor: t.border }}
+                      >
+                        <input
+                          value={ref.horario}
+                          onChange={(e) =>
+                            setRefeicoes((prev) =>
+                              prev.map((r) =>
+                                r.id === ref.id
+                                  ? { ...r, horario: e.target.value }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Hora"
+                          className="px-2 py-1.5 rounded-lg text-xs font-mono-num border outline-none"
+                          style={{ background: t.card, color: t.text, borderColor: t.border }}
+                        />
+                        <input
+                          value={ref.nome}
+                          onChange={(e) =>
+                            setRefeicoes((prev) =>
+                              prev.map((r) =>
+                                r.id === ref.id
+                                  ? { ...r, nome: e.target.value }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Refeição"
+                          className="px-2 py-1.5 rounded-lg text-xs font-bold border outline-none"
+                          style={{ background: t.card, color: t.text, borderColor: t.border }}
+                        />
+                        <input
+                          value={ref.descricao}
+                          onChange={(e) =>
+                            setRefeicoes((prev) =>
+                              prev.map((r) =>
+                                r.id === ref.id
+                                  ? { ...r, descricao: e.target.value }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Alimentos"
+                          className="col-span-2 sm:col-span-1 px-2 py-1.5 rounded-lg text-xs border outline-none"
+                          style={{ background: t.card, color: t.text, borderColor: t.border }}
+                        />
+                        <input
+                          type="number"
+                          value={ref.proteinaG}
+                          onChange={(e) =>
+                            setRefeicoes((prev) =>
+                              prev.map((r) =>
+                                r.id === ref.id
+                                  ? {
+                                      ...r,
+                                      proteinaG: Math.max(
+                                        0,
+                                        Number(e.target.value) || 0
+                                      ),
+                                    }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Prot (g)"
+                          className="px-2 py-1.5 rounded-lg text-xs font-mono-num border outline-none"
+                          style={{ background: t.card, color: t.text, borderColor: t.border }}
+                        />
+                        <input
+                          type="number"
+                          value={ref.kcal}
+                          onChange={(e) =>
+                            setRefeicoes((prev) =>
+                              prev.map((r) =>
+                                r.id === ref.id
+                                  ? {
+                                      ...r,
+                                      kcal: Math.max(
+                                        0,
+                                        Number(e.target.value) || 0
+                                      ),
+                                    }
+                                  : r
+                              )
+                            )
+                          }
+                          placeholder="Kcal"
+                          className="px-2 py-1.5 rounded-lg text-xs font-mono-num border outline-none"
+                          style={{ background: t.card, color: t.text, borderColor: t.border }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             {/* Adicionar lanche/refeição rápida */}

@@ -460,37 +460,6 @@ export function SideDrawer({
                 <ExternalLink size={14} style={{ color: t.primary }} />
               </button>
 
-              {/* Botão de Calibrar Informações & Upar Dieta/Grade */}
-              {abrirCalibracao && (
-                <button
-                  onClick={() => {
-                    onClose();
-                    abrirCalibracao();
-                  }}
-                  className="w-full p-3.5 rounded-2xl flex items-center justify-between border cursor-pointer"
-                  style={{
-                    background: `${t.finance}15`,
-                    borderColor: t.finance,
-                  }}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <SlidersHorizontal size={17} style={{ color: t.finance }} />
-                    <div className="text-left">
-                      <p
-                        className="text-xs font-bold"
-                        style={{ color: t.text }}
-                      >
-                        Calibrar Informações & Upar Arquivos
-                      </p>
-                      <p className="text-[11px]" style={{ color: t.textSoft }}>
-                        Dieta → Lista de Compras, Grade UERJ, Contas e Pets
-                      </p>
-                    </div>
-                  </div>
-                  <ExternalLink size={14} style={{ color: t.finance }} />
-                </button>
-              )}
-
               {/* Atalho Rápido para Abrir o Calendário */}
               <button
                 onClick={() => {
@@ -673,11 +642,36 @@ export function SideDrawer({
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <FileText size={13} style={{ color: t.action }} />
+                          <select
+                            value={arq.area}
+                            onChange={(e) =>
+                              setRepositorio((prev) =>
+                                prev.map((a) =>
+                                  a.id === arq.id
+                                    ? {
+                                        ...a,
+                                        area: e.target
+                                          .value as ArquivoRepositorio["area"],
+                                      }
+                                    : a
+                                )
+                              )
+                            }
+                            className="text-[10px] font-semibold bg-transparent outline-none cursor-pointer"
+                            style={{ color: t.textSoft }}
+                          >
+                            <option value="UERJ">UERJ</option>
+                            <option value="Artigos">Artigos</option>
+                            <option value="CDT & RCR">CDT & RCR</option>
+                            <option value="Casa & Pets">Casa & Pets</option>
+                            <option value="Finanças">Finanças</option>
+                            <option value="Pessoal">Pessoal</option>
+                          </select>
                           <span
                             className="text-[10px] font-semibold"
                             style={{ color: t.textSoft }}
                           >
-                            {arq.area} · {arq.dataCriacao}
+                            · {arq.dataCriacao}
                           </span>
                           <button
                             onClick={() => ciclarStatusLeitura(arq.id)}
@@ -745,18 +739,34 @@ export function SideDrawer({
                           style={{ borderColor: t.border }}
                         />
                       )}
-                      <p
-                        className="text-xs font-semibold"
+                      <input
+                        value={arq.titulo}
+                        onChange={(e) =>
+                          setRepositorio((prev) =>
+                            prev.map((a) =>
+                              a.id === arq.id
+                                ? { ...a, titulo: e.target.value }
+                                : a
+                            )
+                          )
+                        }
+                        className="w-full text-xs font-semibold bg-transparent outline-none border-b border-transparent focus:border-current"
                         style={{ color: t.text }}
-                      >
-                        {arq.titulo}
-                      </p>
-                      <p
-                        className="text-[11px] leading-relaxed"
+                      />
+                      <input
+                        value={arq.urlOuConteudo}
+                        onChange={(e) =>
+                          setRepositorio((prev) =>
+                            prev.map((a) =>
+                              a.id === arq.id
+                                ? { ...a, urlOuConteudo: e.target.value }
+                                : a
+                            )
+                          )
+                        }
+                        className="w-full text-[11px] leading-relaxed bg-transparent outline-none border-b border-transparent focus:border-current"
                         style={{ color: t.textSoft }}
-                      >
-                        {arq.urlOuConteudo}
-                      </p>
+                      />
                     </div>
                   );
                 })}

@@ -275,7 +275,7 @@ export function BottomSheet({
           </button>
         </div>
 
-        {/* 1. FICHA MODULAR DE DISCIPLINA UERJ */}
+        {/* 1. FICHA MODULAR DE DISCIPLINA UERJ (100% EDITÁVEL) */}
         {disciplina && (() => {
           const sit = calcularSituacaoNotaDisciplina(disciplina);
           const corBarraFaltas =
@@ -287,20 +287,117 @@ export function BottomSheet({
 
           return (
             <div className="space-y-4">
+              {/* Edição dos dados básicos da Disciplina */}
+              <div
+                className="p-3.5 rounded-2xl space-y-2.5 border"
+                style={{ background: t.bg, borderColor: t.border }}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase" style={{ color: t.textSoft }}>
+                    Dados da Disciplina (Editáveis)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDisciplinas((prev) => prev.filter((d) => d.id !== disciplina.id));
+                      onClose();
+                    }}
+                    className="px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                    style={{ background: `${t.danger}15`, color: t.danger }}
+                  >
+                    <Trash2 size={11} /> Excluir Matéria
+                  </button>
+                </div>
+                <input
+                  value={disciplina.nome}
+                  onChange={(e) =>
+                    setDisciplinas((prev) =>
+                      prev.map((d) =>
+                        d.id === disciplina.id ? { ...d, nome: e.target.value } : d
+                      )
+                    )
+                  }
+                  placeholder="Nome da disciplina..."
+                  className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    value={disciplina.professor}
+                    onChange={(e) =>
+                      setDisciplinas((prev) =>
+                        prev.map((d) =>
+                          d.id === disciplina.id
+                            ? { ...d, professor: e.target.value }
+                            : d
+                        )
+                      )
+                    }
+                    placeholder="Professor(a)"
+                    className="px-2.5 py-1.5 rounded-xl text-xs outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                  <input
+                    value={disciplina.horarioSala}
+                    onChange={(e) =>
+                      setDisciplinas((prev) =>
+                        prev.map((d) =>
+                          d.id === disciplina.id
+                            ? { ...d, horarioSala: e.target.value }
+                            : d
+                        )
+                      )
+                    }
+                    placeholder="Horário & Sala"
+                    className="px-2.5 py-1.5 rounded-xl text-xs outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+              </div>
+
               <div
                 className="p-3.5 rounded-2xl space-y-2 border"
                 style={{ background: t.bg, borderColor: t.border }}
               >
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold" style={{ color: t.text }}>
-                    Limite de 25% de Faltas ({disciplina.faltasMax} máx)
+                    Limite de 25% de Faltas
                   </span>
-                  <span
-                    className="font-mono-num font-bold px-2 py-0.5 rounded-md"
-                    style={{ background: corBarraFaltas, color: "#fff" }}
-                  >
-                    {disciplina.faltasAtuais}/{disciplina.faltasMax} ({sit.pctFaltasLimite}%)
-                  </span>
+                  <div className="flex items-center gap-1.5 font-mono-num">
+                    <input
+                      type="number"
+                      min={0}
+                      value={disciplina.faltasAtuais}
+                      onChange={(e) =>
+                        setDisciplinas((prev) =>
+                          prev.map((d) =>
+                            d.id === disciplina.id
+                              ? { ...d, faltasAtuais: Math.max(0, Number(e.target.value) || 0) }
+                              : d
+                          )
+                        )
+                      }
+                      className="w-11 px-1.5 py-0.5 rounded text-center text-xs font-bold border"
+                      style={{ background: t.card, color: t.text, borderColor: t.border }}
+                    />
+                    <span>/</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={disciplina.faltasMax}
+                      onChange={(e) =>
+                        setDisciplinas((prev) =>
+                          prev.map((d) =>
+                            d.id === disciplina.id
+                              ? { ...d, faltasMax: Math.max(1, Number(e.target.value) || 15) }
+                              : d
+                          )
+                        )
+                      }
+                      className="w-11 px-1.5 py-0.5 rounded text-center text-xs font-bold border"
+                      style={{ background: t.card, color: t.text, borderColor: t.border }}
+                    />
+                  </div>
                 </div>
 
                 <div className="w-full h-2.5 rounded-full overflow-hidden" style={{ background: t.cardSubtle }}>
@@ -563,17 +660,62 @@ export function BottomSheet({
           );
         })()}
 
-        {/* 2. ARTIGOS & FICHAMENTOS (SEGUNDO CÉREBRO) */}
+        {/* 2. ARTIGOS & FICHAMENTOS (SEGUNDO CÉREBRO - 100% EDITÁVEL) */}
         {artigo && (
           <div className="space-y-4">
             <div className="p-3.5 rounded-2xl border space-y-2.5" style={{ background: t.bg, borderColor: t.border }}>
-              <div>
-                <p className="text-xs font-medium" style={{ color: t.text }}>
-                  {artigo.subtitulo}
-                </p>
-                <p className="text-[11px] mt-1" style={{ color: t.primary }}>
-                  Periódico alvo: {artigo.periódicoAlvo}
-                </p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase" style={{ color: t.textSoft }}>
+                    Editar Artigo
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setArtigos((prev) => prev.filter((a) => a.id !== artigo.id));
+                      onClose();
+                    }}
+                    className="px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                    style={{ background: `${t.danger}15`, color: t.danger }}
+                  >
+                    <Trash2 size={11} /> Excluir
+                  </button>
+                </div>
+                <input
+                  value={artigo.nome}
+                  onChange={(e) =>
+                    setArtigos((prev) =>
+                      prev.map((a) => (a.id === artigo.id ? { ...a, nome: e.target.value } : a))
+                    )
+                  }
+                  placeholder="Título do artigo..."
+                  className="w-full px-3 py-1.5 rounded-xl text-xs font-bold outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <input
+                  value={artigo.subtitulo}
+                  onChange={(e) =>
+                    setArtigos((prev) =>
+                      prev.map((a) => (a.id === artigo.id ? { ...a, subtitulo: e.target.value } : a))
+                    )
+                  }
+                  placeholder="Subtítulo / Foco..."
+                  className="w-full px-3 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <input
+                  value={artigo.periódicoAlvo}
+                  onChange={(e) =>
+                    setArtigos((prev) =>
+                      prev.map((a) =>
+                        a.id === artigo.id ? { ...a, periódicoAlvo: e.target.value } : a
+                      )
+                    )
+                  }
+                  placeholder="Periódico alvo..."
+                  className="w-full px-3 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.primary, borderColor: t.border }}
+                />
               </div>
 
               {/* Status de Leitura no Segundo Cérebro (Para Ler, Lendo, Concluído) */}
@@ -743,17 +885,111 @@ export function BottomSheet({
           </div>
         )}
 
-        {/* 3. LEITURA */}
+        {/* 3. LEITURA (100% EDITÁVEL) */}
         {livro && (
           <div className="space-y-4">
-            <div className="p-3.5 rounded-2xl" style={{ background: t.bg }}>
-              <p className="text-xs" style={{ color: t.textSoft }}>
-                Progresso de leitura
-              </p>
-              <p className="text-lg font-bold font-mono-num" style={{ color: t.text }}>
-                {livro.paginasLidas} / {livro.paginasTotal} págs (
-                {Math.round((livro.paginasLidas / livro.paginasTotal) * 100)}%)
-              </p>
+            <div className="p-3.5 rounded-2xl border space-y-2.5" style={{ background: t.bg, borderColor: t.border }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase" style={{ color: t.textSoft }}>
+                  Editar Livro
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLivros((prev) => prev.filter((l) => l.id !== livro.id));
+                    onClose();
+                  }}
+                  className="px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                  style={{ background: `${t.danger}15`, color: t.danger }}
+                >
+                  <Trash2 size={11} /> Excluir Livro
+                </button>
+              </div>
+              <input
+                value={livro.titulo}
+                onChange={(e) =>
+                  setLivros((prev) =>
+                    prev.map((l) => (l.id === livro.id ? { ...l, titulo: e.target.value } : l))
+                  )
+                }
+                placeholder="Título do livro..."
+                className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                style={{ background: t.card, color: t.text, borderColor: t.border }}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  value={livro.autor}
+                  onChange={(e) =>
+                    setLivros((prev) =>
+                      prev.map((l) => (l.id === livro.id ? { ...l, autor: e.target.value } : l))
+                    )
+                  }
+                  placeholder="Autor(a)"
+                  className="px-3 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <select
+                  value={livro.tipo}
+                  onChange={(e) =>
+                    setLivros((prev) =>
+                      prev.map((l) =>
+                        l.id === livro.id
+                          ? { ...l, tipo: e.target.value as LivroLeitura["tipo"] }
+                          : l
+                      )
+                    )
+                  }
+                  className="px-3 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                >
+                  <option value="Acadêmico">Acadêmico</option>
+                  <option value="Fantasia">Fantasia / Lazer</option>
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-2 pt-1">
+                <div>
+                  <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                    Páginas Lidas
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={livro.paginasLidas}
+                    onChange={(e) =>
+                      setLivros((prev) =>
+                        prev.map((l) =>
+                          l.id === livro.id
+                            ? { ...l, paginasLidas: Math.max(0, Number(e.target.value) || 0) }
+                            : l
+                        )
+                      )
+                    }
+                    className="w-full px-3 py-1.5 rounded-xl text-xs font-mono-num font-bold outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                    Total de Páginas
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={livro.paginasTotal}
+                    onChange={(e) =>
+                      setLivros((prev) =>
+                        prev.map((l) =>
+                          l.id === livro.id
+                            ? { ...l, paginasTotal: Math.max(1, Number(e.target.value) || 100) }
+                            : l
+                        )
+                      )
+                    }
+                    className="w-full px-3 py-1.5 rounded-xl text-xs font-mono-num font-bold outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-2">
               {[5, 15, 30].map((pags) => (
@@ -772,7 +1008,7 @@ export function BottomSheet({
                     );
                     setStreakLeitura((s) => Math.max(s, 7));
                   }}
-                  className="py-3 rounded-xl text-xs font-semibold text-white"
+                  className="py-3 rounded-xl text-xs font-semibold text-white cursor-pointer"
                   style={{ background: t.action }}
                 >
                   +{pags} páginas
@@ -782,36 +1018,122 @@ export function BottomSheet({
           </div>
         )}
 
-        {/* 4. PET (NINA / TOBIAS) */}
+        {/* 4. PET (NINA / TOBIAS - 100% EDITÁVEL) */}
         {pet && (
           <div className="space-y-4">
             <div
-              className="p-3.5 rounded-2xl space-y-2 border"
+              className="p-3.5 rounded-2xl space-y-2.5 border"
               style={{ background: t.bg, borderColor: t.border }}
             >
-              <div className="flex justify-between items-center text-xs">
-                <span style={{ color: t.textSoft }}>Autonomia de Sachês</span>
-                <span className="font-mono-num font-bold" style={{ color: pet.estoqueSaches <= 4 ? t.alert : t.primary }}>
-                  {pet.estoqueSaches} un (~{Math.max(1, Math.floor(pet.estoqueSaches / 2))} dias)
-                </span>
+              <span className="text-[10px] font-bold uppercase block" style={{ color: t.textSoft }}>
+                Editar Perfil & Estoque do Pet
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Nome do Pet
+                  </label>
+                  <input
+                    value={pet.nome}
+                    onChange={(e) => atualizarPet({ ...pet, nome: e.target.value })}
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-bold border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Ração / Dieta
+                  </label>
+                  <input
+                    value={pet.racao}
+                    onChange={(e) => atualizarPet({ ...pet, racao: e.target.value })}
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
               </div>
-              <div className="flex justify-between items-center text-xs">
-                <span style={{ color: t.textSoft }}>Autonomia de Ração Urinary</span>
-                <span className="font-mono-num font-bold" style={{ color: t.text }}>
-                  {pet.estoqueRacaoKg.toFixed(1)} kg (~{Math.floor((pet.estoqueRacaoKg * 1000) / 110)} dias)
-                </span>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Sachês (un)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={pet.estoqueSaches}
+                    onChange={(e) =>
+                      atualizarPet({
+                        ...pet,
+                        estoqueSaches: Math.max(0, Number(e.target.value) || 0),
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                    style={{ background: t.card, color: t.primary, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Ração (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    value={pet.estoqueRacaoKg}
+                    onChange={(e) =>
+                      atualizarPet({
+                        ...pet,
+                        estoqueRacaoKg: Math.max(0, parseFloat(e.target.value) || 0),
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Refeições/dia
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={pet.metaRefeicoesDia}
+                    onChange={(e) =>
+                      atualizarPet({
+                        ...pet,
+                        metaRefeicoesDia: Math.max(1, Number(e.target.value) || 2),
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
               </div>
+
+              <div>
+                <label className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                  Próxima Consulta Veterinária / Observação
+                </label>
+                <input
+                  value={pet.proximaVet}
+                  onChange={(e) => atualizarPet({ ...pet, proximaVet: e.target.value })}
+                  className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+              </div>
+
               <div className="flex gap-2 pt-1">
                 <button
                   onClick={() => alimentarPet(pet.id)}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white cursor-pointer"
                   style={{ background: t.primary }}
                 >
                   Alimentar {pet.nome} ({pet.alimentadoHojeRefeicoes}/{pet.metaRefeicoesDia})
                 </button>
                 <button
                   onClick={() => registrarCompraSaches(pet)}
-                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white flex items-center justify-center gap-1"
+                  className="flex-1 py-2.5 rounded-xl text-xs font-semibold text-white flex items-center justify-center gap-1 cursor-pointer"
                   style={{ background: t.finance }}
                 >
                   <ShoppingBag size={13} /> +10 Sachês
@@ -1236,21 +1558,103 @@ export function BottomSheet({
           </div>
         )}
 
-        {/* 8. PROJETO DE TRABALHO */}
+        {/* 8. PROJETO DE TRABALHO (100% EDITÁVEL) */}
         {projeto && (
           <div className="space-y-4">
-            <input
-              value={projeto.tarefa}
-              onChange={(e) =>
-                setProjetos((prev) =>
-                  prev.map((p) =>
-                    p.id === projeto.id ? { ...p, tarefa: e.target.value } : p
+            <div className="p-3.5 rounded-2xl border space-y-2.5" style={{ background: t.bg, borderColor: t.border }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase" style={{ color: t.textSoft }}>
+                  Dados do Projeto
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProjetos((prev) => prev.filter((p) => p.id !== projeto.id));
+                    onClose();
+                  }}
+                  className="px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                  style={{ background: `${t.danger}15`, color: t.danger }}
+                >
+                  <Trash2 size={11} /> Excluir Projeto
+                </button>
+              </div>
+              <input
+                value={projeto.nome}
+                onChange={(e) =>
+                  setProjetos((prev) =>
+                    prev.map((p) =>
+                      p.id === projeto.id ? { ...p, nome: e.target.value } : p
+                    )
                   )
-                )
-              }
-              className="w-full p-3 rounded-2xl text-xs font-semibold outline-none border"
-              style={{ background: t.bg, color: t.text, borderColor: t.border }}
-            />
+                }
+                placeholder="Nome do projeto..."
+                className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                style={{ background: t.card, color: t.text, borderColor: t.border }}
+              />
+              <div className="grid grid-cols-3 gap-2">
+                <input
+                  value={projeto.papel}
+                  onChange={(e) =>
+                    setProjetos((prev) =>
+                      prev.map((p) =>
+                        p.id === projeto.id ? { ...p, papel: e.target.value } : p
+                      )
+                    )
+                  }
+                  placeholder="Papel / Frente"
+                  className="px-2.5 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <input
+                  value={projeto.prazo}
+                  onChange={(e) =>
+                    setProjetos((prev) =>
+                      prev.map((p) =>
+                        p.id === projeto.id ? { ...p, prazo: e.target.value } : p
+                      )
+                    )
+                  }
+                  placeholder="Prazo"
+                  className="px-2.5 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+                <select
+                  value={projeto.prioridade}
+                  onChange={(e) =>
+                    setProjetos((prev) =>
+                      prev.map((p) =>
+                        p.id === projeto.id
+                          ? { ...p, prioridade: e.target.value as ProjetoTrabalho["prioridade"] }
+                          : p
+                      )
+                    )
+                  }
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                >
+                  <option value="alta">Alta</option>
+                  <option value="média">Média</option>
+                  <option value="baixa">Baixa</option>
+                </select>
+              </div>
+              <div>
+                <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                  Entregável Principal Ativo
+                </span>
+                <input
+                  value={projeto.tarefa}
+                  onChange={(e) =>
+                    setProjetos((prev) =>
+                      prev.map((p) =>
+                        p.id === projeto.id ? { ...p, tarefa: e.target.value } : p
+                      )
+                    )
+                  }
+                  className="w-full p-2.5 rounded-xl text-xs font-semibold outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+              </div>
+            </div>
             <div className="space-y-1.5">
               {projeto.subtarefas.map((sub) => (
                 <button
@@ -1320,9 +1724,82 @@ export function BottomSheet({
           </div>
         )}
 
-        {/* 9. TAREFA / PRIORIDADE */}
+        {/* 9. TAREFA / PRIORIDADE (100% EDITÁVEL) */}
         {tarefa && (
           <div className="space-y-4">
+            <div className="p-3.5 rounded-2xl border space-y-2.5" style={{ background: t.bg, borderColor: t.border }}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase" style={{ color: t.textSoft }}>
+                  Editar Tarefa
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTarefas((prev) => prev.filter((tk) => tk.id !== tarefa.id));
+                    onClose();
+                  }}
+                  className="px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                  style={{ background: `${t.danger}15`, color: t.danger }}
+                >
+                  <Trash2 size={11} /> Excluir Tarefa
+                </button>
+              </div>
+              <input
+                value={tarefa.texto}
+                onChange={(e) =>
+                  setTarefas((prev) =>
+                    prev.map((tk) =>
+                      tk.id === tarefa.id ? { ...tk, texto: e.target.value } : tk
+                    )
+                  )
+                }
+                className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                style={{ background: t.card, color: t.text, borderColor: t.border }}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Duração (min)
+                  </span>
+                  <input
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={tarefa.duracaoMin || 15}
+                    onChange={(e) =>
+                      setTarefas((prev) =>
+                        prev.map((tk) =>
+                          tk.id === tarefa.id
+                            ? { ...tk, duracaoMin: Math.max(5, Number(e.target.value) || 15) }
+                            : tk
+                        )
+                      )
+                    }
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] block mb-0.5" style={{ color: t.textSoft }}>
+                    Prazo / Rótulo
+                  </span>
+                  <input
+                    value={tarefa.prazoFixo || ""}
+                    onChange={(e) =>
+                      setTarefas((prev) =>
+                        prev.map((tk) =>
+                          tk.id === tarefa.id ? { ...tk, prazoFixo: e.target.value } : tk
+                        )
+                      )
+                    }
+                    placeholder="Ex: Hoje, Sex..."
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+              </div>
+            </div>
+
             <div className="p-3.5 rounded-2xl space-y-2" style={{ background: t.bg }}>
               <p className="text-xs font-semibold" style={{ color: t.text }}>
                 Matriz de Priorização da Lala
@@ -1408,10 +1885,94 @@ export function BottomSheet({
           </div>
         )}
 
-        {/* 10. COMPROMISSO */}
+        {/* 10. COMPROMISSO (100% EDITÁVEL) */}
         {compromisso && (
           <div className="space-y-3">
             <div className="p-3.5 rounded-2xl space-y-3" style={{ background: t.bg }}>
+              <div>
+                <span className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+                  Título do Compromisso
+                </span>
+                <input
+                  value={compromisso.titulo}
+                  onChange={(e) => {
+                    const novoTitulo = e.target.value;
+                    setCompromissos((prev) =>
+                      prev.map((c) =>
+                        c.id === compromisso.id ? { ...c, titulo: novoTitulo } : c
+                      )
+                    );
+                  }}
+                  className="w-full px-3 py-2 rounded-xl text-xs font-bold outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                    Duração (min)
+                  </span>
+                  <input
+                    type="number"
+                    step={5}
+                    min={5}
+                    value={compromisso.duracaoMin}
+                    onChange={(e) => {
+                      const dur = Math.max(5, Number(e.target.value) || 30);
+                      setCompromissos((prev) =>
+                        prev.map((c) =>
+                          c.id === compromisso.id ? { ...c, duracaoMin: dur } : c
+                        )
+                      );
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+                <div>
+                  <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                    Dia do Mês
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={31}
+                    value={compromisso.diaMes}
+                    onChange={(e) => {
+                      const dm = Math.min(31, Math.max(1, Number(e.target.value) || 1));
+                      setCompromissos((prev) =>
+                        prev.map((c) =>
+                          c.id === compromisso.id ? { ...c, diaMes: dm } : c
+                        )
+                      );
+                    }}
+                    className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num font-bold outline-none border"
+                    style={{ background: t.card, color: t.text, borderColor: t.border }}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <span className="text-[10px] block mb-1" style={{ color: t.textSoft }}>
+                  Observações / Local
+                </span>
+                <input
+                  value={compromisso.notas || ""}
+                  onChange={(e) => {
+                    const nt = e.target.value;
+                    setCompromissos((prev) =>
+                      prev.map((c) =>
+                        c.id === compromisso.id ? { ...c, notas: nt } : c
+                      )
+                    );
+                  }}
+                  placeholder="Local, sala ou observação..."
+                  className="w-full px-3 py-1.5 rounded-xl text-xs outline-none border"
+                  style={{ background: t.card, color: t.text, borderColor: t.border }}
+                />
+              </div>
+
               <div className="flex items-center justify-between text-xs">
                 <span className="flex items-center gap-1.5" style={{ color: t.textSoft }}>
                   <Clock size={13} /> Horário na agenda:

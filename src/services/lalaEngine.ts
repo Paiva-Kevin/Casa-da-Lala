@@ -1,6 +1,7 @@
 // Unified Local & Cloud Multimodal Intelligence Engine for Lala
 // Automatically understands commands, uploaded files/images (diet, UERJ schedule, workouts, receipts, or vault storage), expenses, tasks, pet care, vents, daydreams, and questions.
 
+import { GoogleGenAI } from "@google/genai";
 import {
   AcaoGovernanta,
   AnexoLala,
@@ -21,6 +22,13 @@ export interface LalaContextSnapshot {
   prioridade1: string;
   disciplinasUERJ: string[];
   projetosAtivos: string[];
+  contasBancarias?: { nome: string; saldoAtual: number }[];
+  cartoesCredito?: {
+    nome: string;
+    faturaAtual: number;
+    limiteTotal: number;
+    vencimentoDia: number;
+  }[];
   tomLala?: string;
   autonomiaLala?: "auto" | "confirmar";
   instrucoesPersonalizadasLala?: string;
@@ -33,17 +41,98 @@ export interface LalaContextSnapshot {
   }[];
 }
 
-export async function lerArquivoParaAnexo(
-  file: File,
-  intencao: AnexoLala["intencao"] = "auto",
-  areaRepositorio: ArquivoRepositorio["area"] = "Pessoal"
-): Promise<AnexoLala> {
-  const base64 = await new Promise<string>((resolve, reject) => {
+async function comprimirImagemParaDataUrl(file: File): Promise<{
+  base64: string;
+  mimeType: string;
+  tamanhoBytes: number;
+}> {
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ""));
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
+
+  if (typeof document === "undefined" || !file.type.startsWith("image/")) {
+    return {
+      base64: rawDataUrl,
+      mimeType: file.type || "application/octet-stream",
+      tamanhoBytes: file.size,
+    };
+  }
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const MAX_DIM = 1440;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width >= height) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          } else {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve({
+            base64: rawDataUrl,
+            mimeType: file.type,
+            tamanhoBytes: file.size,
+          });
+          return;
+        }
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, width, height);
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL("image/jpeg", 0.85);
+        const approxBytes = Math.round((compressed.length * 3) / 4);
+        resolve({
+          base64: compressed,
+          mimeType: "image/jpeg",
+          tamanhoBytes: approxBytes,
+        });
+      } catch {
+        resolve({
+          base64: rawDataUrl,
+          mimeType: file.type,
+          tamanhoBytes: file.size,
+        });
+      }
+    };
+    img.onerror = () =>
+      resolve({
+        base64: rawDataUrl,
+        mimeType: file.type,
+        tamanhoBytes: file.size,
+      });
+    img.src = rawDataUrl;
+  });
+}
+
+export async function lerArquivoParaAnexo(
+  file: File,
+  intencao: AnexoLala["intencao"] = "auto",
+  areaRepositorio: ArquivoRepositorio["area"] = "Pessoal"
+): Promise<AnexoLala> {
+  const { base64, mimeType, tamanhoBytes } = file.type.startsWith("image/")
+    ? await comprimirImagemParaDataUrl(file)
+    : {
+        base64: await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        }),
+        mimeType: file.type || "application/octet-stream",
+        tamanhoBytes: file.size,
+      };
 
   let textoExtraido = "";
   const isTextLike =
@@ -60,8 +149,8 @@ export async function lerArquivoParaAnexo(
 
   return {
     nome: file.name,
-    mimeType: file.type || "application/octet-stream",
-    tamanhoBytes: file.size,
+    mimeType,
+    tamanhoBytes,
     base64,
     textoExtraido: textoExtraido || undefined,
     intencao,
@@ -1165,14 +1254,25 @@ export function processarMensagemLocalLala(
 export async function consultarLalaUnificada(
   texto: string,
   ctx: LalaContextSnapshot,
-  anexo?: AnexoLala
+  anexoOuAnexos?: AnexoLala | AnexoLala[]
 ): Promise<Omit<InteracaoGovernanta, "id" | "dataHora" | "mensagemUsuario">> {
-  // Se o usuário pediu explicitamente "só guardar" um arquivo, nem precisa esperar chamada de rede: é instantâneo!
-  if (anexo?.intencao === "guardar") {
-    return processarMensagemLocalLala(texto, ctx, anexo);
+  const listaAnexos: AnexoLala[] = Array.isArray(anexoOuAnexos)
+    ? anexoOuAnexos
+    : anexoOuAnexos
+    ? [anexoOuAnexos]
+    : [];
+  const primeiroAnexo = listaAnexos[0];
+
+  // Se o usuário pediu explicitamente "só guardar" um arquivo, executa direto
+  if (primeiroAnexo?.intencao === "guardar") {
+    return processarMensagemLocalLala(texto, ctx, primeiroAnexo);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let data: any = null;
+
   if (typeof navigator !== "undefined" && navigator.onLine) {
+    // 1. Tenta via rota de backend (/api/lala/interact)
     try {
       const res = await fetch("/api/lala/interact", {
         method: "POST",
@@ -1181,100 +1281,306 @@ export async function consultarLalaUnificada(
           mensagem: texto,
           contextoApp: ctx,
           historicoConversa: ctx.historicoConversa,
-          anexo,
+          anexo: primeiroAnexo,
+          anexos: listaAnexos,
         }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.respostaLala) {
-          const modoDetectado: ModoInteracaoLala =
-            data.modoDetectado || detectarIntencaoNatural(texto, anexo);
-
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const acoesMapeadas: AcaoGovernanta[] = Array.isArray(data.acoesPropostas)
-            ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              data.acoesPropostas.map((a: any, idx: number) => ({
-                id: `ai-act-${Date.now()}-${idx}`,
-                tipo: a.tipo || "CRIAR_TAREFA",
-                titulo: a.titulo || "Ação da Lala",
-                detalhe: a.detalhe || "",
-                executada: false,
-                payload: {
-                  texto: a.texto || a.titulo,
-                  valor: a.valor,
-                  categoriaGasto: a.categoriaGasto,
-                  srpe: a.srpe,
-                  areaNota: a.areaNota || anexo?.areaRepositorio,
-                  anexo,
-                  substituirExistentes: a.substituirExistentes,
-                  compromissos: a.compromissos,
-                  refeicoes: a.refeicoes,
-                  itensCompras: a.itensCompras,
-                  disciplinas: a.disciplinas,
-                  contasAjuste: a.contasAjuste,
-                  cartoesAjuste: a.cartoesAjuste,
-                  petsAjuste: a.petsAjuste,
-                  fichaTreino: a.fichaTreino,
-                  projetos: a.projetos,
-                  habitos: a.habitos,
-                  metas: a.metas,
-                  perfilCheckin: a.perfilCheckin,
-                },
-              }))
-            : [];
-
-          // Se houve anexo e a usuária pediu para guardar cópia (padrão true), garantimos a ação de guardar no Segundo Cérebro
-          if (
-            anexo &&
-            anexo.guardarCopiaNoSegundoCerebro !== false &&
-            !acoesMapeadas.some((ac) => ac.tipo === "GUARDAR_SEGUNDO_CEREBRO")
-          ) {
-            acoesMapeadas.push({
-              id: `ai-act-${Date.now()}-save-anexo`,
-              tipo: "GUARDAR_SEGUNDO_CEREBRO",
-              titulo: `Guardar "${anexo.nome}" no Segundo Cérebro`,
-              detalhe: `Salva o arquivo na pasta ${anexo.areaRepositorio || "Pessoal"}`,
-              executada: false,
-              payload: {
-                texto: texto || `Arquivo: ${anexo.nome}`,
-                areaNota: anexo.areaRepositorio || "Pessoal",
-                anexo,
-              },
-            });
-          } else if (anexo && anexo.guardarCopiaNoSegundoCerebro === false) {
-            const idxSave = acoesMapeadas.findIndex(
-              (ac) => ac.tipo === "GUARDAR_SEGUNDO_CEREBRO"
-            );
-            if (idxSave >= 0 && acoesMapeadas.length > 1) {
-              acoesMapeadas.splice(idxSave, 1);
-            }
-          }
-
-          return {
-            modo: modoDetectado,
-            nomeAnexo: anexo?.nome,
-            anexo,
-            tituloCard: data.tituloCard || "Lala",
-            tags: data.tags || ["Lala"],
-            respostaLala: data.respostaLala,
-            matrizDecisao: data.matrizDecisao,
-            sugestoesResposta: Array.isArray(data.sugestoesResposta)
-              ? data.sugestoesResposta
-              : undefined,
-            guardadoNoCofre:
-              Boolean(anexo) ||
-              modoDetectado === "devaneio" ||
-              modoDetectado === "desabafo" ||
-              modoDetectado === "orientacao",
-            acoesPropostas: acoesMapeadas,
-          };
+      const contentType = res.headers.get("content-type") || "";
+      if (res.ok && contentType.includes("application/json")) {
+        const parsed = await res.json();
+        if (parsed && parsed.respostaLala) {
+          data = parsed;
         }
       }
     } catch {
-      // Fallback silencioso para o motor local Offline-First
+      // Continua para tentativa direta caso esteja em hospedagem estática (Firebase Hosting / GitHub)
+    }
+
+    // 2. Fallback Multimodal Direto via SDK (@google/genai) caso o app esteja hospedado em servidor estático (Firebase Hosting)
+    if (!data) {
+      try {
+        const clientKey =
+          (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) || "";
+        if (clientKey) {
+          const ai = new GoogleGenAI({ apiKey: clientKey });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parts: any[] = [];
+          for (const itemAnexo of listaAnexos) {
+            if (itemAnexo?.base64 && itemAnexo.mimeType) {
+              const cleanBase64 = itemAnexo.base64.includes(",")
+                ? itemAnexo.base64.split(",")[1]
+                : itemAnexo.base64;
+              if (
+                itemAnexo.mimeType.startsWith("image/") ||
+                itemAnexo.mimeType.startsWith("audio/") ||
+                itemAnexo.mimeType === "application/pdf"
+              ) {
+                parts.push({
+                  inlineData: {
+                    mimeType: itemAnexo.mimeType.split(";")[0],
+                    data: cleanBase64,
+                  },
+                });
+              }
+            }
+          }
+
+          parts.push({
+            text: `Você é a Lala, governanta pessoal do app Casa da Lala.
+Contexto atual da usuária: ${JSON.stringify(ctx)}
+Mensagem da usuária: ${texto || "Analise as imagens/arquivos anexados e atualize o aplicativo com todos os saldos, faturas, gastos, receitas, compromissos ou tarefas encontrados."}
+
+IMPORTANTE:
+- NUNCA retorne apenas "GUARDAR_SEGUNDO_CEREBRO" quando a usuária enviar prints de contas bancárias, faturas, gastos, horários ou listas!
+- Se houver prints de contas bancárias, saldos ou cartões de crédito, extraia todos os valores e gere a ação "ATUALIZAR_CONTAS_FINANCAS" preenchendo "contasAjuste" ([{ "nome": "Banco", "saldoAtual": 123.45 }]) e/ou "cartoesAjuste" ([{ "nome": "Cartão", "faturaAtual": 123.45, "limiteTotal": 1000, "vencimentoDia": 10 }]), além de "REGISTRAR_GASTO" ou "REGISTRAR_RECEITA" se houver transações!
+- Retorne APENAS um JSON válido com: { "modoDetectado": "comando", "transcricaoAudioUsuario": "", "respostaLala": "sua resposta detalhada em pt-BR", "tituloCard": "Resumo", "tags": ["Finanças"], "acoesPropostas": [ { "tipo": "...", "titulo": "...", "detalhe": "...", "substituirExistentes": false, "valor": 0, "categoriaGasto": "Mercado", "texto": "", "contasAjuste": [], "cartoesAjuste": [], "compromissos": [], "refeicoes": [], "itensCompras": [], "disciplinas": [] } ] }`,
+          });
+
+          const response = await ai.models.generateContent({
+            model: "gemini-3.8-flash",
+            contents: parts,
+            config: {
+              responseMimeType: "application/json",
+            },
+          });
+          const raw = (response.text || "{}")
+            .replace(/^```json\s*/i, "")
+            .replace(/```\s*$/i, "")
+            .trim();
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.respostaLala) {
+            data = parsed;
+          }
+        }
+      } catch {
+        // Fallback para motor local
+      }
+    }
+
+    if (data && data.respostaLala) {
+      const modoDetectado: ModoInteracaoLala =
+        data.modoDetectado || detectarIntencaoNatural(texto, primeiroAnexo);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const acoesMapeadas: AcaoGovernanta[] = Array.isArray(data.acoesPropostas)
+        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data.acoesPropostas.map((a: any, idx: number) => ({
+            id: `ai-act-${Date.now()}-${idx}`,
+            tipo: a.tipo || "CRIAR_TAREFA",
+            titulo: a.titulo || "Ação da Lala",
+            detalhe: a.detalhe || "",
+            executada: false,
+            payload: {
+              texto: a.texto || a.titulo,
+              valor: a.valor,
+              categoriaGasto: a.categoriaGasto,
+              srpe: a.srpe,
+              areaNota: a.areaNota || primeiroAnexo?.areaRepositorio,
+              anexo: primeiroAnexo,
+              substituirExistentes: a.substituirExistentes,
+              compromissos: a.compromissos,
+              refeicoes: a.refeicoes,
+              itensCompras: a.itensCompras,
+              disciplinas: a.disciplinas,
+              contasAjuste: a.contasAjuste,
+              cartoesAjuste: a.cartoesAjuste,
+              petsAjuste: a.petsAjuste,
+              fichaTreino: a.fichaTreino,
+              projetos: a.projetos,
+              habitos: a.habitos,
+              metas: a.metas,
+              perfilCheckin: a.perfilCheckin,
+            },
+          }))
+        : [];
+
+      const isVoiceNote = primeiroAnexo?.mimeType?.startsWith("audio/");
+      const pediuParaGuardarExplicitamente =
+        /\b(guardar|salvar|arquivar)\b.*\b(segundo c[ée]rebro|reposit[óo]rio|pasta|cofre)\b/i.test(
+          texto
+        );
+
+      // Remove GUARDAR_SEGUNDO_CEREBRO se a usuária não pediu para guardar no Segundo Cérebro e já existem outras ações reais
+      const acoesFiltradas =
+        !pediuParaGuardarExplicitamente && acoesMapeadas.length > 1
+          ? acoesMapeadas.filter((ac) => ac.tipo !== "GUARDAR_SEGUNDO_CEREBRO")
+          : acoesMapeadas;
+
+      const anexosVisiveis = isVoiceNote ? undefined : listaAnexos;
+
+      return {
+        modo: modoDetectado,
+        nomeAnexo: isVoiceNote ? undefined : primeiroAnexo?.nome,
+        anexo: isVoiceNote ? undefined : primeiroAnexo,
+        anexos:
+          anexosVisiveis && anexosVisiveis.length > 0
+            ? anexosVisiveis
+            : undefined,
+        transcricaoAudioUsuario: data.transcricaoAudioUsuario || undefined,
+        audioUsuarioBase64: isVoiceNote ? primeiroAnexo?.base64 : undefined,
+        enviadoPorAudio: Boolean(isVoiceNote),
+        tituloCard: data.tituloCard || "Lala",
+        tags: data.tags || ["Lala"],
+        respostaLala: data.respostaLala,
+        matrizDecisao: data.matrizDecisao,
+        sugestoesResposta: Array.isArray(data.sugestoesResposta)
+          ? data.sugestoesResposta
+          : undefined,
+        guardadoNoCofre: pediuParaGuardarExplicitamente,
+        acoesPropostas: acoesFiltradas,
+      };
     }
   }
 
-  return processarMensagemLocalLala(texto, ctx, anexo);
+  const localRes = processarMensagemLocalLala(texto, ctx, primeiroAnexo);
+  if (primeiroAnexo?.mimeType?.startsWith("audio/")) {
+    return {
+      ...localRes,
+      nomeAnexo: undefined,
+      anexo: undefined,
+      anexos: undefined,
+      audioUsuarioBase64: primeiroAnexo.base64,
+      enviadoPorAudio: true,
+    };
+  }
+  return {
+    ...localRes,
+    anexos: listaAnexos.length > 0 ? listaAnexos : undefined,
+  };
+}
+
+// Reprodutor global de voz da Lala (evita duas falas simultâneas)
+let currentLalaAudioElement: HTMLAudioElement | null = null;
+
+export function pararVozDaLala() {
+  if (currentLalaAudioElement) {
+    try {
+      currentLalaAudioElement.pause();
+      currentLalaAudioElement.currentTime = 0;
+    } catch {
+      // ignore
+    }
+    currentLalaAudioElement = null;
+  }
+  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export async function falarTextoComVozDaLala(
+  texto: string,
+  tomLala?: string,
+  cachedAudioBase64?: string,
+  onEnd?: () => void
+): Promise<{ audioBase64?: string }> {
+  pararVozDaLala();
+
+  const cleanText = (texto || "")
+    .replace(/\*\*/g, "")
+    .replace(/[#_`~•]/g, "")
+    .trim();
+
+  if (!cleanText) {
+    onEnd?.();
+    return {};
+  }
+
+  const playBase64Audio = (dataUrl: string): Promise<boolean> => {
+    return new Promise((resolve) => {
+      try {
+        const audio = new Audio(dataUrl);
+        currentLalaAudioElement = audio;
+        audio.onended = () => {
+          if (currentLalaAudioElement === audio) {
+            currentLalaAudioElement = null;
+          }
+          onEnd?.();
+          resolve(true);
+        };
+        audio.onerror = () => {
+          if (currentLalaAudioElement === audio) {
+            currentLalaAudioElement = null;
+          }
+          resolve(false);
+        };
+        audio.play().catch(() => {
+          resolve(false);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  };
+
+  // 1. Se já temos o áudio em cache na mensagem, toca direto!
+  if (cachedAudioBase64) {
+    const ok = await playBase64Audio(cachedAudioBase64);
+    if (ok) return { audioBase64: cachedAudioBase64 };
+  }
+
+  // 2. Tenta gerar voz natural da Lala via servidor Gemini TTS (gemini-3.8-flash-lite-tts)
+  if (typeof navigator !== "undefined" && navigator.onLine) {
+    try {
+      const res = await fetch("/api/lala/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texto: cleanText, tomLala }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { audioBase64?: string };
+        if (data?.audioBase64) {
+          const played = await playBase64Audio(data.audioBase64);
+          if (played) {
+            return { audioBase64: data.audioBase64 };
+          }
+        }
+      }
+    } catch {
+      // Fallback para síntese de voz nativa do navegador
+    }
+  }
+
+  // 3. Fallback imediato 100% Offline / Navegador (Web Speech API pt-BR)
+  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    try {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = "pt-BR";
+      utterance.rate = 1.05;
+      utterance.pitch = 1.05;
+
+      const voices = window.speechSynthesis.getVoices();
+      const ptVoices = voices.filter((v) =>
+        v.lang.toLowerCase().includes("pt")
+      );
+      const preferredVoice =
+        ptVoices.find(
+          (v) =>
+            v.name.toLowerCase().includes("luciana") ||
+            v.name.toLowerCase().includes("francisca") ||
+            v.name.toLowerCase().includes("maria") ||
+            v.name.toLowerCase().includes("google") ||
+            v.name.toLowerCase().includes("female")
+        ) || ptVoices[0];
+
+      if (preferredVoice) {
+        utterance.voice = preferredVoice;
+      }
+
+      utterance.onend = () => onEnd?.();
+      utterance.onerror = () => onEnd?.();
+      window.speechSynthesis.speak(utterance);
+      return {};
+    } catch {
+      onEnd?.();
+    }
+  } else {
+    onEnd?.();
+  }
+
+  return {};
 }

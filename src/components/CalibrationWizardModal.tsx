@@ -61,7 +61,7 @@ interface CalibrationWizardModalProps {
   setCheckin: React.Dispatch<React.SetStateAction<CheckinProntidao>>;
   setRepositorio?: React.Dispatch<React.SetStateAction<ArquivoRepositorio[]>>;
   onEnviarAnexoParaLala: (
-    anexo: AnexoLala,
+    anexo: AnexoLala | AnexoLala[] | undefined,
     promptInicial: string
   ) => Promise<void>;
   onAbrirLalaComPrompt: (promptInicial: string) => void;
@@ -204,16 +204,7 @@ export function CalibrationWizardModal({
     const texto = falaCalibracao.trim();
     setProcessandoCalibracaoIA(true);
     try {
-      await onEnviarAnexoParaLala(
-        {
-          nome: "Calibração da Lala",
-          mimeType: "text/plain",
-          tamanhoBytes: texto.length,
-          intencao: "auto",
-          guardarCopiaNoSegundoCerebro: false,
-        },
-        texto
-      );
+      await onEnviarAnexoParaLala(undefined, texto);
       setPerfilUsuario((prev) => ({
         ...prev,
         calibrado: true,
@@ -235,16 +226,33 @@ export function CalibrationWizardModal({
   const handleSelecionarArquivoUniversal = async (
     e: React.ChangeEvent<HTMLInputElement>
   ) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    const filesArray: File[] = Array.from(files);
     try {
-      const lido = await lerArquivoParaAnexo(file, "auto", "Pessoal");
-      setAnexoCalibracao(lido);
-      setAba("importar_arquivo");
-      showToast(
-        `Arquivo "${file.name}" carregado! Escolha abaixo o que fazer ou importar.`
+      const lidos = await Promise.all(
+        filesArray.map((f) => lerArquivoParaAnexo(f, "auto", "Pessoal"))
       );
+      if (lidos.length > 1) {
+        setProcessandoCalibracaoIA(true);
+        await onEnviarAnexoParaLala(
+          lidos,
+          `Lala, analise estas ${lidos.length} imagens/arquivos e importe os dados (contas, faturas, gastos, agenda, dieta ou tarefas) para o app!`
+        );
+        setUltimoFeedbackLala(
+          `${lidos.length} arquivos analisados e importados com sucesso pela Lala!`
+        );
+        setProcessandoCalibracaoIA(false);
+        showToast(`${lidos.length} imagens/arquivos importados pela Lala!`);
+      } else {
+        setAnexoCalibracao(lidos[0]);
+        setAba("importar_arquivo");
+        showToast(
+          `Arquivo "${lidos[0].nome}" carregado! Escolha abaixo o que fazer ou importar.`
+        );
+      }
     } catch {
+      setProcessandoCalibracaoIA(false);
       showToast("Não foi possível ler o arquivo.");
     } finally {
       e.target.value = "";
@@ -422,6 +430,7 @@ export function CalibrationWizardModal({
         <input
           ref={fileInputUniversalRef}
           type="file"
+          multiple
           accept="image/*,.pdf,.txt,.csv,.md,.json,.doc,.docx"
           onChange={handleSelecionarArquivoUniversal}
           className="hidden"

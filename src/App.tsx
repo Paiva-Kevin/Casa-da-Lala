@@ -1663,6 +1663,15 @@ export default function App() {
       case "ATUALIZAR_CONTAS_FINANCAS": {
         if (acao.payload?.contasAjuste && acao.payload.contasAjuste.length > 0) {
           setContas((prev) => {
+            if (acao.payload?.substituirExistentes) {
+              return (acao.payload.contasAjuste || []).map((aj, idx) => ({
+                id: Date.now() + idx,
+                nome: aj.nome,
+                tipo: "Corrente / Pix" as const,
+                saldoAtual: aj.saldoAtual,
+                cor: idx === 0 ? ("primary" as const) : ("finance" as const),
+              }));
+            }
             const copia = [...prev];
             for (const aj of acao.payload?.contasAjuste || []) {
               const idx = copia.findIndex((c) =>
@@ -1685,6 +1694,17 @@ export default function App() {
         }
         if (acao.payload?.cartoesAjuste && acao.payload.cartoesAjuste.length > 0) {
           setCartoes((prev) => {
+            if (acao.payload?.substituirExistentes) {
+              return (acao.payload.cartoesAjuste || []).map((aj, idx) => ({
+                id: Date.now() + idx,
+                nome: aj.nome,
+                limiteTotal: aj.limiteTotal || 3000,
+                faturaAtual: aj.faturaAtual,
+                fechamentoDia: aj.fechamentoDia || 20,
+                vencimentoDia: aj.vencimentoDia || 28,
+                statusFatura: "aberta" as const,
+              }));
+            }
             const copia = [...prev];
             for (const aj of acao.payload?.cartoesAjuste || []) {
               const idx = copia.findIndex((c) =>
@@ -2085,7 +2105,7 @@ export default function App() {
   };
 
   const handleEnviarAnexoParaLalaGlobal = async (
-    anexo: AnexoLala,
+    anexoOuAnexos: AnexoLala | AnexoLala[] | undefined,
     promptInicial: string
   ) => {
     const tarefasHojePendentes = tarefas.filter(
@@ -2105,9 +2125,23 @@ export default function App() {
       prioridade1: tarefaP1?.texto || "Nenhuma pendente",
       disciplinasUERJ: disciplinas.map((d) => d.nome),
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
+      contasBancarias: contas.map((c) => ({
+        nome: c.nome,
+        saldoAtual: c.saldoAtual,
+      })),
+      cartoesCredito: cartoes.map((c) => ({
+        nome: c.nome,
+        faturaAtual: c.faturaAtual,
+        limiteTotal: c.limiteTotal,
+        vencimentoDia: c.vencimentoDia,
+      })),
     };
 
-    const resultado = await consultarLalaUnificada(promptInicial, ctx, anexo);
+    const resultado = await consultarLalaUnificada(
+      promptInicial,
+      ctx,
+      anexoOuAnexos
+    );
 
     // Aplica automaticamente todas as ações de preenchimento/atualização do app
     const acoesComExecucao = (resultado.acoesPropostas || []).map((ac) => {
@@ -2496,22 +2530,6 @@ export default function App() {
               </button>
 
               <button
-                onClick={() => setCalibracaoOpen(true)}
-                style={{
-                  backgroundColor: !perfilCalibrado.calibrado
-                    ? t.primary
-                    : t.card,
-                  color: !perfilCalibrado.calibrado ? "#fff" : t.text,
-                  borderColor: t.border,
-                }}
-                className="px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer"
-                title="Calibrar informações, subir dieta ou grade da UERJ"
-              >
-                <SlidersHorizontal size={13} />
-                <span className="hidden sm:inline">Calibrar</span>
-              </button>
-
-              <button
                 onClick={() =>
                   setActiveTab(
                     activeTab === "calendario" ? "inicio" : "calendario"
@@ -2533,8 +2551,7 @@ export default function App() {
           </header>
 
           <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
-            {activeTab !== "governanta_lala" &&
-              (!perfilCalibrado.calibrado || !demoLimpo) && (
+            {activeTab !== "governanta_lala" && !demoLimpo && !perfilCalibrado.calibrado && (
               <div
                 style={{
                   backgroundColor: `${t.primary}14`,
@@ -2554,36 +2571,29 @@ export default function App() {
                       className="text-xs sm:text-sm font-bold"
                       style={{ color: t.text }}
                     >
-                      {!demoLimpo
-                        ? "O app está com dados de demonstração — limpe com 1 clique ou faça login!"
-                        : "Preencha conversando livremente com a Lala a qualquer momento!"}
+                      O app está com dados de demonstração — limpe com 1 clique ou converse com a Lala!
                     </p>
                     <p
                       className="text-xs mt-0.5"
                       style={{ color: t.textSoft }}
                     >
-                      Você pode zerar os exemplos agora e conversar com a Lala a
-                      qualquer momento (por voz, texto ou arquivos) para cadastrar
-                      aulas, gastos, compromissos do Google Agenda, dieta, treinos
-                      e rotina sem formulários engessados.
+                      Toda a configuração é feita conversando com a Lala (por voz, texto ou prints/arquivos). Assim que preencher seus dados, este aviso some automaticamente.
                     </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  {!demoLimpo && (
-                    <button
-                      onClick={() => limparDadosDeExemplo(false)}
-                      style={{
-                        backgroundColor: `${t.danger}15`,
-                        color: t.danger,
-                        borderColor: `${t.danger}40`,
-                      }}
-                      className="px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer hover:opacity-90"
-                    >
-                      <Trash2 size={13} />
-                      Zerar Dados de Exemplo
-                    </button>
-                  )}
+                  <button
+                    onClick={() => limparDadosDeExemplo(false)}
+                    style={{
+                      backgroundColor: `${t.danger}15`,
+                      color: t.danger,
+                      borderColor: `${t.danger}40`,
+                    }}
+                    className="px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer hover:opacity-90"
+                  >
+                    <Trash2 size={13} />
+                    Zerar Dados de Exemplo
+                  </button>
                   <button
                     onClick={() => setActiveTab("governanta_lala")}
                     style={{ backgroundColor: t.primary, color: "#fff" }}
@@ -2608,6 +2618,7 @@ export default function App() {
                 moverTarefaHorizonte={moverTarefaHorizonte}
                 agendarTarefaNoHorario={agendarTarefaNoHorario}
                 habitos={habitos}
+                setHabitos={setHabitos}
                 toggleHabitoHoje={toggleHabitoHoje}
                 adicionarHabito={adicionarHabito}
                 compromissos={compromissos}
@@ -2660,9 +2671,12 @@ export default function App() {
                 checkin={checkin}
                 disciplinas={disciplinas}
                 projetos={projetos}
+                contas={contas}
+                cartoes={cartoes}
                 perfilCalibrado={perfilCalibrado}
+                setPerfilUsuario={setPerfilCalibrado}
                 executarAcaoDaLala={executarAcaoDaLala}
-                onOpenCalibracao={() => setCalibracaoOpen(true)}
+                irParaAba={setActiveTab}
                 showToast={showToast}
               />
             )}
@@ -2696,11 +2710,12 @@ export default function App() {
                 artigos={artigos}
                 setArtigos={setArtigos}
                 livros={livros}
+                setLivros={setLivros}
                 streakLeitura={streakLeitura}
                 projetos={projetos}
                 setProjetos={setProjetos}
                 enviarProjetoParaPrioridades={enviarProjetoParaPrioridades}
-                abrirCalibracao={() => setCalibracaoOpen(true)}
+                abrirCalibracao={() => setActiveTab("governanta_lala")}
               />
             )}
 
@@ -2711,6 +2726,7 @@ export default function App() {
                 comodos={comodos}
                 setComodos={setComodos}
                 estoqueCasa={estoqueCasa}
+                setEstoqueCasa={setEstoqueCasa}
                 ajustarItemEstoqueCasa={ajustarItemEstoqueCasa}
                 listaCompras={listaCompras}
                 setListaCompras={setListaCompras}
@@ -2719,6 +2735,7 @@ export default function App() {
                 }
                 enviarRotinaParaHoje={enviarRotinaParaHoje}
                 petsPerfil={petsPerfil}
+                setPetsPerfil={setPetsPerfil}
                 alimentarPet={alimentarPet}
                 registrarCompraSaches={registrarCompraSaches}
                 showToast={showToast}
@@ -2729,6 +2746,7 @@ export default function App() {
               <SaudePetsScreen
                 t={t}
                 fichasTreino={fichasTreino}
+                setFichasTreino={setFichasTreino}
                 iniciarTreinoAoVivo={(ficha) => setFichaTreinoAoVivo(ficha)}
                 refeicoes={refeicoes}
                 setRefeicoes={setRefeicoes}
@@ -2739,7 +2757,7 @@ export default function App() {
                 checkin={checkin}
                 setCheckin={setCheckin}
                 openCard={(p) => setBottomSheet(p)}
-                abrirCalibracao={() => setCalibracaoOpen(true)}
+                abrirCalibracao={() => setActiveTab("governanta_lala")}
                 gerarListaComprasDaDieta={() => {
                   const textoDieta = refeicoes
                     .map((r) => `${r.nome} ${r.descricao}`)
@@ -2776,6 +2794,7 @@ export default function App() {
                 cartoes={cartoes}
                 setCartoes={setCartoes}
                 orcamentos={orcamentos}
+                setOrcamentos={setOrcamentos}
                 lancamentos={lancamentos}
                 setLancamentos={setLancamentos}
                 adicionarLancamento={adicionarLancamento}
@@ -2932,45 +2951,8 @@ export default function App() {
         themeMode={themeMode}
         setThemeMode={setThemeMode}
         irParaLalaCompleta={() => setActiveTab("governanta_lala")}
+        irParaAba={setActiveTab}
         executarAcaoDaLala={executarAcaoDaLala}
-        onOpenCalibracao={() => setCalibracaoOpen(true)}
-        showToast={showToast}
-      />
-
-      <CalibrationWizardModal
-        t={t}
-        open={calibracaoOpen}
-        onClose={() => setCalibracaoOpen(false)}
-        perfilUsuario={perfilCalibrado}
-        setPerfilUsuario={setPerfilCalibrado}
-        contas={contas}
-        setContas={setContas}
-        cartoes={cartoes}
-        setCartoes={setCartoes}
-        disciplinas={disciplinas}
-        setDisciplinas={setDisciplinas}
-        refeicoes={refeicoes}
-        setRefeicoes={setRefeicoes}
-        listaCompras={listaCompras}
-        setListaCompras={setListaCompras}
-        petsPerfil={petsPerfil}
-        setPetsPerfil={setPetsPerfil}
-        checkin={checkin}
-        setCheckin={setCheckin}
-        onEnviarAnexoParaLala={handleEnviarAnexoParaLalaGlobal}
-        onAbrirLalaComPrompt={(promptInicial) => {
-          setActiveTab("governanta_lala");
-          handleEnviarAnexoParaLalaGlobal(
-            {
-              nome: "Calibração via Conversa",
-              mimeType: "text/plain",
-              tamanhoBytes: promptInicial.length,
-              intencao: "auto",
-            },
-            promptInicial
-          );
-        }}
-        onLimparDadosExemplo={() => limparDadosDeExemplo(false)}
         showToast={showToast}
       />
 
@@ -2990,7 +2972,6 @@ export default function App() {
         setRepositorio={setRepositorio}
         compromissos={compromissos}
         setCompromissos={setCompromissos}
-        abrirCalibracao={() => setCalibracaoOpen(true)}
         onInterpretarArquivoComLala={handleEnviarAnexoParaLalaGlobal}
         showToast={showToast}
       />

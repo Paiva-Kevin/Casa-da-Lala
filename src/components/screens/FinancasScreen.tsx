@@ -7,14 +7,20 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Check,
-  Filter,
   Upload,
   FileSpreadsheet,
   BellRing,
   Info,
   X,
+  Plus,
+  Edit3,
+  Trash2,
+  ChevronRight,
+  History,
+  Sliders,
 } from "lucide-react";
 import {
+  BancoId,
   CartaoCredito,
   ContaBancaria,
   LancamentoFinanceiro,
@@ -23,6 +29,11 @@ import {
   ThemeTokens,
 } from "../../types/lala";
 import { parseGastoNatural } from "../../data/initialData";
+import {
+  CATALOGO_BANCOS,
+  detectarBancoIdPorNome,
+  getIdentidadeBanco,
+} from "../../utils/bankIdentities";
 
 interface TransacaoImportadaPreview {
   id: string;
@@ -87,16 +98,13 @@ function detectarCategoriaAutomatica(
   return "Mercado";
 }
 
-function parseArquivoBancarioSemOpenFinance(
-  conteudo: string
-): {
+function parseArquivoBancarioSemOpenFinance(conteudo: string): {
   saldoDetectado: number | null;
   transacoes: TransacaoImportadaPreview[];
 } {
   const transacoes: TransacaoImportadaPreview[] = [];
   let saldoDetectado: number | null = null;
 
-  // 1. Verifica se é arquivo OFX (Nubank, Itaú, BB, Bradesco, Inter, Santander, C6, Caixa)
   if (conteudo.includes("<OFX") || conteudo.includes("<STMTTRN>")) {
     const matchBal = conteudo.match(/<BALAMT>\s*([-+]?\d+(?:[.,]\d+)?)/i);
     if (matchBal) {
@@ -133,14 +141,12 @@ function parseArquivoBancarioSemOpenFinance(
     return { saldoDetectado, transacoes };
   }
 
-  // 2. Verifica linhas de CSV ou texto colado de Notificações / SMS / Extrato Bancário
   const linhas = conteudo
     .split(/\r?\n/)
     .map((l) => l.trim())
     .filter(Boolean);
 
   linhas.forEach((linha, idx) => {
-    // Detecta linha de saldo: ex "Saldo atual: R$ 1.450,90" ou "Saldo em conta 980,00"
     const matchSaldo = linha.match(
       /saldo(?:\s+atual|\s+dispon[ií]vel|\s+em\s+conta)?[:\s]*R?\$?\s*([-+]?\d{1,3}(?:\.\d{3})*(?:,\d{2})|[-+]?\d+(?:[.,]\d{2}))/i
     );
@@ -153,11 +159,12 @@ function parseArquivoBancarioSemOpenFinance(
       return;
     }
 
-    // Se for CSV separado por vírgula ou ponto-e-vírgula (ex: Data,Valor,Identificador,Descrição)
-    if (linha.includes(";") || (linha.includes(",") && linha.split(",").length >= 3)) {
+    if (
+      linha.includes(";") ||
+      (linha.includes(",") && linha.split(",").length >= 3)
+    ) {
       const sep = linha.includes(";") ? ";" : ",";
       const cols = linha.split(sep).map((c) => c.replace(/^"|"$/g, "").trim());
-      // Ignora cabeçalho
       if (
         cols.some(
           (c) =>
@@ -199,7 +206,6 @@ function parseArquivoBancarioSemOpenFinance(
       }
     }
 
-    // 3. Texto de Notificação / SMS / Extrato copiado (ex: "Compra aprovada R$ 45,90 Padaria" ou "Pix recebido R$ 300,00")
     const matchValor = linha.match(
       /([-+]?\s*R\$\s*\d{1,3}(?:\.\d{3})*(?:,\d{2})|[-+]?\d{1,3}(?:\.\d{3})*,\d{2}|[-+]?\d+\.\d{2})/i
     );
@@ -247,6 +253,7 @@ interface FinancasScreenProps {
   cartoes: CartaoCredito[];
   setCartoes: React.Dispatch<React.SetStateAction<CartaoCredito[]>>;
   orcamentos: OrcamentoCategoria[];
+  setOrcamentos?: React.Dispatch<React.SetStateAction<OrcamentoCategoria[]>>;
   lancamentos: LancamentoFinanceiro[];
   setLancamentos: React.Dispatch<React.SetStateAction<LancamentoFinanceiro[]>>;
   adicionarLancamento: (
@@ -269,6 +276,16 @@ interface FinancasScreenProps {
   };
 }
 
+const CATEGORIAS_FINANCAS: OrcamentoCategoria["categoria"][] = [
+  "Mercado",
+  "Pets",
+  "Transporte",
+  "Moradia & Fixos",
+  "Estudos & UERJ",
+  "Dívida",
+  "Lazer & Outros",
+];
+
 export function FinancasScreen({
   t,
   mesSelecionado,
@@ -276,7 +293,9 @@ export function FinancasScreen({
   contas,
   setContas,
   cartoes,
+  setCartoes,
   orcamentos,
+  setOrcamentos,
   lancamentos,
   setLancamentos,
   adicionarLancamento,
@@ -308,7 +327,48 @@ export function FinancasScreen({
   const [catManual, setCatManual] =
     useState<OrcamentoCategoria["categoria"]>("Mercado");
 
-  // Importação Bancária Automática Sem Open Finance (OFX / CSV / Leitor de Notificações e Saldo)
+  // Modal de Detalhes e Histórico da Conta Bancária (Estilo Minhas Finanças)
+  const [contaDetalheId, setContaDetalheId] = useState<number | null>(null);
+  const [filtroExtratoConta, setFiltroExtratoConta] = useState<
+    "todos" | "receita" | "despesa" | "previsto"
+  >("todos");
+  const [editandoDadosConta, setEditandoDadosConta] = useState(false);
+
+  // Lançamento rápido dentro do modal da conta
+  const [novoLancContaDesc, setNovoLancContaDesc] = useState("");
+  const [novoLancContaVal, setNovoLancContaVal] = useState("");
+  const [novoLancContaTipo, setNovoLancContaTipo] = useState<
+    "despesa" | "receita"
+  >("despesa");
+  const [novoLancContaCat, setNovoLancContaCat] =
+    useState<OrcamentoCategoria["categoria"]>("Mercado");
+
+  // Modal de Nova Conta Bancária
+  const [modalNovaContaOpen, setModalNovaContaOpen] = useState(false);
+  const [novaContaNome, setNovaContaNome] = useState("");
+  const [novaContaBancoId, setNovaContaBancoId] = useState<BancoId>("nubank");
+  const [novaContaTipo, setNovaContaTipo] =
+    useState<ContaBancaria["tipo"]>("Corrente / Pix");
+  const [novaContaSaldo, setNovaContaSaldo] = useState("");
+
+  // Modal de Detalhes / Edição do Cartão de Crédito
+  const [cartaoDetalheId, setCartaoDetalheId] = useState<number | null>(null);
+  const [modalNovoCartaoOpen, setModalNovoCartaoOpen] = useState(false);
+  const [novoCartaoNome, setNovoCartaoNome] = useState("");
+  const [novoCartaoBancoId, setNovoCartaoBancoId] = useState<BancoId>("nubank");
+  const [novoCartaoLimite, setNovoCartaoLimite] = useState("2500");
+  const [novoCartaoFatura, setNovoCartaoFatura] = useState("0");
+  const [novoCartaoFecha, setNovoCartaoFecha] = useState("5");
+  const [novoCartaoVence, setNovoCartaoVence] = useState("12");
+
+  // Edição de Lançamento (Movimentação)
+  const [lancamentoEditando, setLancamentoEditando] =
+    useState<LancamentoFinanceiro | null>(null);
+
+  // Edição de Orçamentos por Categoria
+  const [editandoOrcamentos, setEditandoOrcamentos] = useState(false);
+
+  // Importação Bancária Automática Sem Open Finance
   const [painelBancoAberto, setPainelBancoAberto] = useState<boolean>(false);
   const [contaDestinoImportId, setContaDestinoImportId] = useState<number>(
     contas[0]?.id ?? 1
@@ -321,6 +381,13 @@ export function FinancasScreen({
     TransacaoImportadaPreview[]
   >([]);
   const [feedbackImport, setFeedbackImport] = useState<string | null>(null);
+
+  // Rastreador Stitch: Parcelas do Acordo
+  const [parcelasAcordoPagas, setParcelasAcordoPagas] = useState<number>(5);
+  const [totalParcelasAcordo, setTotalParcelasAcordo] = useState<number>(8);
+  const pctAcordoQuitado = Math.round(
+    (parcelasAcordoPagas / Math.max(1, totalParcelasAcordo)) * 100
+  );
 
   const handleUploadArquivoBanco = async (
     e: React.ChangeEvent<HTMLInputElement>
@@ -392,13 +459,6 @@ export function FinancasScreen({
     setTextoNotificacaoBanco("");
   };
 
-  // Rastreador Stitch: Parcelas do Acordo (8 parcelas totais)
-  const [parcelasAcordoPagas, setParcelasAcordoPagas] = useState<number>(5);
-  const totalParcelasAcordo = 8;
-  const pctAcordoQuitado = Math.round(
-    (parcelasAcordoPagas / totalParcelasAcordo) * 100
-  );
-
   const lancamentosMes = lancamentos.filter((l) => l.mesKey === mesSelecionado);
 
   const receitasRealizadas = lancamentosMes
@@ -418,7 +478,6 @@ export function FinancasScreen({
   const saldoRealizadoMes = receitasRealizadas - despesasRealizadas;
   const saldoPrevistoFimMes = receitasPrevistas - despesasPrevistas;
 
-  // Orçamento Mensal Global Consolidado (Barra de Progresso Visual)
   const tetoMensalGlobal = orcamentos.reduce((acc, o) => acc + o.tetoMensal, 0);
   const pctOrcamentoGlobal =
     tetoMensalGlobal > 0
@@ -450,8 +509,8 @@ export function FinancasScreen({
       parsed.metodoSugerido,
       "realizado",
       parsed.afetaEstoquePets,
-      1,
-      1,
+      contas[0]?.id ?? 1,
+      cartoes[0]?.id ?? 1,
       "despesa"
     );
     setInputNatural("");
@@ -476,16 +535,68 @@ export function FinancasScreen({
     setDescManual("");
   };
 
+  const criarNovaConta = () => {
+    const ident = CATALOGO_BANCOS[novaContaBancoId] || CATALOGO_BANCOS.nubank;
+    const nomeFinal = novaContaNome.trim() || ident.nomeBanco;
+    const saldoNum =
+      parseFloat(novaContaSaldo.replace(/\./g, "").replace(",", ".")) || 0;
+    const nova: ContaBancaria = {
+      id: Date.now(),
+      nome: nomeFinal,
+      tipo: novaContaTipo,
+      saldoAtual: saldoNum,
+      cor: ident.corPrimaria,
+      bancoId: novaContaBancoId,
+    };
+    setContas((prev) => [...prev, nova]);
+    setNovaContaNome("");
+    setNovaContaSaldo("");
+    setModalNovaContaOpen(false);
+  };
+
+  const criarNovoCartao = () => {
+    const ident = CATALOGO_BANCOS[novoCartaoBancoId] || CATALOGO_BANCOS.nubank;
+    const nomeFinal = novoCartaoNome.trim() || `Cartão ${ident.nomeBanco}`;
+    const lim =
+      parseFloat(novoCartaoLimite.replace(/\./g, "").replace(",", ".")) || 2000;
+    const fat =
+      parseFloat(novoCartaoFatura.replace(/\./g, "").replace(",", ".")) || 0;
+    const novo: CartaoCredito = {
+      id: Date.now(),
+      nome: nomeFinal,
+      limiteTotal: lim,
+      faturaAtual: fat,
+      fechamentoDia: Math.min(31, Math.max(1, Number(novoCartaoFecha) || 5)),
+      vencimentoDia: Math.min(31, Math.max(1, Number(novoCartaoVence) || 12)),
+      statusFatura: "aberta",
+      bancoId: novoCartaoBancoId,
+      cor: ident.corPrimaria,
+    };
+    setCartoes((prev) => [...prev, novo]);
+    setNovoCartaoNome("");
+    setModalNovoCartaoOpen(false);
+  };
+
+  const contaDetalhe =
+    contaDetalheId !== null
+      ? contas.find((c) => c.id === contaDetalheId) || null
+      : null;
+
+  const cartaoDetalhe =
+    cartaoDetalheId !== null
+      ? cartoes.find((cc) => cc.id === cartaoDetalheId) || null
+      : null;
+
   return (
     <div className="space-y-5">
-      {/* TOPO: SELETOR DE MÊS + BOTÃO VINCULAR/IMPORTAR BANCO SEM OPEN FINANCE */}
+      {/* TOPO: SELETOR DE MÊS + BOTÃO IMPORTAR EXTRATO */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-bold" style={{ color: t.text }}>
-            Finanças · Fluxo de Caixa & Sincronização Bancária
+            Finanças · Contas Bancárias, Cartões & Fluxo de Caixa
           </h2>
           <p className="text-xs" style={{ color: t.textSoft }}>
-            Visão direta de Entradas, Saídas, Dinheiro Livre Hoje e Importação sem Open Finance
+            Clique em qualquer conta, cartão, lançamento ou orçamento para ver o histórico e editar
           </p>
         </div>
 
@@ -500,7 +611,7 @@ export function FinancasScreen({
             }}
           >
             <Upload size={14} />
-            <span>Importar Banco (Sem Open Finance)</span>
+            <span>Importar Extrato / OFX</span>
           </button>
 
           <div
@@ -531,7 +642,7 @@ export function FinancasScreen({
         </div>
       </div>
 
-      {/* PAINEL DE VINCULAÇÃO / IMPORTAÇÃO BANCÁRIA SEM OPEN FINANCE (OFX, CSV E ESPELHO DE NOTIFICAÇÕES) */}
+      {/* PAINEL DE IMPORTAÇÃO BANCÁRIA SEM OPEN FINANCE */}
       {painelBancoAberto && (
         <section
           className="rounded-3xl p-5 border space-y-4"
@@ -546,13 +657,15 @@ export function FinancasScreen({
                 >
                   Sem Open Finance · 100% Privado
                 </span>
-                <h3 className="text-sm sm:text-base font-bold" style={{ color: t.text }}>
-                  Sincronização de Saldo & Extrato (Estilo GuiaBolso / OFX / Leitor de Notificações)
+                <h3
+                  className="text-sm sm:text-base font-bold"
+                  style={{ color: t.text }}
+                >
+                  Sincronização de Saldo & Extrato (OFX, CSV ou Leitor de Notificações)
                 </h3>
               </div>
               <p className="text-xs leading-relaxed" style={{ color: t.textSoft }}>
-                <strong style={{ color: t.text }}>Como funcionava antes vs. hoje:</strong>{" "}
-                Antigamente, apps como o GuiaBolso usavam uma leitura direta com a senha de consulta do banco (<em>screen scraping</em>). Hoje os bancos bloqueiam login direto de terceiros por causa da biometria facial/token, mas você consegue a <strong>mesma importação automática de saldo e transações sem usar Open Finance</strong> de duas formas instantâneas:
+                Suba o arquivo OFX/CSV exportado do seu banco ou cole o texto de notificações/extrato. Você também pode enviar prints das contas diretamente no <strong>Bate-Papo com a Lala</strong>!
               </p>
             </div>
             <button
@@ -565,7 +678,6 @@ export function FinancasScreen({
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-            {/* Método 1: Arquivo OFX / CSV do App do Banco */}
             <div
               className="lg:col-span-5 p-4 rounded-2xl border space-y-3"
               style={{ background: t.bg, borderColor: t.border }}
@@ -573,16 +685,15 @@ export function FinancasScreen({
               <div className="flex items-center gap-2">
                 <FileSpreadsheet size={16} style={{ color: t.primary }} />
                 <h4 className="text-xs sm:text-sm font-bold" style={{ color: t.text }}>
-                  1. Enviar Extrato OFX ou CSV (Atualiza Saldo + Gastos)
+                  1. Enviar Extrato OFX ou CSV
                 </h4>
               </div>
-              <p className="text-[11px] leading-relaxed" style={{ color: t.textSoft }}>
-                No app do seu banco (Nubank, Itaú, BB, Inter, Bradesco, Santander, C6), toque em <strong>Exportar Extrato → OFX ou CSV</strong> e selecione aqui. O arquivo OFX já traz seu <strong>saldo exato</strong> e todas as transações categorizadas:
-              </p>
-
               <div className="space-y-2">
-                <label className="text-[10px] font-bold uppercase block" style={{ color: t.textSoft }}>
-                  Vincular à Conta do App:
+                <label
+                  className="text-[10px] font-bold uppercase block"
+                  style={{ color: t.textSoft }}
+                >
+                  Vincular à Conta:
                 </label>
                 <select
                   value={contaDestinoImportId}
@@ -592,7 +703,7 @@ export function FinancasScreen({
                 >
                   {contas.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.nome} (Saldo atual: R$ {c.saldoAtual.toFixed(2)})
+                      {c.nome} (Saldo: R$ {c.saldoAtual.toFixed(2)})
                     </option>
                   ))}
                 </select>
@@ -617,7 +728,6 @@ export function FinancasScreen({
               </label>
             </div>
 
-            {/* Método 2: Colar Notificações / SMS / Linhas do Extrato */}
             <div
               className="lg:col-span-7 p-4 rounded-2xl border space-y-3"
               style={{ background: t.bg, borderColor: t.border }}
@@ -626,7 +736,7 @@ export function FinancasScreen({
                 <div className="flex items-center gap-2">
                   <BellRing size={16} style={{ color: t.action }} />
                   <h4 className="text-xs sm:text-sm font-bold" style={{ color: t.text }}>
-                    2. Leitor de Notificações Bancárias / Extrato Copiado
+                    2. Colar Notificações / Extrato Copiado
                   </h4>
                 </div>
                 <button
@@ -639,25 +749,23 @@ export function FinancasScreen({
                   className="text-[10px] font-bold underline cursor-pointer"
                   style={{ color: t.action }}
                 >
-                  Testar com exemplo
+                  Testar exemplo
                 </button>
               </div>
-              <p className="text-[11px]" style={{ color: t.textSoft }}>
-                Cole abaixo notificações do celular, SMS do banco ou linhas copiadas do aplicativo do banco (inclusive <code className="font-mono">Saldo atual: R$ ...</code>):
-              </p>
-
               <textarea
                 rows={3}
                 value={textoNotificacaoBanco}
                 onChange={(e) => setTextoNotificacaoBanco(e.target.value)}
-                placeholder={`Exemplo:\nSaldo atual: R$ 1.520,00\nCompra no débito R$ 34,90 Mercado\nPix recebido +R$ 200,00`}
+                placeholder={`Exemplo:\nSaldo atual: R$ 1.520,00\nCompra no débito R$ 34,90 Mercado`}
                 className="w-full p-3 rounded-xl text-xs font-mono-num outline-none border resize-none"
                 style={{ background: t.card, color: t.text, borderColor: t.border }}
               />
-
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[11px] flex items-center gap-1" style={{ color: t.textSoft }}>
-                  <Info size={12} /> Identifica saldo, entradas, saídas e categorias sozinho
+                <span
+                  className="text-[11px] flex items-center gap-1"
+                  style={{ color: t.textSoft }}
+                >
+                  <Info size={12} /> Identifica saldo, entradas, saídas e categorias
                 </span>
                 <button
                   type="button"
@@ -671,7 +779,6 @@ export function FinancasScreen({
             </div>
           </div>
 
-          {/* Preview dos itens lidos antes de confirmar */}
           {(saldoDetectadoImport !== null ||
             transacoesPreview.length > 0 ||
             feedbackImport) && (
@@ -684,95 +791,6 @@ export function FinancasScreen({
                   ✓ {feedbackImport}
                 </p>
               )}
-
-              {saldoDetectadoImport !== null && (
-                <div
-                  className="p-3 rounded-xl border flex items-center justify-between"
-                  style={{ background: t.card, borderColor: t.primary }}
-                >
-                  <span className="text-xs font-bold" style={{ color: t.text }}>
-                    Novo Saldo Identificado para{" "}
-                    {contas.find((c) => c.id === contaDestinoImportId)?.nome}:
-                  </span>
-                  <span
-                    className="text-sm font-mono-num font-bold"
-                    style={{ color: t.primary }}
-                  >
-                    R$ {saldoDetectadoImport.toFixed(2)}
-                  </span>
-                </div>
-              )}
-
-              {transacoesPreview.length > 0 && (
-                <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-                  {transacoesPreview.map((tr) => (
-                    <div
-                      key={tr.id}
-                      className="p-2.5 rounded-xl border flex items-center justify-between gap-2 text-xs"
-                      style={{ background: t.card, borderColor: t.border }}
-                    >
-                      <label className="flex items-center gap-2 min-w-0 flex-1 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={tr.selecionada}
-                          onChange={(e) =>
-                            setTransacoesPreview((prev) =>
-                              prev.map((x) =>
-                                x.id === tr.id
-                                  ? { ...x, selecionada: e.target.checked }
-                                  : x
-                              )
-                            )
-                          }
-                        />
-                        <span className="font-mono-num text-[11px]" style={{ color: t.textSoft }}>
-                          {tr.data}
-                        </span>
-                        <span className="font-bold truncate" style={{ color: t.text }}>
-                          {tr.descricao}
-                        </span>
-                      </label>
-
-                      <div className="flex items-center gap-2 shrink-0">
-                        <select
-                          value={tr.categoria}
-                          onChange={(e) =>
-                            setTransacoesPreview((prev) =>
-                              prev.map((x) =>
-                                x.id === tr.id
-                                  ? {
-                                      ...x,
-                                      categoria: e.target
-                                        .value as OrcamentoCategoria["categoria"],
-                                    }
-                                  : x
-                              )
-                            )
-                          }
-                          className="px-2 py-1 rounded-lg text-[11px] border outline-none"
-                          style={{ background: t.bg, color: t.text, borderColor: t.border }}
-                        >
-                          {orcamentos.map((o) => (
-                            <option key={o.categoria} value={o.categoria}>
-                              {o.categoria}
-                            </option>
-                          ))}
-                        </select>
-                        <span
-                          className="font-mono-num font-bold"
-                          style={{
-                            color: tr.tipo === "receita" ? t.primary : t.action,
-                          }}
-                        >
-                          {tr.tipo === "receita" ? "+" : "−"}R${" "}
-                          {tr.valor.toFixed(2)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
               {(saldoDetectadoImport !== null ||
                 transacoesPreview.length > 0) && (
                 <div className="flex justify-end gap-2 pt-1">
@@ -793,7 +811,7 @@ export function FinancasScreen({
                     className="px-4 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
                     style={{ background: t.primary }}
                   >
-                    Confirmar & Atualizar Saldo/Fluxo
+                    Confirmar Importação
                   </button>
                 </div>
               )}
@@ -802,7 +820,7 @@ export function FinancasScreen({
         </section>
       )}
 
-      {/* KPIs DO FLUXO DE CAIXA SIMPLIFICADO (4 COLUNAS NO DESKTOP, 2 NO MOBILE) */}
+      {/* KPIs DO FLUXO DE CAIXA */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         <div
           className="rounded-3xl p-4 border space-y-1"
@@ -876,23 +894,210 @@ export function FinancasScreen({
             className="text-xs font-semibold block"
             style={{ color: t.textSoft }}
           >
-            Saldo do Fluxo
+            Saldo das Contas
           </span>
           <p
             className="text-2xl font-bold font-mono-num"
             style={{
-              color: saldoRealizadoMes >= 0 ? t.primary : t.danger,
+              color:
+                contas.reduce((a, c) => a + c.saldoAtual, 0) >= 0
+                  ? t.primary
+                  : t.danger,
             }}
           >
-            R$ {saldoRealizadoMes.toFixed(2)}
+            R${" "}
+            {contas
+              .reduce((a, c) => a + c.saldoAtual, 0)
+              .toFixed(2)
+              .replace(".", ",")}
           </p>
           <p className="text-[11px] font-mono-num" style={{ color: t.textSoft }}>
-            Fechamento prev.: R$ {saldoPrevistoFimMes.toFixed(0)}
+            Fluxo mês: R$ {saldoRealizadoMes.toFixed(0)} (prev. R${" "}
+            {saldoPrevistoFimMes.toFixed(0)})
           </p>
         </div>
       </div>
 
-      {/* BARRA DE PROGRESSO VISUAL DO ORÇAMENTO MENSAL CONSOLIDADO */}
+      {/* SEÇÃO EM DESTAQUE: CARDS PRÓPRIOS DAS CONTAS BANCÁRIAS (ESTILO MINHAS FINANÇAS) */}
+      <section
+        className="rounded-3xl p-5 border space-y-4"
+        style={{ background: t.card, borderColor: t.border }}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div
+              className="w-9 h-9 rounded-2xl flex items-center justify-center"
+              style={{ backgroundColor: `${t.finance}18`, color: t.finance }}
+            >
+              <Building2 size={18} />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-bold" style={{ color: t.text }}>
+                Minhas Contas Bancárias & Caixinhas ({contas.length})
+              </h3>
+              <p className="text-xs" style={{ color: t.textSoft }}>
+                Clique no card de qualquer conta para abrir o histórico completo, lançar ou editar dados
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setModalNovaContaOpen(true)}
+            className="px-3.5 py-2 rounded-2xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer shadow-xs hover:opacity-95 transition-all"
+            style={{ backgroundColor: t.finance }}
+          >
+            <Plus size={14} /> Nova Conta
+          </button>
+        </div>
+
+        {/* GRID DE CARDS PRÓPRIOS DE CONTAS COM IDENTIDADE VISUAL DO BANCO */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          {contas.map((c) => {
+            const ident = getIdentidadeBanco(c.nome, c.bancoId, c.cor);
+            const movsContaMes = lancamentosMes.filter(
+              (l) => l.contaId === c.id && l.metodo === "Conta / Pix"
+            );
+            const entradasConta = movsContaMes
+              .filter((l) => l.tipo === "receita")
+              .reduce((acc, l) => acc + l.valor, 0);
+            const saidasConta = movsContaMes
+              .filter((l) => l.tipo === "despesa")
+              .reduce((acc, l) => acc + l.valor, 0);
+            const pendentesConta = movsContaMes
+              .filter((l) => l.status === "previsto")
+              .reduce(
+                (acc, l) => acc + (l.tipo === "receita" ? l.valor : -l.valor),
+                0
+              );
+            const saldoPrevistoConta = c.saldoAtual + pendentesConta;
+
+            return (
+              <div
+                key={c.id}
+                onClick={() => {
+                  setContaDetalheId(c.id);
+                  setEditandoDadosConta(false);
+                  setFiltroExtratoConta("todos");
+                }}
+                className="group rounded-3xl border overflow-hidden cursor-pointer transition-all hover:shadow-md active:scale-[0.99]"
+                style={{
+                  backgroundColor: t.bg,
+                  borderColor: `${ident.corPrimaria}45`,
+                }}
+              >
+                {/* Faixa Superior Identidade do Banco */}
+                <div
+                  className="h-2 w-full"
+                  style={{ background: ident.gradiente }}
+                />
+
+                <div className="p-4 space-y-3.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 shadow-xs"
+                        style={{ background: ident.gradiente }}
+                      >
+                        {ident.renderIcone(20)}
+                      </div>
+                      <div className="min-w-0">
+                        <span
+                          className="text-[10px] font-extrabold uppercase tracking-wider block truncate"
+                          style={{ color: ident.corPrimaria }}
+                        >
+                          {ident.nomeBanco} · {c.tipo}
+                        </span>
+                        <h4
+                          className="text-sm font-bold truncate leading-snug"
+                          style={{ color: t.text }}
+                        >
+                          {c.nome}
+                        </h4>
+                      </div>
+                    </div>
+
+                    <div
+                      className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0 transition-transform group-hover:translate-x-0.5"
+                      style={{
+                        backgroundColor: t.cardSubtle,
+                        color: t.textSoft,
+                      }}
+                    >
+                      <ChevronRight size={15} />
+                    </div>
+                  </div>
+
+                  {/* Saldo Atual e Saldo Previsto */}
+                  <div
+                    className="p-3 rounded-2xl border flex items-baseline justify-between gap-2"
+                    style={{ backgroundColor: t.card, borderColor: t.border }}
+                  >
+                    <div>
+                      <span
+                        className="text-[10px] font-bold uppercase block"
+                        style={{ color: t.textSoft }}
+                      >
+                        Saldo Atual
+                      </span>
+                      <p
+                        className="text-lg font-extrabold font-mono-num mt-0.5"
+                        style={{
+                          color: c.saldoAtual >= 0 ? t.text : t.danger,
+                        }}
+                      >
+                        R$ {c.saldoAtual.toFixed(2).replace(".", ",")}
+                      </p>
+                    </div>
+
+                    <div className="text-right">
+                      <span
+                        className="text-[10px] font-semibold block"
+                        style={{ color: t.textSoft }}
+                      >
+                        Previsto Mês
+                      </span>
+                      <span
+                        className="text-xs font-mono-num font-bold"
+                        style={{ color: ident.corPrimaria }}
+                      >
+                        R$ {saldoPrevistoConta.toFixed(2).replace(".", ",")}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Rodapé do Card: Resumo de Entradas, Saídas e Quantidade de Lançamentos */}
+                  <div className="flex items-center justify-between text-[11px] font-mono-num pt-0.5">
+                    <div className="flex items-center gap-2.5">
+                      <span
+                        className="font-bold flex items-center gap-0.5"
+                        style={{ color: t.primary }}
+                      >
+                        <ArrowUpRight size={12} /> +R$ {entradasConta.toFixed(0)}
+                      </span>
+                      <span
+                        className="font-bold flex items-center gap-0.5"
+                        style={{ color: t.action }}
+                      >
+                        <ArrowDownRight size={12} /> −R$ {saidasConta.toFixed(0)}
+                      </span>
+                    </div>
+
+                    <span
+                      className="text-[10px] font-semibold flex items-center gap-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      <History size={11} /> {movsContaMes.length} mov.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* BARRA DE PROGRESSO DO ORÇAMENTO MENSAL CONSOLIDADO */}
       <section
         className="rounded-3xl p-5 border space-y-3"
         style={{ background: t.card, borderColor: t.border }}
@@ -910,25 +1115,23 @@ export function FinancasScreen({
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <span
-                className="text-sm font-mono-num font-bold block"
-                style={{
-                  color:
-                    pctOrcamentoGlobal >= 90
-                      ? t.danger
-                      : pctOrcamentoGlobal >= 75
-                      ? t.alert
-                      : t.primary,
-                }}
-              >
-                R$ {despesasRealizadas.toFixed(2)} / R$ {tetoMensalGlobal.toFixed(0)} ({pctOrcamentoGlobal}%)
-              </span>
-              <span className="text-[11px] font-mono-num" style={{ color: t.textSoft }}>
-                Margem restante no teto: R$ {saldoOrcamentoRestante.toFixed(2)}
-              </span>
-            </div>
+          <div className="text-right">
+            <span
+              className="text-sm font-mono-num font-bold block"
+              style={{
+                color:
+                  pctOrcamentoGlobal >= 90
+                    ? t.danger
+                    : pctOrcamentoGlobal >= 75
+                    ? t.alert
+                    : t.primary,
+              }}
+            >
+              R$ {despesasRealizadas.toFixed(2)} / R$ {tetoMensalGlobal.toFixed(0)} ({pctOrcamentoGlobal}%)
+            </span>
+            <span className="text-[11px] font-mono-num" style={{ color: t.textSoft }}>
+              Margem restante: R$ {saldoOrcamentoRestante.toFixed(2)}
+            </span>
           </div>
         </div>
 
@@ -936,7 +1139,6 @@ export function FinancasScreen({
           className="w-full h-3.5 rounded-full overflow-hidden relative"
           style={{ background: t.cardSubtle }}
         >
-          {/* Barra tracejada/suave do previsto total */}
           <div
             className="h-3.5 rounded-full absolute left-0 top-0 opacity-30 transition-all duration-300"
             style={{
@@ -944,7 +1146,6 @@ export function FinancasScreen({
               background: t.finance,
             }}
           />
-          {/* Barra sólida do realizado */}
           <div
             className="h-3.5 rounded-full relative z-10 transition-all duration-300"
             style={{
@@ -958,18 +1159,13 @@ export function FinancasScreen({
             }}
           />
         </div>
-
-        <div className="flex items-center justify-between text-[11px] font-mono-num" style={{ color: t.textSoft }}>
-          <span>Realizado: {pctOrcamentoGlobal}% do orçamento</span>
-          <span>Projeção com previstos: {pctOrcamentoPrevistoGlobal}%</span>
-        </div>
       </section>
 
       {/* GRID PRINCIPAL 2 COLUNAS NO DESKTOP */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-        {/* Coluna Esquerda (7 cols): Lançamento Rápido + Extrato do Fluxo de Caixa */}
+        {/* Coluna Esquerda (7 cols): Lançamento Rápido + Extrato Editável */}
         <div className="xl:col-span-7 space-y-5">
-          {/* Registrar Lançamento Simplificado */}
+          {/* Registrar Lançamento */}
           <section
             className="rounded-3xl p-5 border space-y-3.5"
             style={{ background: t.card, borderColor: t.border }}
@@ -980,7 +1176,7 @@ export function FinancasScreen({
                   Lançamento Rápido no Fluxo
                 </h3>
                 <p className="text-xs" style={{ color: t.textSoft }}>
-                  Digite uma frase natural ou detalhe conta/cartão
+                  Digite uma frase natural ou escolha conta/cartão
                 </p>
               </div>
               <div
@@ -1013,28 +1209,26 @@ export function FinancasScreen({
             </div>
 
             {abaRegistro === "rapido_ia" ? (
-              <div className="space-y-2">
-                <div className="flex gap-2">
-                  <input
-                    value={inputNatural}
-                    onChange={(e) => setInputNatural(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && submeterNatural()}
-                    placeholder='Ex: "18,50 padaria", "45,90 sachê no cartão", "10 xerox UERJ"...'
-                    className="flex-1 px-3.5 py-3 rounded-xl text-xs outline-none border"
-                    style={{
-                      background: t.bg,
-                      color: t.text,
-                      borderColor: t.border,
-                    }}
-                  />
-                  <button
-                    onClick={submeterNatural}
-                    className="px-5 rounded-xl text-xs font-bold text-white cursor-pointer"
-                    style={{ background: t.action }}
-                  >
-                    Lançar
-                  </button>
-                </div>
+              <div className="flex gap-2">
+                <input
+                  value={inputNatural}
+                  onChange={(e) => setInputNatural(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submeterNatural()}
+                  placeholder='Ex: "18,50 padaria", "45,90 sachê no cartão", "10 xerox UERJ"...'
+                  className="flex-1 px-3.5 py-3 rounded-xl text-xs outline-none border"
+                  style={{
+                    background: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+                <button
+                  onClick={submeterNatural}
+                  className="px-5 rounded-xl text-xs font-bold text-white cursor-pointer"
+                  style={{ background: t.action }}
+                >
+                  Lançar
+                </button>
               </div>
             ) : (
               <div className="space-y-2.5">
@@ -1125,9 +1319,9 @@ export function FinancasScreen({
                       borderColor: t.border,
                     }}
                   >
-                    {orcamentos.map((o) => (
-                      <option key={o.categoria} value={o.categoria}>
-                        {o.categoria}
+                    {CATEGORIAS_FINANCAS.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
                       </option>
                     ))}
                   </select>
@@ -1217,15 +1411,20 @@ export function FinancasScreen({
             )}
           </section>
 
-          {/* Extrato do Fluxo de Caixa com Filtros */}
+          {/* Extrato do Fluxo de Caixa (100% Editável ao Clicar) */}
           <section
             className="rounded-3xl p-5 border space-y-3.5"
             style={{ background: t.card, borderColor: t.border }}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-bold" style={{ color: t.text }}>
-                Movimentações do Mês ({lancamentosFiltrados.length})
-              </h3>
+              <div>
+                <h3 className="text-sm font-bold" style={{ color: t.text }}>
+                  Movimentações do Mês ({lancamentosFiltrados.length})
+                </h3>
+                <p className="text-[11px]" style={{ color: t.textSoft }}>
+                  Toque em qualquer movimentação para editar valor, descrição, conta ou excluir
+                </p>
+              </div>
 
               <div className="flex items-center gap-1">
                 {(
@@ -1254,20 +1453,32 @@ export function FinancasScreen({
 
             <div className="space-y-2">
               {lancamentosFiltrados.map((l) => {
-                const nomeConta = contas
-                  .find((c) => c.id === l.contaId)
-                  ?.nome.split(" ")[0];
-                const nomeCartao = cartoes
-                  .find((c) => c.id === l.cartaoId)
-                  ?.nome.split(" ")[0];
+                const contaObj = contas.find((c) => c.id === l.contaId);
+                const cartaoObj = cartoes.find((c) => c.id === l.cartaoId);
+                const identConta = contaObj
+                  ? getIdentidadeBanco(
+                      contaObj.nome,
+                      contaObj.bancoId,
+                      contaObj.cor
+                    )
+                  : null;
+
                 return (
                   <div
                     key={l.id}
-                    className="p-3 rounded-2xl border flex items-center justify-between gap-2"
+                    onClick={() => setLancamentoEditando({ ...l })}
+                    className="p-3 rounded-2xl border flex items-center justify-between gap-2 cursor-pointer hover:opacity-95 transition-all"
                     style={{ background: t.bg, borderColor: t.border }}
                   >
                     <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      {l.tipo === "receita" ? (
+                      {identConta && l.metodo === "Conta / Pix" ? (
+                        <div
+                          className="w-7 h-7 rounded-xl flex items-center justify-center shrink-0"
+                          style={{ background: identConta.gradiente }}
+                        >
+                          {identConta.renderIcone(13)}
+                        </div>
+                      ) : l.tipo === "receita" ? (
                         <ArrowUpRight size={16} style={{ color: t.primary }} />
                       ) : (
                         <ArrowDownRight size={16} style={{ color: t.action }} />
@@ -1280,13 +1491,13 @@ export function FinancasScreen({
                           {l.descricao}
                         </p>
                         <p
-                          className="text-[11px] font-mono-num"
+                          className="text-[11px] font-mono-num truncate"
                           style={{ color: t.textSoft }}
                         >
                           {l.data} · {l.categoria} ·{" "}
                           {l.metodo === "Cartão de Crédito"
-                            ? `Cartão ${nomeCartao || "Crédito"}`
-                            : `Conta ${nomeConta || "Pix"}`}
+                            ? `Cartão ${cartaoObj?.nome || "Crédito"}`
+                            : `${contaObj?.nome || "Conta / Pix"}`}
                         </p>
                       </div>
                     </div>
@@ -1294,15 +1505,17 @@ export function FinancasScreen({
                     <div className="flex items-center gap-2 shrink-0">
                       {l.status === "previsto" && (
                         <button
-                          onClick={() =>
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setLancamentos((prev) =>
                               prev.map((item) =>
                                 item.id === l.id
                                   ? { ...item, status: "realizado" }
                                   : item
                               )
-                            )
-                          }
+                            );
+                          }}
                           className="px-2.5 py-1 rounded-lg text-[10px] font-semibold text-white cursor-pointer"
                           style={{ background: t.alert }}
                           title="Toque para efetivar como pago/recebido"
@@ -1319,6 +1532,7 @@ export function FinancasScreen({
                         {l.tipo === "receita" ? "+" : "−"}R${" "}
                         {l.valor.toFixed(2)}
                       </span>
+                      <Edit3 size={13} style={{ color: t.textSoft }} />
                     </div>
                   </div>
                 );
@@ -1327,119 +1541,81 @@ export function FinancasScreen({
           </section>
         </div>
 
-        {/* Coluna Direita (5 cols): Contas, Cartões & Teto por Categoria */}
+        {/* Coluna Direita (5 cols): Cartões de Crédito Clicáveis & Orçamento Editável */}
         <div className="xl:col-span-5 space-y-5">
-          {/* Contas Bancárias */}
+          {/* Cartões de Crédito com Identidade Visual e Histórico */}
           <section
             className="rounded-3xl p-5 border space-y-3"
             style={{ background: t.card, borderColor: t.border }}
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Building2 size={16} style={{ color: t.finance }} />
-                <h3 className="text-sm font-bold" style={{ color: t.text }}>
-                  Contas & Caixinhas
-                </h3>
-              </div>
-              <span className="text-[11px]" style={{ color: t.textSoft }}>
-                Toque no saldo p/ ajustar
-              </span>
-            </div>
-
-            <div className="space-y-2">
-              {contas.map((c) => (
-                <div
-                  key={c.id}
-                  className="p-3 rounded-2xl border flex items-center justify-between gap-2"
-                  style={{ background: t.bg, borderColor: t.border }}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <span
-                      className="w-2.5 h-8 rounded-full shrink-0"
-                      style={{ background: c.cor }}
-                    />
-                    <div className="min-w-0">
-                      <p
-                        className="text-xs sm:text-sm font-bold truncate"
-                        style={{ color: t.text }}
-                      >
-                        {c.nome}
-                      </p>
-                      <p className="text-[11px]" style={{ color: t.textSoft }}>
-                        {c.tipo}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    <span
-                      className="text-xs font-mono-num"
-                      style={{ color: t.textSoft }}
-                    >
-                      R$
-                    </span>
-                    <input
-                      type="number"
-                      step="10"
-                      value={c.saldoAtual}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value) || 0;
-                        setContas((prev) =>
-                          prev.map((item) =>
-                            item.id === c.id
-                              ? { ...item, saldoAtual: val }
-                              : item
-                          )
-                        );
-                      }}
-                      className="w-20 px-2 py-1 rounded-lg text-xs font-mono-num font-bold text-right outline-none"
-                      style={{ background: t.card, color: t.text }}
-                    />
-                  </div>
+                <CreditCard size={16} style={{ color: t.action }} />
+                <div>
+                  <h3 className="text-sm font-bold" style={{ color: t.text }}>
+                    Cartões de Crédito ({cartoes.length})
+                  </h3>
+                  <p className="text-[11px]" style={{ color: t.textSoft }}>
+                    Clique no cartão p/ ver compras e editar fatura/limite
+                  </p>
                 </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Cartões de Crédito */}
-          <section
-            className="rounded-3xl p-5 border space-y-3"
-            style={{ background: t.card, borderColor: t.border }}
-          >
-            <div className="flex items-center gap-2">
-              <CreditCard size={16} style={{ color: t.action }} />
-              <h3 className="text-sm font-bold" style={{ color: t.text }}>
-                Cartões de Crédito
-              </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setModalNovoCartaoOpen(true)}
+                className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                style={{ backgroundColor: `${t.action}18`, color: t.action }}
+              >
+                <Plus size={13} /> Cartão
+              </button>
             </div>
 
             <div className="space-y-2.5">
               {cartoes.map((cc) => {
+                const ident = getIdentidadeBanco(cc.nome, cc.bancoId, cc.cor);
                 const disponivel = Math.max(0, cc.limiteTotal - cc.faturaAtual);
-                const pctUso = Math.min(
-                  100,
-                  Math.round((cc.faturaAtual / cc.limiteTotal) * 100)
-                );
+                const pctUso =
+                  cc.limiteTotal > 0
+                    ? Math.min(
+                        100,
+                        Math.round((cc.faturaAtual / cc.limiteTotal) * 100)
+                      )
+                    : 0;
                 return (
                   <div
                     key={cc.id}
-                    className="p-3.5 rounded-2xl border space-y-2"
-                    style={{ background: t.bg, borderColor: t.border }}
+                    onClick={() => setCartaoDetalheId(cc.id)}
+                    className="p-3.5 rounded-2xl border space-y-2.5 cursor-pointer hover:shadow-xs transition-all"
+                    style={{
+                      background: t.bg,
+                      borderColor: `${ident.corPrimaria}40`,
+                    }}
                   >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className="text-xs font-bold" style={{ color: t.text }}>
-                          {cc.nome}
-                        </p>
-                        <p
-                          className="text-[11px] font-mono-num"
-                          style={{ color: t.textSoft }}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div
+                          className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+                          style={{ background: ident.gradiente }}
                         >
-                          Fecha dia {cc.fechamentoDia} · Vence dia{" "}
-                          {cc.vencimentoDia}
-                        </p>
+                          {ident.renderIcone(16)}
+                        </div>
+                        <div className="min-w-0">
+                          <p
+                            className="text-xs font-bold truncate"
+                            style={{ color: t.text }}
+                          >
+                            {cc.nome}
+                          </p>
+                          <p
+                            className="text-[11px] font-mono-num"
+                            style={{ color: t.textSoft }}
+                          >
+                            Fecha dia {cc.fechamentoDia} · Vence dia{" "}
+                            {cc.vencimentoDia}
+                          </p>
+                        </div>
                       </div>
-                      <div className="text-right">
+                      <div className="text-right shrink-0">
                         <p
                           className="text-xs font-bold font-mono-num"
                           style={{ color: t.action }}
@@ -1463,7 +1639,8 @@ export function FinancasScreen({
                         className="h-2 rounded-full"
                         style={{
                           width: `${pctUso}%`,
-                          background: pctUso > 75 ? t.alert : t.finance,
+                          background:
+                            pctUso > 80 ? t.danger : ident.corPrimaria,
                         }}
                       />
                     </div>
@@ -1473,46 +1650,100 @@ export function FinancasScreen({
             </div>
           </section>
 
-          {/* Teto Mensal por Categoria */}
+          {/* Teto Mensal por Categoria (Editável) */}
           <section
             className="rounded-3xl p-5 border space-y-3"
             style={{ background: t.card, borderColor: t.border }}
           >
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold" style={{ color: t.text }}>
-                Orçamento & Quitação
-              </h3>
-              <span
-                className="text-xs font-mono-num font-bold"
-                style={{ color: t.primary }}
-              >
-                Acordo 5/8 (62%)
-              </span>
+              <div>
+                <h3 className="text-sm font-bold" style={{ color: t.text }}>
+                  Orçamento por Categoria & Quitação
+                </h3>
+                <p className="text-[11px]" style={{ color: t.textSoft }}>
+                  Ajuste os tetos mensais planejados quando quiser
+                </p>
+              </div>
+              {setOrcamentos && (
+                <button
+                  type="button"
+                  onClick={() => setEditandoOrcamentos((v) => !v)}
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  style={{
+                    backgroundColor: editandoOrcamentos
+                      ? t.primary
+                      : t.cardSubtle,
+                    color: editandoOrcamentos ? "#fff" : t.text,
+                  }}
+                >
+                  <Sliders size={12} />
+                  {editandoOrcamentos ? "Concluir" : "Editar Tetos"}
+                </button>
+              )}
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2.5">
               {orcamentos.map((orc) => {
                 const gastoCat = lancamentosMes
                   .filter(
                     (l) => l.tipo === "despesa" && l.categoria === orc.categoria
                   )
                   .reduce((acc, l) => acc + l.valor, 0);
-                const pct = Math.min(
-                  100,
-                  Math.round((gastoCat / orc.tetoMensal) * 100)
-                );
+                const pct =
+                  orc.tetoMensal > 0
+                    ? Math.min(
+                        100,
+                        Math.round((gastoCat / orc.tetoMensal) * 100)
+                      )
+                    : 0;
                 return (
                   <div key={orc.categoria} className="space-y-1">
-                    <div className="flex justify-between text-xs">
+                    <div className="flex justify-between items-center text-xs">
                       <span className="font-medium" style={{ color: t.text }}>
                         {orc.categoria}
                       </span>
-                      <span
-                        className="font-mono-num"
-                        style={{ color: t.textSoft }}
-                      >
-                        R$ {gastoCat.toFixed(0)} / R$ {orc.tetoMensal} ({pct}%)
-                      </span>
+                      {editandoOrcamentos && setOrcamentos ? (
+                        <div className="flex items-center gap-1">
+                          <span
+                            className="text-[10px]"
+                            style={{ color: t.textSoft }}
+                          >
+                            Teto R$:
+                          </span>
+                          <input
+                            type="number"
+                            step="50"
+                            value={orc.tetoMensal}
+                            onChange={(e) => {
+                              const nv = Math.max(
+                                0,
+                                Number(e.target.value) || 0
+                              );
+                              setOrcamentos((prev) =>
+                                prev.map((o) =>
+                                  o.categoria === orc.categoria
+                                    ? { ...o, tetoMensal: nv }
+                                    : o
+                                )
+                              );
+                            }}
+                            className="w-20 px-2 py-0.5 rounded-lg text-xs font-mono-num font-bold text-right border outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <span
+                          className="font-mono-num"
+                          style={{ color: t.textSoft }}
+                        >
+                          R$ {gastoCat.toFixed(0)} / R$ {orc.tetoMensal} ({pct}
+                          %)
+                        </span>
+                      )}
                     </div>
                     <div
                       className="w-full h-1.5 rounded-full overflow-hidden"
@@ -1536,7 +1767,7 @@ export function FinancasScreen({
               })}
             </div>
 
-            {/* NOVO COMPONENTE STITCH: TRILHA DE QUITAÇÃO DO ACORDO (8 PARCELAS) & RESERVA PETS */}
+            {/* Trilha de Quitação do Acordo */}
             <div
               className="p-3.5 rounded-2xl border space-y-2.5 mt-3"
               style={{ background: t.bg, borderColor: t.border }}
@@ -1546,12 +1777,37 @@ export function FinancasScreen({
                   Trilha de Quitação do Acordo ({parcelasAcordoPagas}/
                   {totalParcelasAcordo})
                 </span>
-                <span
-                  className="font-mono-num font-bold"
-                  style={{ color: t.primary }}
-                >
-                  {pctAcordoQuitado}% Quitado
-                </span>
+                {editandoOrcamentos ? (
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px]" style={{ color: t.textSoft }}>
+                      Total parcelas:
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={24}
+                      value={totalParcelasAcordo}
+                      onChange={(e) =>
+                        setTotalParcelasAcordo(
+                          Math.max(1, Math.min(24, Number(e.target.value) || 8))
+                        )
+                      }
+                      className="w-12 px-1.5 py-0.5 rounded text-xs font-mono-num text-center border"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                ) : (
+                  <span
+                    className="font-mono-num font-bold"
+                    style={{ color: t.primary }}
+                  >
+                    {pctAcordoQuitado}% Quitado
+                  </span>
+                )}
               </div>
               <div className="grid grid-cols-8 gap-1">
                 {Array.from({ length: totalParcelasAcordo }, (_, idx) => {
@@ -1573,13 +1829,1456 @@ export function FinancasScreen({
                   );
                 })}
               </div>
-              <p className="text-[11px]" style={{ color: t.textSoft }}>
-                Toque em uma parcela para simular/atualizar progresso de quitação
-              </p>
             </div>
           </section>
         </div>
       </div>
+
+      {/* =====================================================================
+          MODAL 1: FICHA COMPLETA E HISTÓRICO DA CONTA BANCÁRIA (ESTILO MINHAS FINANÇAS)
+      ===================================================================== */}
+      {contaDetalhe && (() => {
+        const ident = getIdentidadeBanco(
+          contaDetalhe.nome,
+          contaDetalhe.bancoId,
+          contaDetalhe.cor
+        );
+        const todasMovsConta = lancamentos.filter(
+          (l) => l.contaId === contaDetalhe.id && l.metodo === "Conta / Pix"
+        );
+        const movsFiltradasConta = todasMovsConta.filter((l) => {
+          if (filtroExtratoConta === "receita") return l.tipo === "receita";
+          if (filtroExtratoConta === "despesa") return l.tipo === "despesa";
+          if (filtroExtratoConta === "previsto") return l.status === "previsto";
+          return true;
+        });
+
+        const totalReceitasConta = todasMovsConta
+          .filter((l) => l.tipo === "receita")
+          .reduce((a, b) => a + b.valor, 0);
+        const totalDespesasConta = todasMovsConta
+          .filter((l) => l.tipo === "despesa")
+          .reduce((a, b) => a + b.valor, 0);
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 backdrop-blur-xs"
+              style={{ backgroundColor: "rgba(0,0,0,0.55)" }}
+              onClick={() => setContaDetalheId(null)}
+            />
+            <div
+              className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl border shadow-2xl flex flex-col"
+              style={{ backgroundColor: t.card, borderColor: t.border }}
+            >
+              {/* Cabeçalho com a Identidade Visual do Banco */}
+              <div
+                className="p-5 text-white flex items-center justify-between gap-3"
+                style={{ background: ident.gradiente }}
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-12 h-12 rounded-2xl bg-black/25 flex items-center justify-center shrink-0 border border-white/20">
+                    {ident.renderIcone(24)}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider opacity-85 block">
+                      {ident.nomeBanco} · {contaDetalhe.tipo}
+                    </span>
+                    <h3 className="text-base sm:text-lg font-extrabold truncate">
+                      {contaDetalhe.nome}
+                    </h3>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setEditandoDadosConta((v) => !v)}
+                    className="px-3 py-1.5 rounded-xl bg-white/20 hover:bg-white/30 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Edit3 size={13} />
+                    <span>{editandoDadosConta ? "Fechar Edição" : "Editar Conta"}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setContaDetalheId(null)}
+                    className="w-8 h-8 rounded-full bg-black/25 flex items-center justify-center cursor-pointer"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-5 space-y-5">
+                {/* Painel de Edição Completa da Conta (Nome, Banco, Tipo, Saldo e Exclusão) */}
+                {editandoDadosConta && (
+                  <div
+                    className="p-4 rounded-2xl border space-y-3"
+                    style={{ backgroundColor: t.bg, borderColor: ident.corPrimaria }}
+                  >
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase" style={{ color: t.text }}>
+                        Editar Informações da Conta Bancária
+                      </h4>
+                      {contas.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setContas((prev) =>
+                              prev.filter((x) => x.id !== contaDetalhe.id)
+                            );
+                            setContaDetalheId(null);
+                          }}
+                          className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                          style={{
+                            backgroundColor: `${t.danger}18`,
+                            color: t.danger,
+                          }}
+                        >
+                          <Trash2 size={12} /> Excluir Conta
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label
+                          className="text-[10px] font-bold uppercase block mb-1"
+                          style={{ color: t.textSoft }}
+                        >
+                          Nome da Conta
+                        </label>
+                        <input
+                          value={contaDetalhe.nome}
+                          onChange={(e) => {
+                            const nv = e.target.value;
+                            setContas((prev) =>
+                              prev.map((x) =>
+                                x.id === contaDetalhe.id ? { ...x, nome: nv } : x
+                              )
+                            );
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.text,
+                            borderColor: t.border,
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label
+                          className="text-[10px] font-bold uppercase block mb-1"
+                          style={{ color: t.textSoft }}
+                        >
+                          Instituição / Identidade do Banco
+                        </label>
+                        <select
+                          value={detectarBancoIdPorNome(
+                            contaDetalhe.nome,
+                            contaDetalhe.bancoId
+                          )}
+                          onChange={(e) => {
+                            const bId = e.target.value as BancoId;
+                            const info = CATALOGO_BANCOS[bId];
+                            setContas((prev) =>
+                              prev.map((x) =>
+                                x.id === contaDetalhe.id
+                                  ? {
+                                      ...x,
+                                      bancoId: bId,
+                                      cor: info.corPrimaria,
+                                    }
+                                  : x
+                              )
+                            );
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.text,
+                            borderColor: t.border,
+                          }}
+                        >
+                          {Object.values(CATALOGO_BANCOS).map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.nomeBanco}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label
+                          className="text-[10px] font-bold uppercase block mb-1"
+                          style={{ color: t.textSoft }}
+                        >
+                          Tipo da Conta
+                        </label>
+                        <select
+                          value={contaDetalhe.tipo}
+                          onChange={(e) => {
+                            const tp = e.target.value as ContaBancaria["tipo"];
+                            setContas((prev) =>
+                              prev.map((x) =>
+                                x.id === contaDetalhe.id ? { ...x, tipo: tp } : x
+                              )
+                            );
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.text,
+                            borderColor: t.border,
+                          }}
+                        >
+                          <option value="Corrente / Pix">Corrente / Pix</option>
+                          <option value="Recebimento">Recebimento</option>
+                          <option value="Reserva">Reserva / Caixinha</option>
+                          <option value="Investimentos">Investimentos</option>
+                          <option value="Carteira Física">Carteira Física</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label
+                          className="text-[10px] font-bold uppercase block mb-1"
+                          style={{ color: t.textSoft }}
+                        >
+                          Saldo Atual (R$)
+                        </label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={contaDetalhe.saldoAtual}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value) || 0;
+                            setContas((prev) =>
+                              prev.map((x) =>
+                                x.id === contaDetalhe.id
+                                  ? { ...x, saldoAtual: val }
+                                  : x
+                              )
+                            );
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.text,
+                            borderColor: t.border,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* KPIs Rápidos da Conta */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div
+                    className="p-3.5 rounded-2xl border"
+                    style={{ backgroundColor: t.bg, borderColor: t.border }}
+                  >
+                    <span
+                      className="text-[10px] font-bold uppercase block"
+                      style={{ color: t.textSoft }}
+                    >
+                      Saldo Atual (Toque p/ editar)
+                    </span>
+                    <div className="flex items-center gap-1 mt-1">
+                      <span
+                        className="text-xs font-mono-num font-bold"
+                        style={{ color: t.textSoft }}
+                      >
+                        R$
+                      </span>
+                      <input
+                        type="number"
+                        step="10"
+                        value={contaDetalhe.saldoAtual}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) || 0;
+                          setContas((prev) =>
+                            prev.map((x) =>
+                              x.id === contaDetalhe.id
+                                ? { ...x, saldoAtual: val }
+                                : x
+                            )
+                          );
+                        }}
+                        className="w-full text-base font-mono-num font-extrabold bg-transparent outline-none"
+                        style={{ color: t.text }}
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    className="p-3.5 rounded-2xl border"
+                    style={{ backgroundColor: t.bg, borderColor: t.border }}
+                  >
+                    <span
+                      className="text-[10px] font-bold uppercase block"
+                      style={{ color: t.textSoft }}
+                    >
+                      Entradas na Conta
+                    </span>
+                    <p
+                      className="text-base font-mono-num font-extrabold mt-1"
+                      style={{ color: t.primary }}
+                    >
+                      +R$ {totalReceitasConta.toFixed(2).replace(".", ",")}
+                    </p>
+                  </div>
+
+                  <div
+                    className="p-3.5 rounded-2xl border"
+                    style={{ backgroundColor: t.bg, borderColor: t.border }}
+                  >
+                    <span
+                      className="text-[10px] font-bold uppercase block"
+                      style={{ color: t.textSoft }}
+                    >
+                      Saídas na Conta
+                    </span>
+                    <p
+                      className="text-base font-mono-num font-extrabold mt-1"
+                      style={{ color: t.action }}
+                    >
+                      −R$ {totalDespesasConta.toFixed(2).replace(".", ",")}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Adicionar Lançamento Direto nesta Conta */}
+                <div
+                  className="p-3.5 rounded-2xl border space-y-2.5"
+                  style={{ backgroundColor: t.bg, borderColor: t.border }}
+                >
+                  <span
+                    className="text-[11px] font-bold block"
+                    style={{ color: t.text }}
+                  >
+                    + Lançar Movimentação Direto em {contaDetalhe.nome}
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <select
+                      value={novoLancContaTipo}
+                      onChange={(e) =>
+                        setNovoLancContaTipo(
+                          e.target.value as "despesa" | "receita"
+                        )
+                      }
+                      className="sm:col-span-2 px-2.5 py-2 rounded-xl text-xs font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color:
+                          novoLancContaTipo === "receita"
+                            ? t.primary
+                            : t.action,
+                        borderColor: t.border,
+                      }}
+                    >
+                      <option value="despesa">− Saída</option>
+                      <option value="receita">+ Entrada</option>
+                    </select>
+
+                    <input
+                      value={novoLancContaDesc}
+                      onChange={(e) => setNovoLancContaDesc(e.target.value)}
+                      placeholder="Descrição (ex: Pix, Mercado, Salário)..."
+                      className="sm:col-span-4 px-3 py-2 rounded-xl text-xs border outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+
+                    <input
+                      value={novoLancContaVal}
+                      onChange={(e) => setNovoLancContaVal(e.target.value)}
+                      placeholder="Valor R$"
+                      className="sm:col-span-2 px-2.5 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+
+                    <select
+                      value={novoLancContaCat}
+                      onChange={(e) =>
+                        setNovoLancContaCat(
+                          e.target.value as OrcamentoCategoria["categoria"]
+                        )
+                      }
+                      className="sm:col-span-2 px-2 py-2 rounded-xl text-xs border outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    >
+                      {CATEGORIAS_FINANCAS.map((cat) => (
+                        <option key={cat} value={cat}>
+                          {cat}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = parseFloat(
+                          novoLancContaVal.replace(",", ".")
+                        );
+                        if (isNaN(val) || val <= 0) return;
+                        adicionarLancamento(
+                          val,
+                          novoLancContaCat,
+                          novoLancContaDesc.trim() ||
+                            `${
+                              novoLancContaTipo === "receita"
+                                ? "Entrada"
+                                : "Saída"
+                            } ${contaDetalhe.nome}`,
+                          "Conta / Pix",
+                          "realizado",
+                          novoLancContaCat === "Pets" &&
+                            novoLancContaTipo === "despesa",
+                          contaDetalhe.id,
+                          undefined,
+                          novoLancContaTipo
+                        );
+                        // Atualiza também o saldo da conta automaticamente
+                        setContas((prev) =>
+                          prev.map((x) =>
+                            x.id === contaDetalhe.id
+                              ? {
+                                  ...x,
+                                  saldoAtual:
+                                    novoLancContaTipo === "receita"
+                                      ? x.saldoAtual + val
+                                      : x.saldoAtual - val,
+                                }
+                              : x
+                          )
+                        );
+                        setNovoLancContaDesc("");
+                        setNovoLancContaVal("");
+                      }}
+                      className="sm:col-span-2 py-2 px-3 rounded-xl text-xs font-bold text-white cursor-pointer"
+                      style={{ backgroundColor: ident.corPrimaria }}
+                    >
+                      Adicionar
+                    </button>
+                  </div>
+                </div>
+
+                {/* Histórico / Extrato Completo da Conta */}
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-xs sm:text-sm font-bold" style={{ color: t.text }}>
+                      Histórico & Extrato da Conta ({movsFiltradasConta.length})
+                    </h4>
+
+                    <div className="flex items-center gap-1">
+                      {(
+                        [
+                          { id: "todos", label: "Todos" },
+                          { id: "receita", label: "Entradas" },
+                          { id: "despesa", label: "Saídas" },
+                          { id: "previsto", label: "Previstos" },
+                        ] as const
+                      ).map((f) => (
+                        <button
+                          key={f.id}
+                          onClick={() => setFiltroExtratoConta(f.id)}
+                          className="px-2.5 py-1 rounded-lg text-[11px] font-semibold cursor-pointer"
+                          style={{
+                            backgroundColor:
+                              filtroExtratoConta === f.id
+                                ? t.cardSubtle
+                                : "transparent",
+                            color:
+                              filtroExtratoConta === f.id ? t.text : t.textSoft,
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {movsFiltradasConta.length === 0 ? (
+                    <div
+                      className="p-6 rounded-2xl border text-center text-xs"
+                      style={{
+                        backgroundColor: t.bg,
+                        borderColor: t.border,
+                        color: t.textSoft,
+                      }}
+                    >
+                      Nenhuma movimentação registrada nesta conta para este filtro.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                      {movsFiltradasConta.map((mov) => (
+                        <div
+                          key={mov.id}
+                          onClick={() => setLancamentoEditando({ ...mov })}
+                          className="p-3 rounded-2xl border flex items-center justify-between gap-2 cursor-pointer hover:opacity-90"
+                          style={{
+                            backgroundColor: t.bg,
+                            borderColor: t.border,
+                          }}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {mov.tipo === "receita" ? (
+                              <ArrowUpRight
+                                size={15}
+                                style={{ color: t.primary }}
+                              />
+                            ) : (
+                              <ArrowDownRight
+                                size={15}
+                                style={{ color: t.action }}
+                              />
+                            )}
+                            <div className="min-w-0">
+                              <p
+                                className="text-xs font-bold truncate"
+                                style={{ color: t.text }}
+                              >
+                                {mov.descricao}
+                              </p>
+                              <p
+                                className="text-[10px] font-mono-num"
+                                style={{ color: t.textSoft }}
+                              >
+                                {mov.data} · {mov.categoria} ·{" "}
+                                {mov.status === "previsto"
+                                  ? "Previsto"
+                                  : "Realizado"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span
+                              className="text-xs font-mono-num font-bold"
+                              style={{
+                                color:
+                                  mov.tipo === "receita" ? t.primary : t.text,
+                              }}
+                            >
+                              {mov.tipo === "receita" ? "+" : "−"}R${" "}
+                              {mov.valor.toFixed(2)}
+                            </span>
+                            <Edit3 size={12} style={{ color: t.textSoft }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* =====================================================================
+          MODAL 2: CRIAR NOVA CONTA BANCÁRIA COM IDENTIDADE DO BANCO
+      ===================================================================== */}
+      {modalNovaContaOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 backdrop-blur-xs"
+            style={{ backgroundColor: "rgba(0,0,0,0.55)" }}
+            onClick={() => setModalNovaContaOpen(false)}
+          />
+          <div
+            className="relative w-full max-w-md rounded-3xl p-5 border shadow-2xl space-y-4"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold" style={{ color: t.text }}>
+                Adicionar Conta Bancária / Caixinha
+              </h3>
+              <button
+                onClick={() => setModalNovaContaOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer"
+                style={{ backgroundColor: t.cardSubtle }}
+              >
+                <X size={15} style={{ color: t.textSoft }} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1.5"
+                  style={{ color: t.textSoft }}
+                >
+                  Escolha a Identidade Visual do Banco
+                </label>
+                <div className="grid grid-cols-4 gap-2 max-h-44 overflow-y-auto p-1">
+                  {Object.values(CATALOGO_BANCOS).map((b) => {
+                    const sel = novaContaBancoId === b.id;
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        onClick={() => {
+                          setNovaContaBancoId(b.id);
+                          if (!novaContaNome.trim()) {
+                            setNovaContaNome(b.nomeBanco);
+                          }
+                        }}
+                        className="p-2 rounded-2xl border flex flex-col items-center gap-1 text-center cursor-pointer transition-all"
+                        style={{
+                          backgroundColor: sel ? `${b.corPrimaria}18` : t.bg,
+                          borderColor: sel ? b.corPrimaria : t.border,
+                        }}
+                      >
+                        <div
+                          className="w-8 h-8 rounded-xl flex items-center justify-center"
+                          style={{ background: b.gradiente }}
+                        >
+                          {b.renderIcone(15)}
+                        </div>
+                        <span
+                          className="text-[10px] font-bold truncate w-full"
+                          style={{ color: t.text }}
+                        >
+                          {b.nomeBanco.split(" ")[0]}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1"
+                  style={{ color: t.textSoft }}
+                >
+                  Nome da Conta
+                </label>
+                <input
+                  value={novaContaNome}
+                  onChange={(e) => setNovaContaNome(e.target.value)}
+                  placeholder="Ex: Nubank Principal, Itaú Salário, Caixinha Pets..."
+                  className="w-full px-3 py-2.5 rounded-xl text-xs border outline-none"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Tipo
+                  </label>
+                  <select
+                    value={novaContaTipo}
+                    onChange={(e) =>
+                      setNovaContaTipo(e.target.value as ContaBancaria["tipo"])
+                    }
+                    className="w-full px-3 py-2.5 rounded-xl text-xs border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    <option value="Corrente / Pix">Corrente / Pix</option>
+                    <option value="Recebimento">Recebimento</option>
+                    <option value="Reserva">Reserva / Caixinha</option>
+                    <option value="Investimentos">Investimentos</option>
+                    <option value="Carteira Física">Carteira Física</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Saldo Inicial (R$)
+                  </label>
+                  <input
+                    value={novaContaSaldo}
+                    onChange={(e) => setNovaContaSaldo(e.target.value)}
+                    placeholder="0,00"
+                    className="w-full px-3 py-2.5 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={criarNovaConta}
+                className="w-full py-3 rounded-2xl text-xs font-bold text-white cursor-pointer"
+                style={{ backgroundColor: t.primary }}
+              >
+                Criar Conta Bancária
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 3: FICHA E HISTÓRICO DO CARTÃO DE CRÉDITO
+      ===================================================================== */}
+      {cartaoDetalhe && (() => {
+        const ident = getIdentidadeBanco(
+          cartaoDetalhe.nome,
+          cartaoDetalhe.bancoId,
+          cartaoDetalhe.cor
+        );
+        const comprasCartao = lancamentos.filter(
+          (l) =>
+            l.cartaoId === cartaoDetalhe.id &&
+            l.metodo === "Cartão de Crédito"
+        );
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 backdrop-blur-xs"
+              style={{ backgroundColor: "rgba(0,0,0,0.55)" }}
+              onClick={() => setCartaoDetalheId(null)}
+            />
+            <div
+              className="relative w-full max-w-lg max-h-[88vh] overflow-y-auto rounded-3xl border shadow-2xl"
+              style={{ backgroundColor: t.card, borderColor: t.border }}
+            >
+              <div
+                className="p-5 text-white flex items-center justify-between"
+                style={{ background: ident.gradiente }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-black/25 flex items-center justify-center border border-white/20">
+                    {ident.renderIcone(20)}
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase opacity-80 block">
+                      Cartão de Crédito · {ident.nomeBanco}
+                    </span>
+                    <h3 className="text-base font-extrabold">
+                      {cartaoDetalhe.nome}
+                    </h3>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCartaoDetalheId(null)}
+                  className="w-8 h-8 rounded-full bg-black/25 flex items-center justify-center cursor-pointer"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Nome do Cartão
+                    </label>
+                    <input
+                      value={cartaoDetalhe.nome}
+                      onChange={(e) => {
+                        const nv = e.target.value;
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id ? { ...x, nome: nv } : x
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Banco
+                    </label>
+                    <select
+                      value={detectarBancoIdPorNome(
+                        cartaoDetalhe.nome,
+                        cartaoDetalhe.bancoId
+                      )}
+                      onChange={(e) => {
+                        const bId = e.target.value as BancoId;
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id
+                              ? {
+                                  ...x,
+                                  bancoId: bId,
+                                  cor: CATALOGO_BANCOS[bId].corPrimaria,
+                                }
+                              : x
+                          )
+                        );
+                      }}
+                      className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    >
+                      {Object.values(CATALOGO_BANCOS).map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.nomeBanco}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Fatura Atual (R$)
+                    </label>
+                    <input
+                      type="number"
+                      step="10"
+                      value={cartaoDetalhe.faturaAtual}
+                      onChange={(e) => {
+                        const v = Math.max(0, parseFloat(e.target.value) || 0);
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id
+                              ? { ...x, faturaAtual: v }
+                              : x
+                          )
+                        );
+                      }}
+                      className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.action,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Limite Total (R$)
+                    </label>
+                    <input
+                      type="number"
+                      step="100"
+                      value={cartaoDetalhe.limiteTotal}
+                      onChange={(e) => {
+                        const v = Math.max(0, parseFloat(e.target.value) || 0);
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id
+                              ? { ...x, limiteTotal: v }
+                              : x
+                          )
+                        );
+                      }}
+                      className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Dia Fechamento
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={cartaoDetalhe.fechamentoDia}
+                      onChange={(e) => {
+                        const v = Math.min(
+                          31,
+                          Math.max(1, Number(e.target.value) || 1)
+                        );
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id
+                              ? { ...x, fechamentoDia: v }
+                              : x
+                          )
+                        );
+                      }}
+                      className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-[10px] font-bold uppercase block mb-1"
+                      style={{ color: t.textSoft }}
+                    >
+                      Dia Vencimento
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={cartaoDetalhe.vencimentoDia}
+                      onChange={(e) => {
+                        const v = Math.min(
+                          31,
+                          Math.max(1, Number(e.target.value) || 1)
+                        );
+                        setCartoes((prev) =>
+                          prev.map((x) =>
+                            x.id === cartaoDetalhe.id
+                              ? { ...x, vencimentoDia: v }
+                              : x
+                          )
+                        );
+                      }}
+                      className="w-full px-2.5 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Lista de Compras no Cartão */}
+                <div className="space-y-2 pt-2">
+                  <h4 className="text-xs font-bold" style={{ color: t.text }}>
+                    Compras lançadas neste cartão ({comprasCartao.length})
+                  </h4>
+                  {comprasCartao.length === 0 ? (
+                    <p className="text-xs" style={{ color: t.textSoft }}>
+                      Nenhuma compra individual vinculada a este cartão neste mês.
+                    </p>
+                  ) : (
+                    <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                      {comprasCartao.map((c) => (
+                        <div
+                          key={c.id}
+                          onClick={() => setLancamentoEditando({ ...c })}
+                          className="p-2.5 rounded-xl border flex items-center justify-between text-xs cursor-pointer"
+                          style={{
+                            backgroundColor: t.bg,
+                            borderColor: t.border,
+                          }}
+                        >
+                          <span className="font-semibold truncate" style={{ color: t.text }}>
+                            {c.data} · {c.descricao}
+                          </span>
+                          <span className="font-mono-num font-bold" style={{ color: t.action }}>
+                            R$ {c.valor.toFixed(2)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {cartoes.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCartoes((prev) =>
+                        prev.filter((x) => x.id !== cartaoDetalhe.id)
+                      );
+                      setCartaoDetalheId(null);
+                    }}
+                    className="w-full py-2.5 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    style={{
+                      backgroundColor: `${t.danger}15`,
+                      color: t.danger,
+                    }}
+                  >
+                    <Trash2 size={13} /> Excluir Cartão de Crédito
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* =====================================================================
+          MODAL 4: NOVO CARTÃO DE CRÉDITO
+      ===================================================================== */}
+      {modalNovoCartaoOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 backdrop-blur-xs"
+            style={{ backgroundColor: "rgba(0,0,0,0.55)" }}
+            onClick={() => setModalNovoCartaoOpen(false)}
+          />
+          <div
+            className="relative w-full max-w-md rounded-3xl p-5 border shadow-2xl space-y-4"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold" style={{ color: t.text }}>
+                Adicionar Cartão de Crédito
+              </h3>
+              <button
+                onClick={() => setModalNovoCartaoOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer"
+                style={{ backgroundColor: t.cardSubtle }}
+              >
+                <X size={15} style={{ color: t.textSoft }} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1"
+                  style={{ color: t.textSoft }}
+                >
+                  Banco Emissor
+                </label>
+                <select
+                  value={novoCartaoBancoId}
+                  onChange={(e) => {
+                    const b = e.target.value as BancoId;
+                    setNovoCartaoBancoId(b);
+                    if (!novoCartaoNome.trim()) {
+                      setNovoCartaoNome(`Cartão ${CATALOGO_BANCOS[b].nomeBanco}`);
+                    }
+                  }}
+                  className="w-full px-3 py-2.5 rounded-xl text-xs font-bold border outline-none"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                >
+                  {Object.values(CATALOGO_BANCOS).map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.nomeBanco}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1"
+                  style={{ color: t.textSoft }}
+                >
+                  Nome do Cartão
+                </label>
+                <input
+                  value={novoCartaoNome}
+                  onChange={(e) => setNovoCartaoNome(e.target.value)}
+                  placeholder="Ex: Nubank Roxinho, Itaú Click..."
+                  className="w-full px-3 py-2.5 rounded-xl text-xs border outline-none"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Limite Total (R$)
+                  </label>
+                  <input
+                    value={novoCartaoLimite}
+                    onChange={(e) => setNovoCartaoLimite(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Fatura Atual (R$)
+                  </label>
+                  <input
+                    value={novoCartaoFatura}
+                    onChange={(e) => setNovoCartaoFatura(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Fecha dia
+                  </label>
+                  <input
+                    type="number"
+                    value={novoCartaoFecha}
+                    onChange={(e) => setNovoCartaoFecha(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Vence dia
+                  </label>
+                  <input
+                    type="number"
+                    value={novoCartaoVence}
+                    onChange={(e) => setNovoCartaoVence(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={criarNovoCartao}
+                className="w-full py-3 rounded-2xl text-xs font-bold text-white cursor-pointer"
+                style={{ backgroundColor: t.action }}
+              >
+                Salvar Cartão
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          MODAL 5: EDITAR OU EXCLUIR QUALQUER LANÇAMENTO / MOVIMENTAÇÃO
+      ===================================================================== */}
+      {lancamentoEditando && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 backdrop-blur-xs"
+            style={{ backgroundColor: "rgba(0,0,0,0.55)" }}
+            onClick={() => setLancamentoEditando(null)}
+          />
+          <div
+            className="relative w-full max-w-md rounded-3xl p-5 border shadow-2xl space-y-4"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold" style={{ color: t.text }}>
+                Editar Movimentação
+              </h3>
+              <button
+                onClick={() => setLancamentoEditando(null)}
+                className="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer"
+                style={{ backgroundColor: t.cardSubtle }}
+              >
+                <X size={15} style={{ color: t.textSoft }} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1"
+                  style={{ color: t.textSoft }}
+                >
+                  Descrição
+                </label>
+                <input
+                  value={lancamentoEditando.descricao}
+                  onChange={(e) =>
+                    setLancamentoEditando({
+                      ...lancamentoEditando,
+                      descricao: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 rounded-xl text-xs font-semibold border outline-none"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Valor (R$)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={lancamentoEditando.valor}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        valor: Math.max(0, parseFloat(e.target.value) || 0),
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Data
+                  </label>
+                  <input
+                    value={lancamentoEditando.data}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        data: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Tipo
+                  </label>
+                  <select
+                    value={lancamentoEditando.tipo}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        tipo: e.target.value as "despesa" | "receita",
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    <option value="despesa">Saída (Despesa)</option>
+                    <option value="receita">Entrada (Receita)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Status
+                  </label>
+                  <select
+                    value={lancamentoEditando.status}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        status: e.target.value as "realizado" | "previsto",
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    <option value="realizado">Realizado (Pago)</option>
+                    <option value="previsto">Previsto (Pendente)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5">
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Categoria
+                  </label>
+                  <select
+                    value={lancamentoEditando.categoria}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        categoria: e.target
+                          .value as OrcamentoCategoria["categoria"],
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    {CATEGORIAS_FINANCAS.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    className="text-[10px] font-bold uppercase block mb-1"
+                    style={{ color: t.textSoft }}
+                  >
+                    Conta Vinculada
+                  </label>
+                  <select
+                    value={lancamentoEditando.contaId ?? contas[0]?.id ?? 1}
+                    onChange={(e) =>
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        metodo: "Conta / Pix",
+                        contaId: Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{
+                      backgroundColor: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    {contas.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.nome}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLancamentos((prev) =>
+                      prev.filter((x) => x.id !== lancamentoEditando.id)
+                    );
+                    setLancamentoEditando(null);
+                  }}
+                  className="px-3.5 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  style={{
+                    backgroundColor: `${t.danger}15`,
+                    color: t.danger,
+                  }}
+                >
+                  <Trash2 size={14} /> Excluir
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLancamentos((prev) =>
+                      prev.map((x) =>
+                        x.id === lancamentoEditando.id ? lancamentoEditando : x
+                      )
+                    );
+                    setLancamentoEditando(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-2xl text-xs font-bold text-white cursor-pointer"
+                  style={{ backgroundColor: t.primary }}
+                >
+                  Salvar Alterações
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
