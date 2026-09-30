@@ -1680,6 +1680,7 @@ export function SaudePetsScreen({
                             {
                               id: Date.now() + 1,
                               nome: "Exercício Principal 1",
+                              modalidade: novaFichaMod,
                               descansoSeg: 60,
                               series: [
                                 {

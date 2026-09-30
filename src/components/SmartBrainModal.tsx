@@ -73,6 +73,17 @@ interface SmartBrainModalProps {
   setThemeMode: (m: ThemeMode) => void;
   irParaLalaCompleta: () => void;
   executarAcaoDaLala: (acao: AcaoGovernanta, interacaoId?: number) => void;
+  onDesfazerAcao?: (acaoId: string) => void;
+  onRecusarAcao?: (acaoId: string, interacaoId?: number) => void;
+  onEditarEExecutarAcao?: (
+    acaoAtualizada: AcaoGovernanta,
+    notaAprendizado?: string,
+    interacaoId?: number
+  ) => void;
+  onToggleAutomacaoTipo?: (
+    tipo: AcaoGovernanta["tipo"],
+    automatizar: boolean
+  ) => void;
   onOpenCalibracao: () => void;
   showToast: (msg: string) => void;
 }
@@ -98,6 +109,10 @@ export function SmartBrainModal({
   perfilCalibrado,
   irParaLalaCompleta,
   executarAcaoDaLala,
+  onDesfazerAcao,
+  onRecusarAcao,
+  onEditarEExecutarAcao,
+  onToggleAutomacaoTipo,
   onOpenCalibracao,
   showToast,
 }: SmartBrainModalProps) {
@@ -305,54 +320,6 @@ export function SmartBrainModal({
     setTextoLivre("");
     if (!anexoAudioDireto) setAnexosAtuais([]);
 
-    let executouDireto = false;
-
-    if (listaParaEnviar.length === 0) {
-      if (
-        (lower.includes("alimentei") ||
-          lower.includes("dei sachê") ||
-          lower.includes("dei ração")) &&
-        (lower.includes("nina") ||
-          lower.includes("tobias") ||
-          lower.includes("gatos"))
-      ) {
-        alimentarPet(1);
-        alimentarPet(2);
-        executouDireto = true;
-      }
-
-      const matchSrpe = lower.match(/srpe\s*(\d+)/);
-      if (matchSrpe) {
-        const val = Math.min(10, Math.max(1, parseInt(matchSrpe[1], 10)));
-        registrarSRPEHoje(val);
-        executouDireto = true;
-      }
-
-      const parsedGasto = parseGastoNatural(txt);
-      if (
-        parsedGasto &&
-        (lower.includes("r$") ||
-          lower.includes("reais") ||
-          lower.includes("gastei") ||
-          lower.includes("comprei") ||
-          lower.includes("pix") ||
-          lower.includes("padaria") ||
-          lower.includes("mercado") ||
-          lower.includes("uber") ||
-          /^\d+([.,]\d+)?\s+/.test(lower))
-      ) {
-        adicionarLancamento(
-          parsedGasto.valor,
-          parsedGasto.categoria,
-          parsedGasto.descricao,
-          parsedGasto.metodoSugerido,
-          "realizado",
-          parsedGasto.afetaEstoquePets
-        );
-        executouDireto = true;
-      }
-    }
-
     const historicoConversa = [...interacoesLala]
       .slice(0, 8)
       .reverse()
@@ -373,7 +340,9 @@ export function SmartBrainModal({
       disciplinasUERJ: disciplinas.map((d) => d.nome),
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
       tomLala: perfilCalibrado?.tomLala,
-      autonomiaLala: perfilCalibrado?.autonomiaLala,
+      autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
+      tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
+      regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
       instrucoesPersonalizadasLala:
         perfilCalibrado?.instrucoesPersonalizadasLala,
       horarioAcordar: perfilCalibrado?.horarioAcordar,
@@ -382,6 +351,7 @@ export function SmartBrainModal({
     };
 
     try {
+      const idNova = Date.now();
       const msgEfetiva =
         txt ||
         (listaParaEnviar.length > 0
@@ -397,46 +367,27 @@ export function SmartBrainModal({
         listaParaEnviar
       );
 
-      // Respeita a calibração de autonomia da Lala (auto vs confirmar)
-      const deveAutoExecutar = perfilCalibrado?.autonomiaLala !== "confirmar";
-      const acoesMarcadas = (resultado.acoesPropostas || []).map((a) => {
-        if (executouDireto) {
-          return { ...a, executada: true };
-        }
-        const autoExecTypes: AcaoGovernanta["tipo"][] = [
-          "CRIAR_TAREFA",
-          "AGENDAR_COMPROMISSO",
-          "REGISTRAR_GASTO",
-          "REGISTRAR_RECEITA",
-          "ALIMENTAR_PETS",
-          "REGISTRAR_SRPE",
-          "GUARDAR_SEGUNDO_CEREBRO",
-          "ATUALIZAR_DIETA_E_COMPRAS",
-          "ATUALIZAR_GRADE_UERJ",
-          "ATUALIZAR_CONTAS_FINANCAS",
-          "ATUALIZAR_PETS",
-          "CRIAR_LISTA_COMPRAS",
-          "ATUALIZAR_TREINO",
-          "ATUALIZAR_PROJETOS_TRABALHO",
-          "ATUALIZAR_HABITOS",
-          "ATUALIZAR_METAS_RADAR",
-          "ATUALIZAR_PERFIL_CHECKIN",
-          "LIMPAR_DADOS_EXEMPLO",
-        ];
-        if (deveAutoExecutar && autoExecTypes.includes(a.tipo)) {
-          executarAcaoDaLala(a);
-          return { ...a, executada: true };
-        }
-        return a;
+      // Respeita o modo de confirmação por padrão e as automações progressivas por tipo
+      const modoGlobal = perfilCalibrado?.autonomiaLala ?? "confirmar";
+      const tiposAuto = perfilCalibrado?.tiposAutomatizados || [];
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
       });
 
-      const idNova = Date.now();
+      const acoesMarcadas = (resultado.acoesPropostas || []).map((a) => {
+        const deveAutoExecutar =
+          modoGlobal === "auto" || tiposAuto.includes(a.tipo);
+        if (deveAutoExecutar && !a.executada) {
+          executarAcaoDaLala(a, idNova);
+          return { ...a, executada: true, executadaEm: agoraHora };
+        }
+        return { ...a, executada: false };
+      });
+
       const novaInteracao: InteracaoGovernanta = {
         id: idNova,
-        dataHora: new Date().toLocaleTimeString("pt-BR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        dataHora: agoraHora,
         mensagemUsuario:
           resultado.transcricaoAudioUsuario ||
           (msgEfetiva === "🎤 [Mensagem de Áudio]"
@@ -744,9 +695,41 @@ export function SmartBrainModal({
                                 t={t}
                                 acao={ac}
                                 compact
+                                tipoAutomatizado={
+                                  (perfilCalibrado?.autonomiaLala ??
+                                    "confirmar") === "auto" ||
+                                  (
+                                    perfilCalibrado?.tiposAutomatizados || []
+                                  ).includes(ac.tipo)
+                                }
+                                confirmacoesDesteTipo={
+                                  (perfilCalibrado?.contagemConfirmacoesPorTipo ||
+                                    {})[ac.tipo] || 0
+                                }
                                 onExecutar={() =>
                                   executarAcaoDaLala(ac, item.id)
                                 }
+                                onDesfazer={
+                                  onDesfazerAcao
+                                    ? () => onDesfazerAcao(ac.id)
+                                    : undefined
+                                }
+                                onRecusar={
+                                  onRecusarAcao
+                                    ? () => onRecusarAcao(ac.id, item.id)
+                                    : undefined
+                                }
+                                onEditarEExecutar={
+                                  onEditarEExecutarAcao
+                                    ? (acaoEditada, nota) =>
+                                        onEditarEExecutarAcao(
+                                          acaoEditada,
+                                          nota,
+                                          item.id
+                                        )
+                                    : undefined
+                                }
+                                onToggleAutomacaoTipo={onToggleAutomacaoTipo}
                               />
                             ))}
                           </div>

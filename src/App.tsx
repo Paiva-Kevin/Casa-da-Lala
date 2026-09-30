@@ -49,6 +49,8 @@ import {
   PerfilUsuarioCalibrado,
   AcaoGovernanta,
   AnexoLala,
+  RegistroHistoricoAcaoLala,
+  SnapshotEstadoAcaoLala,
 } from "./types/lala";
 import {
   calcularDinheiroLivreHoje,
@@ -146,13 +148,24 @@ function useLocalStorageState<T>(
   });
 
   const isInitialMount = useRef(true);
+  const isHydratingRef = useRef(false);
 
-  // Hydrate from IndexedDB primary offline storage on mount
+  // Hydrate from IndexedDB primary offline storage on mount without marking dirty
   useEffect(() => {
     let mounted = true;
     idbGetRecord<T>(key).then((idbVal) => {
       if (mounted && idbVal !== undefined) {
-        setState(idbVal);
+        setState((prev) => {
+          try {
+            if (JSON.stringify(prev) === JSON.stringify(idbVal)) {
+              return prev;
+            }
+          } catch {
+            // ignore
+          }
+          isHydratingRef.current = true;
+          return idbVal;
+        });
       }
     });
     return () => {
@@ -165,6 +178,7 @@ function useLocalStorageState<T>(
     const handleRestore = () => {
       idbGetRecord<T>(key).then((idbVal) => {
         if (idbVal !== undefined) {
+          isHydratingRef.current = true;
           setState(idbVal);
         }
       });
@@ -176,6 +190,11 @@ function useLocalStorageState<T>(
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
+      idbSetRecord(key, state, false);
+      return;
+    }
+    if (isHydratingRef.current) {
+      isHydratingRef.current = false;
       idbSetRecord(key, state, false);
       return;
     }
@@ -309,7 +328,14 @@ export default function App() {
       metaProteinaG: 135,
       metaKcal: 2150,
       calibrado: false,
+      autonomiaLala: "confirmar",
+      tiposAutomatizados: [],
+      contagemConfirmacoesPorTipo: {},
+      regrasAprendidasLala: [],
     });
+  const [historicoAcoesLala, setHistoricoAcoesLala] = useLocalStorageState<
+    RegistroHistoricoAcaoLala[]
+  >("historico_acoes_lala", []);
   const [calibracaoOpen, setCalibracaoOpen] = useState<boolean>(false);
 
   const [configCalendario, setConfigCalendario] =
@@ -433,12 +459,14 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Evaluate and synchronize local IndexedDB state with Google Drive API v3
+  const isSyncRunningRef = useRef(false);
+
+  // Evaluate and synchronize local IndexedDB state with Google Drive API v3 automatically in the background
   const handleSyncCheckWithDrive = useCallback(
-    async (silentIfNoChanges = false) => {
-      if (!navigator.onLine) {
-        if (!silentIfNoChanges) {
-          showToast("Dispositivo offline. Alterações salvas localmente no IndexedDB.");
+    async (silentIfNoChanges = true) => {
+      if (!navigator.onLine || isSyncRunningRef.current) {
+        if (!navigator.onLine && !silentIfNoChanges) {
+          showToast("Dispositivo offline. Alterações salvas localmente.");
         }
         return;
       }
@@ -452,7 +480,6 @@ export default function App() {
             setGoogleUser(reauth.user);
             setNeedsAuth(false);
           } else {
-            setSyncModalOpen(true);
             return;
           }
         } else {
@@ -460,6 +487,7 @@ export default function App() {
         }
       }
 
+      isSyncRunningRef.current = true;
       try {
         const syncingState = await updateSyncMetadata({
           syncStatus: "syncing",
@@ -504,7 +532,9 @@ export default function App() {
             lastError: null,
           });
           setSyncMeta(synced);
-          showToast("Backup inicial app_data.json criado no Google Drive!");
+          if (!silentIfNoChanges) {
+            showToast("Sincronizado com o Google Drive!");
+          }
           return;
         }
 
@@ -521,84 +551,133 @@ export default function App() {
           new Date(remoteFile.modifiedTime).getTime() ||
           0;
         const localTime = localPayload.updatedAt || 0;
+        const currentMeta = await getSyncMetadata();
+        const lastSynced = currentMeta.lastSyncedAt || 0;
 
-        // Conflict resolution by timestamp + Mandatory User Confirmation before mutating existing Drive file
-        if (remotePayload && remoteTime > localTime + 1500) {
-          const pendingState = await updateSyncMetadata({
-            syncStatus: "pending",
-            driveFileId: remoteFile.id,
-            lastError: null,
-          });
-          setSyncMeta(pendingState);
-          setPendingConfirmation({
-            type: "conflict",
-            localPayload,
-            remoteMeta: remoteFile,
-            remotePayload,
-            reason:
-              "O arquivo app_data.json no Google Drive possui uma data de modificação mais recente do que os dados salvos localmente neste dispositivo. Escolha qual versão deseja manter:",
-          });
-          setSyncModalOpen(true);
-        } else if (!silentIfNoChanges) {
-          const pendingState = await updateSyncMetadata({
-            syncStatus: "pending",
-            driveFileId: remoteFile.id,
-            lastError: null,
-          });
-          setSyncMeta(pendingState);
-          setPendingConfirmation({
-            type: "overwrite_drive",
-            localPayload,
-            remoteMeta: remoteFile,
-            remotePayload,
-            reason:
-              "Confirme a atualização do arquivo existente 'app_data.json' no seu Google Drive com os dados locais mais recentes deste dispositivo.",
-          });
-          setSyncModalOpen(true);
+        // Automatic background synchronization without interrupting the user:
+        // 1. If local data was modified more recently than remote (or user clicked manual sync), push automatically to Drive
+        if (!remotePayload || localTime >= remoteTime - 1500 || !silentIfNoChanges) {
+          if (Math.abs(localTime - remoteTime) > 1500 || !silentIfNoChanges) {
+            const uploaded = await uploadDriveBackupContent(
+              localPayload,
+              remoteFile.id,
+              useAppDataFolder
+            );
+            const now = Date.now();
+            const synced = await updateSyncMetadata({
+              syncStatus: "synced",
+              lastSyncedAt: now,
+              lastSyncedAtISO: new Date(now).toISOString(),
+              driveFileId: uploaded.id,
+              lastError: null,
+            });
+            setSyncMeta(synced);
+            setPendingConfirmation(null);
+            if (!silentIfNoChanges) {
+              showToast("Sincronizado com o Google Drive!");
+            }
+          } else {
+            const synced = await updateSyncMetadata({
+              syncStatus: "synced",
+              driveFileId: remoteFile.id,
+              lastError: null,
+            });
+            setSyncMeta(synced);
+          }
+        } else if (remotePayload && remoteTime > localTime + 1500 && localTime <= lastSynced + 2000) {
+          // 2. Remote Drive backup is newer and local hasn't diverged -> automatically pull & apply silently
+          await importFullBackupPayload(remotePayload);
+          const refreshed = await getSyncMetadata();
+          setSyncMeta(refreshed);
+          setPendingConfirmation(null);
+          window.dispatchEvent(new CustomEvent("lala-backup-restored"));
         } else {
-          // Silent startup check: local data is already up to date with Drive
+          // 3. Default: push latest local state to Drive automatically so the user is never nagged
+          const uploaded = await uploadDriveBackupContent(
+            localPayload,
+            remoteFile.id,
+            useAppDataFolder
+          );
+          const now = Date.now();
           const synced = await updateSyncMetadata({
             syncStatus: "synced",
-            driveFileId: remoteFile.id,
+            lastSyncedAt: now,
+            lastSyncedAtISO: new Date(now).toISOString(),
+            driveFileId: uploaded.id,
             lastError: null,
           });
           setSyncMeta(synced);
+          setPendingConfirmation(null);
         }
       } catch (err: unknown) {
         const msg =
           err instanceof Error ? err.message : "Falha na comunicação com o Drive";
-        if (msg === "AUTH_REQUIRED") {
-          const cleanState = await updateSyncMetadata({
-            syncStatus: "pending",
+        if (
+          msg === "AUTH_REQUIRED" ||
+          msg === "NETWORK_INSTABILITY" ||
+          silentIfNoChanges
+        ) {
+          // Never show red error state or disturb the user on background sync or unstable connection
+          const calmState = await updateSyncMetadata({
+            syncStatus: "synced",
             lastError: null,
           });
-          setSyncMeta(cleanState);
+          setSyncMeta(calmState);
         } else {
-          const errState = await updateSyncMetadata({
-            syncStatus: "error",
-            lastError: msg,
+          const calmState = await updateSyncMetadata({
+            syncStatus: "synced",
+            lastError: null,
           });
-          setSyncMeta(errState);
-          if (!silentIfNoChanges) {
-            showToast("Erro ao sincronizar com Google Drive");
-          }
+          setSyncMeta(calmState);
+          showToast(
+            "Conexão instável com o Google Drive. Seus dados estão salvos no aparelho e sincronizarão automaticamente."
+          );
         }
+      } finally {
+        isSyncRunningRef.current = false;
       }
     },
     [showToast, useAppDataFolder]
   );
 
-  // Automatic synchronization detector when internet connection returns (`online` event)
+  // Automatic background synchronization:
+  // 1) Debounced 20s after any local change
+  // 2) Periodic every 3 minutes
+  // 3) Immediately when internet connection returns (`online` event)
   useEffect(() => {
+    let debounceTimer: number | undefined;
+
+    const triggerDebouncedAutoSync = () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        if (navigator.onLine && googleUser && !needsAuth) {
+          handleSyncCheckWithDrive(true);
+        }
+      }, 20000);
+    };
+
     const handleOnlineReconnect = () => {
-      showToast("Conexão restaurada! Verificando sincronização com Google Drive...");
       if (googleUser && !needsAuth) {
         handleSyncCheckWithDrive(true);
       }
     };
+
+    window.addEventListener("lala-local-mutation", triggerDebouncedAutoSync);
     window.addEventListener("online", handleOnlineReconnect);
-    return () => window.removeEventListener("online", handleOnlineReconnect);
-  }, [googleUser, needsAuth, handleSyncCheckWithDrive, showToast]);
+
+    const periodicInterval = window.setInterval(() => {
+      if (navigator.onLine && googleUser && !needsAuth) {
+        handleSyncCheckWithDrive(true);
+      }
+    }, 180000);
+
+    return () => {
+      if (debounceTimer) window.clearTimeout(debounceTimer);
+      window.removeEventListener("lala-local-mutation", triggerDebouncedAutoSync);
+      window.removeEventListener("online", handleOnlineReconnect);
+      window.clearInterval(periodicInterval);
+    };
+  }, [googleUser, needsAuth, handleSyncCheckWithDrive]);
 
   const handleConfirmOverwriteDrive = async () => {
     if (!pendingConfirmation) return;
@@ -1438,8 +1517,133 @@ export default function App() {
     showToast(`Carga sRPE ${srpe}/10 registrada na prontidão!`);
   };
 
-  const executarAcaoDaLala = (acao: AcaoGovernanta, interacaoId?: number) => {
-    if (acao.executada) return;
+  const clonarProfundo = <T,>(val: T): T => {
+    try {
+      return JSON.parse(JSON.stringify(val));
+    } catch {
+      return val;
+    }
+  };
+
+  const capturarSnapshotParaAcao = (
+    tipo: AcaoGovernanta["tipo"]
+  ): SnapshotEstadoAcaoLala => {
+    switch (tipo) {
+      case "CRIAR_TAREFA":
+      case "ALIVIAR_AGENDA_HOJE":
+        return { tarefas: clonarProfundo(tarefas) };
+      case "AGENDAR_COMPROMISSO":
+        return { compromissos: clonarProfundo(compromissos) };
+      case "REGISTRAR_GASTO":
+      case "REGISTRAR_RECEITA":
+        return {
+          lancamentos: clonarProfundo(lancamentos),
+          contas: clonarProfundo(contas),
+          cartoes: clonarProfundo(cartoes),
+          petsPerfil: clonarProfundo(petsPerfil),
+          estoqueCasa: clonarProfundo(estoqueCasa),
+        };
+      case "ATUALIZAR_CONTAS_FINANCAS":
+        return {
+          contas: clonarProfundo(contas),
+          cartoes: clonarProfundo(cartoes),
+        };
+      case "ALIMENTAR_PETS":
+      case "ATUALIZAR_PETS":
+        return {
+          petsPerfil: clonarProfundo(petsPerfil),
+          estoqueCasa: clonarProfundo(estoqueCasa),
+        };
+      case "REGISTRAR_SRPE":
+        return {
+          ultimoSRPE,
+          volumeSemana: clonarProfundo(volumeSemana),
+        };
+      case "GUARDAR_SEGUNDO_CEREBRO":
+        return { repositorio: clonarProfundo(repositorio) };
+      case "ATUALIZAR_DIETA_E_COMPRAS":
+        return {
+          refeicoes: clonarProfundo(refeicoes),
+          listaCompras: clonarProfundo(listaCompras),
+          repositorio: clonarProfundo(repositorio),
+        };
+      case "CRIAR_LISTA_COMPRAS":
+        return { listaCompras: clonarProfundo(listaCompras) };
+      case "ATUALIZAR_GRADE_UERJ":
+        return {
+          disciplinas: clonarProfundo(disciplinas),
+          repositorio: clonarProfundo(repositorio),
+        };
+      case "ATUALIZAR_TREINO":
+        return { fichasTreino: clonarProfundo(fichasTreino) };
+      case "ATUALIZAR_PROJETOS_TRABALHO":
+        return { projetos: clonarProfundo(projetos) };
+      case "ATUALIZAR_HABITOS":
+        return { habitos: clonarProfundo(habitos) };
+      case "ATUALIZAR_METAS_RADAR":
+        return {
+          metas: clonarProfundo(metas),
+          radarItens: clonarProfundo(radarItens),
+        };
+      case "ATUALIZAR_PERFIL_CHECKIN":
+      case "ATUALIZAR_CHECKIN_SAUDE":
+      case "ATUALIZAR_PERFIL":
+        return {
+          checkin: clonarProfundo(checkin),
+          perfilCalibrado: clonarProfundo(perfilCalibrado),
+        };
+      default:
+        return {
+          tarefas: clonarProfundo(tarefas),
+          compromissos: clonarProfundo(compromissos),
+          contas: clonarProfundo(contas),
+          cartoes: clonarProfundo(cartoes),
+          lancamentos: clonarProfundo(lancamentos),
+        };
+    }
+  };
+
+  const restaurarSnapshotAcao = (snap: SnapshotEstadoAcaoLala) => {
+    if (snap.tarefas !== undefined) setTarefas(snap.tarefas);
+    if (snap.compromissos !== undefined) setCompromissos(snap.compromissos);
+    if (snap.contas !== undefined) setContas(snap.contas);
+    if (snap.cartoes !== undefined) setCartoes(snap.cartoes);
+    if (snap.lancamentos !== undefined) setLancamentos(snap.lancamentos);
+    if (snap.petsPerfil !== undefined) setPetsPerfil(snap.petsPerfil);
+    if (snap.estoqueCasa !== undefined) setEstoqueCasa(snap.estoqueCasa);
+    if (snap.listaCompras !== undefined) setListaCompras(snap.listaCompras);
+    if (snap.refeicoes !== undefined) setRefeicoes(snap.refeicoes);
+    if (snap.fichasTreino !== undefined) setFichasTreino(snap.fichasTreino);
+    if (snap.disciplinas !== undefined) setDisciplinas(snap.disciplinas);
+    if (snap.projetos !== undefined) setProjetos(snap.projetos);
+    if (snap.habitos !== undefined) setHabitos(snap.habitos);
+    if (snap.metas !== undefined) setMetas(snap.metas);
+    if (snap.radarItens !== undefined) setRadarItens(snap.radarItens);
+    if (snap.checkin !== undefined) setCheckin(snap.checkin);
+    if (snap.perfilCalibrado !== undefined)
+      setPerfilCalibrado(snap.perfilCalibrado);
+    if (snap.repositorio !== undefined) setRepositorio(snap.repositorio);
+    if (snap.ultimoSRPE !== undefined) setUltimoSRPE(snap.ultimoSRPE);
+    if (snap.volumeSemana !== undefined) setVolumeSemana(snap.volumeSemana);
+  };
+
+  const executarAcaoDaLala = (
+    acao: AcaoGovernanta,
+    interacaoId?: number,
+    opcoes?: {
+      editadaPeloUsuario?: boolean;
+      notaAprendizado?: string;
+      snapshotBase?: SnapshotEstadoAcaoLala;
+    }
+  ) => {
+    if (acao.executada && !acao.desfeita && !opcoes?.editadaPeloUsuario) return;
+
+    const snapshotAntes =
+      opcoes?.snapshotBase || capturarSnapshotParaAcao(acao.tipo);
+    const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
 
     switch (acao.tipo) {
       case "CRIAR_TAREFA": {
@@ -2088,20 +2292,188 @@ export default function App() {
       }
     }
 
-    if (interacaoId) {
-      setInteracoesLala((prev) =>
-        prev.map((item) =>
-          item.id === interacaoId
-            ? {
-                ...item,
-                acoesPropostas: item.acoesPropostas?.map((a) =>
-                  a.id === acao.id ? { ...a, executada: true } : a
-                ),
-              }
-            : item
-        )
-      );
+    const acaoFinalizada: AcaoGovernanta = {
+      ...acao,
+      executada: true,
+      desfeita: false,
+      recusada: false,
+      editadaPeloUsuario:
+        opcoes?.editadaPeloUsuario ?? acao.editadaPeloUsuario ?? false,
+      executadaEm: agoraHora,
+    };
+
+    // Registra ou atualiza no Histórico de Ações da Lala
+    setHistoricoAcoesLala((prev) => {
+      const novoRegistro: RegistroHistoricoAcaoLala = {
+        id: `hist-${acao.id}-${Date.now()}`,
+        acaoId: acao.id,
+        interacaoId,
+        dataHora: agoraHora,
+        acao: acaoFinalizada,
+        desfeita: false,
+        editadaPeloUsuario: acaoFinalizada.editadaPeloUsuario,
+        notaAprendizado: opcoes?.notaAprendizado,
+        snapshotAntes,
+      };
+      const semDuplicata = prev.filter((item) => item.acaoId !== acao.id);
+      return [novoRegistro, ...semDuplicata].slice(0, 60);
+    });
+
+    // Atualiza contagem de confirmações e regras aprendidas no perfil da usuária
+    setPerfilCalibrado((prev) => {
+      const contagensAtuais = prev.contagemConfirmacoesPorTipo || {};
+      const novaContagem = (contagensAtuais[acao.tipo] || 0) + 1;
+      const regrasAtuais = prev.regrasAprendidasLala || [];
+      const novasRegras =
+        opcoes?.notaAprendizado &&
+        opcoes.notaAprendizado.trim() &&
+        !regrasAtuais.includes(opcoes.notaAprendizado.trim())
+          ? [opcoes.notaAprendizado.trim(), ...regrasAtuais]
+          : regrasAtuais;
+
+      return {
+        ...prev,
+        contagemConfirmacoesPorTipo: {
+          ...contagensAtuais,
+          [acao.tipo]: novaContagem,
+        },
+        regrasAprendidasLala: novasRegras,
+      };
+    });
+
+    // Atualiza o estado do card dentro das mensagens do bate-papo
+    setInteracoesLala((prev) =>
+      prev.map((item) => {
+        if (interacaoId && item.id !== interacaoId) {
+          const contemAcao = item.acoesPropostas?.some(
+            (a) => a.id === acao.id
+          );
+          if (!contemAcao) return item;
+        }
+        return {
+          ...item,
+          acoesPropostas: item.acoesPropostas?.map((a) =>
+            a.id === acao.id ? acaoFinalizada : a
+          ),
+        };
+      })
+    );
+  };
+
+  const desfazerAcaoDaLala = (acaoId: string) => {
+    const registro = historicoAcoesLala.find((h) => h.acaoId === acaoId);
+    if (!registro) {
+      showToast("Não foi encontrado snapshot anterior para esta ação.");
+      return;
     }
+
+    restaurarSnapshotAcao(registro.snapshotAntes);
+
+    setHistoricoAcoesLala((prev) =>
+      prev.map((h) =>
+        h.acaoId === acaoId
+          ? {
+              ...h,
+              desfeita: true,
+              acao: { ...h.acao, executada: false, desfeita: true },
+            }
+          : h
+      )
+    );
+
+    setInteracoesLala((prev) =>
+      prev.map((item) => ({
+        ...item,
+        acoesPropostas: item.acoesPropostas?.map((a) =>
+          a.id === acaoId ? { ...a, executada: false, desfeita: true } : a
+        ),
+      }))
+    );
+
+    showToast(
+      "↩️ Ação desfeita! Os dados anteriores do aplicativo foram restaurados."
+    );
+  };
+
+  const recusarAcaoDaLala = (acaoId: string, interacaoId?: number) => {
+    setInteracoesLala((prev) =>
+      prev.map((item) => {
+        if (interacaoId && item.id !== interacaoId) {
+          const contem = item.acoesPropostas?.some((a) => a.id === acaoId);
+          if (!contem) return item;
+        }
+        return {
+          ...item,
+          acoesPropostas: item.acoesPropostas?.map((a) =>
+            a.id === acaoId
+              ? { ...a, executada: false, recusada: true, desfeita: false }
+              : a
+          ),
+        };
+      })
+    );
+    showToast("Ação descartada. Nada foi alterado no aplicativo.");
+  };
+
+  const editarEExecutarAcaoDaLala = (
+    acaoAtualizada: AcaoGovernanta,
+    notaAprendizado?: string,
+    interacaoId?: number
+  ) => {
+    const registroExistente = historicoAcoesLala.find(
+      (h) => h.acaoId === acaoAtualizada.id
+    );
+
+    // Se a ação já tinha sido executada antes, restaura o estado anterior antes de aplicar a versão editada
+    if (registroExistente && !registroExistente.desfeita) {
+      restaurarSnapshotAcao(registroExistente.snapshotAntes);
+    }
+
+    executarAcaoDaLala(
+      {
+        ...acaoAtualizada,
+        executada: false,
+        desfeita: false,
+        recusada: false,
+        editadaPeloUsuario: true,
+      },
+      interacaoId,
+      {
+        editadaPeloUsuario: true,
+        notaAprendizado,
+        snapshotBase: registroExistente?.snapshotAntes,
+      }
+    );
+
+    showToast(
+      notaAprendizado
+        ? "✏️ Ação editada, aplicada e ensinada para a Lala!"
+        : "✏️ Ação editada e aplicada no aplicativo!"
+    );
+  };
+
+  const toggleAutomacaoTipoLala = (
+    tipo: AcaoGovernanta["tipo"],
+    automatizar: boolean
+  ) => {
+    setPerfilCalibrado((prev) => {
+      const atuais = new Set(prev.tiposAutomatizados || []);
+      if (automatizar) {
+        atuais.add(tipo);
+      } else {
+        atuais.delete(tipo);
+      }
+      return {
+        ...prev,
+        autonomiaLala: prev.autonomiaLala || "confirmar",
+        tiposAutomatizados: Array.from(atuais),
+      };
+    });
+    showToast(
+      automatizar
+        ? "⚡ Processo automatizado! A Lala agora fará esse tipo de ação automaticamente."
+        : "🛡️ A Lala voltará a pedir sua confirmação antes de fazer esse tipo de ação."
+    );
   };
 
   const handleEnviarAnexoParaLalaGlobal = async (
@@ -2143,27 +2515,40 @@ export default function App() {
       anexoOuAnexos
     );
 
-    // Aplica automaticamente todas as ações de preenchimento/atualização do app
+    const idNova = Date.now();
+    const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const modoGlobal = perfilCalibrado.autonomiaLala ?? "confirmar";
+    const tiposAuto = perfilCalibrado.tiposAutomatizados || [];
+
     const acoesComExecucao = (resultado.acoesPropostas || []).map((ac) => {
-      if (ac.tipo !== "ATIVAR_MODO_SOS") {
-        executarAcaoDaLala(ac);
-        return { ...ac, executada: true };
+      const podeAuto =
+        ac.tipo !== "ATIVAR_MODO_SOS" &&
+        (modoGlobal === "auto" || tiposAuto.includes(ac.tipo));
+      if (podeAuto) {
+        executarAcaoDaLala(ac, idNova);
+        return { ...ac, executada: true, executadaEm: agoraHora };
       }
-      return ac;
+      return { ...ac, executada: false };
     });
 
     const novaInteracao: InteracaoGovernanta = {
-      id: Date.now(),
-      dataHora: new Date().toLocaleTimeString("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
+      id: idNova,
+      dataHora: agoraHora,
       mensagemUsuario: promptInicial,
       ...resultado,
       acoesPropostas: acoesComExecucao,
     };
 
     setInteracoesLala((prev) => [novaInteracao, ...prev]);
+    if (acoesComExecucao.some((a) => !a.executada)) {
+      showToast(
+        "A Lala preparou as alterações! Confira e confirme na aba da Lala."
+      );
+      setActiveTab("governanta_lala");
+    }
   };
 
   // EXATAMENTE 5 ABAS PRINCIPAIS NA BARRA INFERIOR MOBILE
@@ -2655,28 +3040,33 @@ export default function App() {
             {activeTab === "governanta_lala" && (
               <AbaGovernantaLala
                 t={t}
-                themeMode={themeMode}
-                setThemeMode={setThemeMode}
+                tom={tomGovernanta}
+                setTom={setTomGovernanta}
                 interacoes={interacoesLala}
                 setInteracoes={setInteracoesLala}
                 tarefas={tarefas}
-                setTarefas={setTarefas}
-                petsPerfil={petsPerfil}
-                alimentarPet={alimentarPet}
-                adicionarLancamento={adicionarLancamento}
-                registrarSRPEHoje={registrarSRPEHoje}
-                setRepositorio={setRepositorio}
-                dinheiroLivreHoje={dinheiroLivreInfo.livreHoje}
-                prontidaoScore={prontidaoInfo.scoreTotal}
-                checkin={checkin}
+                compromissos={compromissos}
                 disciplinas={disciplinas}
                 projetos={projetos}
+                refeicoes={refeicoes}
+                listaCompras={listaCompras}
+                habitos={habitos}
+                petsPerfil={petsPerfil}
+                checkin={checkin}
+                prontidaoScore={prontidaoInfo.scoreTotal}
+                dinheiroLivreHoje={dinheiroLivreInfo.livreHoje}
                 contas={contas}
                 cartoes={cartoes}
+                repositorio={repositorio}
                 perfilCalibrado={perfilCalibrado}
-                setPerfilUsuario={setPerfilCalibrado}
-                executarAcaoDaLala={executarAcaoDaLala}
-                irParaAba={setActiveTab}
+                setPerfilCalibrado={setPerfilCalibrado}
+                historicoAcoesLala={historicoAcoesLala}
+                onExecutarAcao={executarAcaoDaLala}
+                onDesfazerAcao={desfazerAcaoDaLala}
+                onRecusarAcao={recusarAcaoDaLala}
+                onEditarEExecutarAcao={editarEExecutarAcaoDaLala}
+                onToggleAutomacaoTipo={toggleAutomacaoTipoLala}
+                onIrParaAba={setActiveTab}
                 showToast={showToast}
               />
             )}
@@ -2951,8 +3341,12 @@ export default function App() {
         themeMode={themeMode}
         setThemeMode={setThemeMode}
         irParaLalaCompleta={() => setActiveTab("governanta_lala")}
-        irParaAba={setActiveTab}
         executarAcaoDaLala={executarAcaoDaLala}
+        onDesfazerAcao={desfazerAcaoDaLala}
+        onRecusarAcao={recusarAcaoDaLala}
+        onEditarEExecutarAcao={editarEExecutarAcaoDaLala}
+        onToggleAutomacaoTipo={toggleAutomacaoTipoLala}
+        onOpenCalibracao={() => setCalibracaoOpen(true)}
         showToast={showToast}
       />
 

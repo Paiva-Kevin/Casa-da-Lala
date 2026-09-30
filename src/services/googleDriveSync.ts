@@ -38,8 +38,56 @@ const STORAGE_EXPLICIT_LOGOUT_KEY = 'casa_lala_explicit_logout_v1';
 const LEGACY_SESSION_TOKEN_KEY = 'casa_lala_oauth_access_token_v2';
 const LEGACY_SESSION_MULTI_ACCOUNTS_KEY = 'casa_lala_google_accounts_v1';
 
-// Google OAuth2 access tokens last 3600s (60 min); we treat 54 min as fresh
-const TOKEN_TTL_MS = 54 * 60 * 1000;
+// Google OAuth2 access tokens last 3600s (60 min); we treat 58 min as fresh
+const TOKEN_TTL_MS = 58 * 60 * 1000;
+
+// Resilient fetch wrapper with automatic retry on transient connection instability
+export async function fetchWithNetworkRetry(
+  url: string,
+  options: RequestInit,
+  maxRetries = 2
+): Promise<Response> {
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      if (
+        (res.status === 429 ||
+          res.status === 500 ||
+          res.status === 502 ||
+          res.status === 503 ||
+          res.status === 504) &&
+        attempt < maxRetries
+      ) {
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 700 * (attempt + 1)));
+      }
+    }
+  }
+  throw lastErr || new Error('NETWORK_INSTABILITY');
+}
+
+export function isNetworkInstabilityError(err: unknown): boolean {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes('network_instability') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('network request failed') ||
+    msg.includes('load failed') ||
+    msg.includes('fetch') ||
+    msg.includes('timeout') ||
+    msg.includes('auth/network-request-failed') ||
+    msg.includes('auth/internal-error')
+  );
+}
 
 export interface ConnectedGoogleAccount {
   email: string;
@@ -440,9 +488,33 @@ export const googleSignIn = async (
     if (Object.keys(customParams).length > 0) {
       authProvider.setCustomParameters(customParams);
     }
-    const result = await signInWithPopup(auth, authProvider);
+    let result;
+    try {
+      result = await signInWithPopup(auth, authProvider);
+    } catch (firstPopupErr: unknown) {
+      const firstCode = (firstPopupErr as { code?: string })?.code || '';
+      const firstMsg =
+        firstPopupErr instanceof Error
+          ? firstPopupErr.message
+          : String(firstPopupErr);
+      if (
+        firstCode === 'auth/network-request-failed' ||
+        firstCode === 'auth/internal-error' ||
+        firstMsg.includes('network-request-failed') ||
+        firstMsg.includes('internal-error')
+      ) {
+        await new Promise((r) => setTimeout(r, 800));
+        result = await signInWithPopup(auth, authProvider);
+      } else {
+        throw firstPopupErr;
+      }
+    }
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
+      const existingSaved = getSavedGoogleUser();
+      if (existingSaved && cachedAccessToken) {
+        return { user: existingSaved, accessToken: cachedAccessToken };
+      }
       throw new Error(
         'Não foi possível obter o token OAuth do Google. Tente novamente.'
       );
@@ -478,6 +550,22 @@ export const googleSignIn = async (
       return null;
     }
     if (
+      errCode === 'auth/network-request-failed' ||
+      errCode === 'auth/internal-error' ||
+      errCode === 'auth/timeout' ||
+      isNetworkInstabilityError(error)
+    ) {
+      // If connection flickered during OAuth, preserve existing session silently if available
+      const savedUser = getSavedGoogleUser();
+      if (savedUser) {
+        return {
+          user: savedUser,
+          accessToken: cachedAccessToken || '',
+        };
+      }
+      return null;
+    }
+    if (
       errCode === 'auth/popup-blocked' ||
       errMsg.includes('auth/popup-blocked')
     ) {
@@ -494,7 +582,7 @@ export const googleSignIn = async (
       );
     }
     throw new Error(
-      'Não foi possível concluir o login com o Google. Tente novamente.'
+      'Não foi possível concluir o login com o Google. Verifique sua conexão e tente novamente.'
     );
   } finally {
     isSigningIn = false;
@@ -594,23 +682,31 @@ export async function findDriveBackupFile(
   );
   const url = `https://www.googleapis.com/drive/v3/files?spaces=${spaces}&q=${query}&fields=files(id,name,modifiedTime,size)&orderBy=modifiedTime desc&pageSize=1`;
 
-  let res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetchWithNetworkRetry(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    if (isNetworkInstabilityError(err)) {
+      throw new Error('NETWORK_INSTABILITY');
+    }
+    throw err;
+  }
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(token);
     token = await trySilentTokenRefresh();
     if (token) {
-      res = await fetch(url, {
+      res = await fetchWithNetworkRetry(url, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
     }
-    if (!token || res.status === 401 || res.status === 403) {
+    if (!token || res.status === 401) {
       invalidateExpiredToken(token);
       throw new Error('AUTH_REQUIRED');
     }
@@ -633,23 +729,31 @@ export async function downloadDriveBackupContent(
   if (!token) throw new Error('AUTH_REQUIRED');
 
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
-  let res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetchWithNetworkRetry(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    if (isNetworkInstabilityError(err)) {
+      throw new Error('NETWORK_INSTABILITY');
+    }
+    throw err;
+  }
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(token);
     token = await trySilentTokenRefresh();
     if (token) {
-      res = await fetch(url, {
+      res = await fetchWithNetworkRetry(url, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
     }
-    if (!token || res.status === 401 || res.status === 403) {
+    if (!token || res.status === 401) {
       invalidateExpiredToken(token);
       throw new Error('AUTH_REQUIRED');
     }
@@ -702,20 +806,28 @@ export async function uploadDriveBackupContent(
 
   const method = existingFileId ? 'PATCH' : 'POST';
 
-  let res = await fetch(endpoint, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': `multipart/related; boundary=${boundary}`,
-    },
-    body,
-  });
+  let res: Response;
+  try {
+    res = await fetchWithNetworkRetry(endpoint, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    });
+  } catch (err) {
+    if (isNetworkInstabilityError(err)) {
+      throw new Error('NETWORK_INSTABILITY');
+    }
+    throw err;
+  }
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(token);
     token = await trySilentTokenRefresh();
     if (token) {
-      res = await fetch(endpoint, {
+      res = await fetchWithNetworkRetry(endpoint, {
         method,
         headers: {
           Authorization: `Bearer ${token}`,
@@ -724,7 +836,7 @@ export async function uploadDriveBackupContent(
         body,
       });
     }
-    if (!token || res.status === 401 || res.status === 403) {
+    if (!token || res.status === 401) {
       invalidateExpiredToken(token);
       throw new Error('AUTH_REQUIRED');
     }

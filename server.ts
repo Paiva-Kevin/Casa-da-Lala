@@ -1,18 +1,45 @@
+import "dotenv/config";
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
+
+const CHAT_MODELS = [
+  "gemini-3.8-flash",
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+];
+
+const TTS_MODELS = [
+  "gemini-3.8-flash-lite-tts",
+  "gemini-2.5-flash-preview-tts",
+];
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "35mb" }));
 
+  // Enable CORS on /api/* so deployed frontends (Firebase Hosting / PWA / Cloud Run) can reach the server
+  app.use("/api", (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   // Server-side Gemini API endpoint for Lala (Unified Multimodal Agent)
   app.post("/api/lala/interact", async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey =
+        process.env.GEMINI_API_KEY ||
+        process.env.VITE_GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY;
       if (!apiKey) {
         return res.status(503).json({
           error: "GEMINI_API_KEY not configured on server",
@@ -79,7 +106,7 @@ async function startServer() {
       const systemInstruction = `Você é a Lala, a governanta pessoal e assistente de vida do aplicativo "Casa da Lala".
 Você conversa em formato de BATE-PAPO fluido, direto, caloroso e inteligente.
 
-Contexto atual do aplicativo da usuária:
+Contexto atual do aplicativo da usuária (inclui autonomiaLala, tiposAutomatizados e regrasAprendidasLala):
 ${JSON.stringify(contextoApp || {})}
 
 Histórico recente da conversa:
@@ -87,21 +114,29 @@ ${historicoFormatado}
 
 MISSÃO PRINCIPAL:
 1. Você administra, filtra e atualiza QUALQUER parte do aplicativo a partir do que a usuária escrever, falar por áudio ou enviar em 1 ou várias imagens/prints/arquivos!
-2. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
+2. REGRAS APRENDIDAS E CONFIRMAÇÃO PROGRESSIVA:
+   - Respeite rigorosamente as "regrasAprendidasLala" e "instrucoesPersonalizadasLala" presentes no contextoApp (são correções e preferências que a usuária já te ensinou!).
+   - Por padrão, a usuária prefere revisar e CONFIRMAR cada ação antes de alterar o app (exceto para tipos listados em "tiposAutomatizados" ou quando "autonomiaLala" === "auto"). Portanto, gere sempre as ações completas e detalhadas em "acoesPropostas" e avise na "respostaLala" que você preparou o card da ação logo abaixo para ela conferir, editar se quiser me ensinar algum ajuste, ou confirmar com 1 clique (ou diga que já aplicou caso aquele tipo já esteja automatizado).
+   - Se a usuária der uma instrução de aprendizado (ex: "sempre que eu lançar mercado coloca na conta Itaú", "nunca agende nada antes das 9h", "quando for ração da Nina o valor é 45,90"), preencha "novaRegraAprendida" com essa regra clara para você memorizar para sempre!
+   - Se a usuária pedir no chat para AUTOMATIZAR algum processo (ex: "pode fazer gastos automático agora", "não precisa mais pedir confirmação para tarefas", "automatiza tudo de pets"), inclua os tipos correspondentes em "automatizarTipos". Se ela pedir para voltar a pedir confirmação, inclua em "pedirConfirmacaoTipos".
+3. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
    - Só gere a ação "GUARDAR_SEGUNDO_CEREBRO" se a usuária pedir EXPLICITAMENTE para guardar/arquivar o documento no Segundo Cérebro.
    - Se a usuária enviar PRINTS DE CONTA BANCÁRIA, SALDO, EXTRATO, PIX OU CARTÃO DE CRÉDITO (ou der comandos sobre a conta dela): leia todos os números e nomes dos bancos/cartões nas imagens e gere IMEDIATAMENTE as ações "ATUALIZAR_CONTAS_FINANCAS" (com contasAjuste e/ou cartoesAjuste), "REGISTRAR_GASTO" e/ou "REGISTRAR_RECEITA"! Se ela estiver mostrando os saldos atuais das contas dela, defina "substituirExistentes": true em ATUALIZAR_CONTAS_FINANCAS caso ela peça para deixar apenas as contas dela.
    - Se a usuária enviar PRINTS DE HORÁRIOS, AGENDA, CALENDÁRIO OU AULAS: extraia os eventos/disciplinas e gere "AGENDAR_COMPROMISSO" e/ou "ATUALIZAR_GRADE_UERJ".
    - Se enviar PRINTS/ARQUIVOS DE DIETA, CARDÁPIO OU MERCADO: extraia as refeições e ingredientes e gere "ATUALIZAR_DIETA_E_COMPRAS" ou "CRIAR_LISTA_COMPRAS".
    - Se enviar PRINTS/ARQUIVOS DE TAREFAS, PROJETOS OU TREINO: gere "CRIAR_TAREFA", "ATUALIZAR_PROJETOS_TRABALHO" ou "ATUALIZAR_TREINO".
-3. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você acabou de atualizar no app!
+4. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você preparou ou atualizou no app!
 
 Retorne SEMPRE um objeto JSON válido exatamente neste formato:
 {
   "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
   "transcricaoAudioUsuario": "string opcional se enviou áudio",
-  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você resolveu/atualizou",
+  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você preparou/atualizou",
   "tituloCard": "Resumo curto em até 5 palavras",
   "tags": ["Tag1", "Tag2"],
+  "novaRegraAprendida": "string opcional quando a usuária ensinar um padrão ou preferência para as próximas vezes",
+  "automatizarTipos": ["REGISTRAR_GASTO"],
+  "pedirConfirmacaoTipos": [],
   "matrizDecisao": {
     "cenarioA": "string opcional",
     "cenarioB": "string opcional",
@@ -180,14 +215,28 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       }
       parts.push({ text: promptFinal });
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: parts,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-        },
-      });
+      let response = null;
+      let lastErr: unknown = null;
+      for (const modelName of CHAT_MODELS) {
+        try {
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: parts,
+            config: {
+              systemInstruction,
+              responseMimeType: "application/json",
+            },
+          });
+          if (response?.text) break;
+        } catch (err) {
+          lastErr = err;
+          console.warn(`Fallback de modelo em /api/lala/interact (${modelName}):`, err);
+        }
+      }
+
+      if (!response) {
+        throw lastErr || new Error("Nenhum modelo Gemini respondeu.");
+      }
 
       const rawText = (response.text || "{}")
         .replace(/^```json\s*/i, "")
@@ -210,7 +259,10 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
   // Server-side Gemini TTS endpoint so Lala can speak back with natural voice
   app.post("/api/lala/tts", async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const apiKey =
+        process.env.GEMINI_API_KEY ||
+        process.env.VITE_GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY;
       if (!apiKey) {
         return res.status(503).json({
           error: "GEMINI_API_KEY not configured on server",
@@ -251,33 +303,43 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
           ? "Energética, motivadora e animada em Português do Brasil"
           : "Natural, simpática, próxima e expressiva em Português do Brasil";
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3.8-flash-lite-tts",
-        contents: [
-          {
-            role: "user",
-            parts: [
+      let response = null;
+      for (const ttsModel of TTS_MODELS) {
+        try {
+          response = await ai.models.generateContent({
+            model: ttsModel,
+            contents: [
               {
-                text: cleanText,
-                speechMetadata: {
-                  style: stylePrompt,
-                },
+                role: "user",
+                parts: [
+                  {
+                    text: cleanText,
+                    speechMetadata: {
+                      style: stylePrompt,
+                    },
+                  },
+                ],
               },
             ],
-          },
-        ],
-        config: {
-          responseModalities: ["AUDIO"],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: "Kore" },
+            config: {
+              responseModalities: ["AUDIO"],
+              speechConfig: {
+                voiceConfig: {
+                  prebuiltVoiceConfig: { voiceName: "Kore" },
+                },
+              },
             },
-          },
-        },
-      });
+          });
+          if (response?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
+            break;
+          }
+        } catch (err) {
+          console.warn(`Fallback TTS (${ttsModel}):`, err);
+        }
+      }
 
       const base64Audio =
-        response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        response?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
 
       if (!base64Audio) {
         return res.status(500).json({

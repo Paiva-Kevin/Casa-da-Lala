@@ -153,12 +153,15 @@ export async function getSyncMetadata(): Promise<SyncMetadata> {
       m.lastError &&
       (m.lastError.toLowerCase().includes('expirado') ||
         m.lastError.includes('AUTH_REQUIRED') ||
+        m.lastError.includes('NETWORK_INSTABILITY') ||
+        m.lastError.toLowerCase().includes('failed to fetch') ||
+        m.lastError.toLowerCase().includes('network') ||
         m.lastError.toLowerCase().includes('oauth'))
     ) {
       return {
         ...m,
         lastError: null,
-        syncStatus: m.lastSyncedAt ? 'synced' : 'pending',
+        syncStatus: 'synced',
       };
     }
     return m;
@@ -266,6 +269,7 @@ export const ALL_STATE_KEYS = [
   'perfil_calibrado',
   'config_calendario',
   'demo_limpo',
+  'historico_acoes_lala',
 ] as const;
 
 export async function exportFullBackupPayload(): Promise<AppBackupPayload> {

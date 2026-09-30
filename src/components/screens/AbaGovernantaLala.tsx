@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles,
   Mic,
@@ -15,6 +15,14 @@ import {
   UserCog,
   Check,
   MessageSquare,
+  History,
+  Zap,
+  ShieldAlert,
+  RotateCcw,
+  Pencil,
+  CheckCircle2,
+  Search,
+  Brain,
 } from "lucide-react";
 import {
   AcaoGovernanta,
@@ -33,6 +41,7 @@ import {
   PerfilUsuarioCalibrado,
   PetPerfil,
   ProjetoTrabalho,
+  RegistroHistoricoAcaoLala,
   TabId,
   TaskItem,
   ThemeTokens,
@@ -45,7 +54,7 @@ import {
   lerArquivoParaAnexo,
   pararVozDaLala,
 } from "../../services/lalaEngine";
-import { LalaAppActionCard } from "../LalaAppActionCard";
+import { LalaAppActionCard, getNomeAmigavelTipoAcao } from "../LalaAppActionCard";
 
 interface AbaGovernantaLalaProps {
   t: ThemeTokens;
@@ -69,10 +78,99 @@ interface AbaGovernantaLalaProps {
   repositorio: ArquivoRepositorio[];
   perfilCalibrado?: PerfilUsuarioCalibrado;
   setPerfilCalibrado?: React.Dispatch<React.SetStateAction<PerfilUsuarioCalibrado>>;
+  historicoAcoesLala?: RegistroHistoricoAcaoLala[];
   onExecutarAcao: (acao: AcaoGovernanta, interacaoId?: number) => void;
+  onDesfazerAcao?: (acaoId: string) => void;
+  onRecusarAcao?: (acaoId: string, interacaoId?: number) => void;
+  onEditarEExecutarAcao?: (
+    acaoAtualizada: AcaoGovernanta,
+    notaAprendizado?: string,
+    interacaoId?: number
+  ) => void;
+  onToggleAutomacaoTipo?: (
+    tipo: AcaoGovernanta["tipo"],
+    automatizar: boolean
+  ) => void;
   onIrParaAba?: (aba: TabId) => void;
   showToast: (msg: string) => void;
 }
+
+const PROCESSOS_CONFIGURAVEIS: {
+  tipo: AcaoGovernanta["tipo"];
+  nome: string;
+  descricao: string;
+}[] = [
+  {
+    tipo: "REGISTRAR_GASTO",
+    nome: "Lançamento de Gastos & Despesas",
+    descricao: "Registrar gastos no extrato e abater do Dinheiro Livre",
+  },
+  {
+    tipo: "REGISTRAR_RECEITA",
+    nome: "Lançamento de Receitas & Entradas",
+    descricao: "Registrar entradas de dinheiro, Pix recebidos, bolsas e salários",
+  },
+  {
+    tipo: "ATUALIZAR_CONTAS_FINANCAS",
+    nome: "Saldos Bancários & Cartões de Crédito",
+    descricao: "Atualizar saldos de contas e faturas/limites a partir de prints ou mensagens",
+  },
+  {
+    tipo: "CRIAR_TAREFA",
+    nome: "Criação de Tarefas & Prioridades",
+    descricao: "Adicionar tarefas na lista priorizada de Hoje ou da Semana",
+  },
+  {
+    tipo: "AGENDAR_COMPROMISSO",
+    nome: "Compromissos na Agenda & Calendário",
+    descricao: "Agendar eventos com horário e sincronização com Google Calendar",
+  },
+  {
+    tipo: "ALIMENTAR_PETS",
+    nome: "Alimentação & Sachês dos Pets",
+    descricao: "Dar baixa em sachês/ração da Nina e do Tobias",
+  },
+  {
+    tipo: "ATUALIZAR_PETS",
+    nome: "Estoque, Ração & Veterinária dos Pets",
+    descricao: "Atualizar estoque de sachês, kg de ração e datas de vacina/vet",
+  },
+  {
+    tipo: "ATUALIZAR_DIETA_E_COMPRAS",
+    nome: "Cardápio da Dieta & Meal Prep",
+    descricao: "Importar refeições, horários, proteínas e calorias do plano alimentar",
+  },
+  {
+    tipo: "CRIAR_LISTA_COMPRAS",
+    nome: "Lista de Compras de Mercado",
+    descricao: "Adicionar itens, quantidades e preços estimados na lista de mercado",
+  },
+  {
+    tipo: "ATUALIZAR_GRADE_UERJ",
+    nome: "Grade de Disciplinas UERJ",
+    descricao: "Atualizar matérias, professores, salas e horários do semestre",
+  },
+  {
+    tipo: "ATUALIZAR_PROJETOS_TRABALHO",
+    nome: "Projetos de Trabalho & Entregas",
+    descricao: "Criar ou atualizar entregáveis e prazos de trabalho",
+  },
+  {
+    tipo: "ATUALIZAR_TREINO",
+    nome: "Planilha de Treino & Exercícios",
+    descricao: "Importar ou ajustar séries, repetições e cargas da ficha de treino",
+  },
+  {
+    tipo: "ATUALIZAR_HABITOS",
+    nome: "Hábitos Diários",
+    descricao: "Adicionar ou ajustar hábitos rastreados diariamente",
+  },
+  {
+    tipo: "ATUALIZAR_METAS_RADAR",
+    nome: "Metas & Radar de Prazos",
+    descricao: "Cadastrar metas maiores ou prazos importantes no radar",
+  },
+];
 
 export function AbaGovernantaLala({
   t,
@@ -93,13 +191,28 @@ export function AbaGovernantaLala({
   dinheiroLivreHoje,
   contas = [],
   cartoes = [],
-  repositorio,
   perfilCalibrado,
   setPerfilCalibrado,
+  historicoAcoesLala = [],
   onExecutarAcao,
+  onDesfazerAcao,
+  onRecusarAcao,
+  onEditarEExecutarAcao,
+  onToggleAutomacaoTipo,
   onIrParaAba,
   showToast,
 }: AbaGovernantaLalaProps) {
+  const [subAba, setSubAba] = useState<"chat" | "historico" | "aprendizado">(
+    "chat"
+  );
+  const [filtroHistorico, setFiltroHistorico] = useState<
+    "todas" | "pendentes" | "aplicadas" | "editadas" | "desfeitas"
+  >("todas");
+  const [buscaHistorico, setBuscaHistorico] = useState("");
+  const [novaRegraInput, setNovaRegraInput] = useState("");
+  const [editandoRegraIdx, setEditandoRegraIdx] = useState<number | null>(null);
+  const [editandoRegraTexto, setEditandoRegraTexto] = useState("");
+
   const [mensagem, setMensagem] = useState("");
   const [gravando, setGravando] = useState(false);
   const [processando, setProcessando] = useState(false);
@@ -124,16 +237,45 @@ export function AbaGovernantaLala({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const timerGravacaoRef = useRef<number | null>(null);
   const cancelarGravacaoRef = useRef<boolean>(false);
   const transcricaoAcumuladaRef = useRef<string>("");
 
-  const interacoesCronologicas = [...interacoes].reverse();
+  const interacoesCronologicas = useMemo(
+    () => [...interacoes].reverse(),
+    [interacoes]
+  );
+
+  // Count actions waiting for confirmation across chat
+  const acoesPendentesConfirmacao = useMemo(() => {
+    const lista: {
+      acao: AcaoGovernanta;
+      interacaoId: number;
+      dataHora: string;
+      mensagemUsuario: string;
+    }[] = [];
+    for (const it of interacoes) {
+      for (const ac of it.acoesPropostas || []) {
+        if (!ac.executada && !ac.recusada && !ac.desfeita) {
+          lista.push({
+            acao: ac,
+            interacaoId: it.id,
+            dataHora: it.dataHora,
+            mensagemUsuario: it.mensagemUsuario,
+          });
+        }
+      }
+    }
+    return lista;
+  }, [interacoes]);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [interacoes.length, processando]);
+    if (subAba === "chat") {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [interacoes.length, processando, subAba]);
 
   useEffect(() => {
     return () => {
@@ -174,16 +316,13 @@ export function AbaGovernantaLala({
       return;
     }
 
-    setCarregandoVozId(interacaoId);
-    setIdFalandoAgora(null);
+    setCarregandoVozId(null);
+    setIdFalandoAgora(interacaoId);
 
     await falarTextoComVozDaLala(
       texto,
       tom,
-      () => {
-        setCarregandoVozId(null);
-        setIdFalandoAgora(interacaoId);
-      },
+      undefined,
       () => {
         setCarregandoVozId(null);
         setIdFalandoAgora((atual) => (atual === interacaoId ? null : atual));
@@ -270,7 +409,9 @@ export function AbaGovernantaLala({
     setSegundosGravacao(0);
 
     const SpeechRecognition =
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).SpeechRecognition ||
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).webkitSpeechRecognition;
 
     if (SpeechRecognition) {
@@ -279,6 +420,7 @@ export function AbaGovernantaLala({
         rec.lang = "pt-BR";
         rec.continuous = true;
         rec.interimResults = true;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         rec.onresult = (event: any) => {
           let textoFinal = "";
           let textoInterim = "";
@@ -330,7 +472,8 @@ export function AbaGovernantaLala({
           });
           const reader = new FileReader();
           reader.onloadend = () => {
-            const dataUrl = typeof reader.result === "string" ? reader.result : "";
+            const dataUrl =
+              typeof reader.result === "string" ? reader.result : "";
             const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : "";
             const anexoVoz: AnexoLala = {
               nome: `Mensagem de Voz (${new Date().toLocaleTimeString("pt-BR", {
@@ -365,7 +508,9 @@ export function AbaGovernantaLala({
         return;
       } catch {
         limparTimersEReconhecimento();
-        showToast("Permita o acesso ao microfone no navegador para falar com a Lala.");
+        showToast(
+          "Permita o acesso ao microfone no navegador para falar com a Lala."
+        );
       }
     } else {
       showToast("Gravação de áudio não disponível neste navegador.");
@@ -405,6 +550,14 @@ export function AbaGovernantaLala({
     showToast("Gravação de áudio cancelada.");
   };
 
+  // Verifica se um tipo de ação deve ser executado automaticamente ou se pede confirmação
+  const deveExecutarAutomaticamente = (tipo: AcaoGovernanta["tipo"]) => {
+    const modoGlobal = perfilCalibrado?.autonomiaLala ?? "confirmar";
+    if (modoGlobal === "auto") return true;
+    const tiposAuto = perfilCalibrado?.tiposAutomatizados || [];
+    return tiposAuto.includes(tipo);
+  };
+
   const enviarMensagemParaLala = async (
     textoCustom?: string,
     anexosOverride?: AnexoLala[],
@@ -425,62 +578,116 @@ export function AbaGovernantaLala({
     setProcessando(true);
 
     try {
-      const resultado = await consultarLalaUnificada({
-        mensagem: msgEnviada,
-        tom,
-        anexo: listaAnexos[0],
-        anexos: listaAnexos,
-        contexto: {
+      const novaInteracaoId = Date.now();
+      const resultado = await consultarLalaUnificada(
+        msgEnviada,
+        {
+          nomeUsuario: perfilCalibrado?.nomeUsuario,
           prontidaoScore,
           horasSono: checkin.horasSono,
           dinheiroLivreHoje,
-          sachesEstoque: petsPerfil[0]?.estoqueSaches ?? 6,
-          tarefasPendentesHoje: tarefas.filter((tk) => !tk.feito).map((tk) => tk.texto),
-          compromissosHoje: compromissos.map((c) => `${c.hora} ${c.titulo}`),
+          sachesRestantes: petsPerfil[0]?.estoqueSaches ?? 6,
+          tarefasHojeCount: tarefas.filter((tk) => !tk.feito).length,
+          prioridade1:
+            tarefas.find((tk) => !tk.feito)?.texto || "Organizar rotina do dia",
           disciplinasUERJ: disciplinas.map(
-            (d) => `${d.nome} (${d.horarioSala}) Faltas: ${d.faltasAtuais}/${d.faltasMax}`
+            (d) =>
+              `${d.nome} (${d.horarioSala}) Faltas: ${d.faltasAtuais}/${d.faltasMax}`
           ),
           projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
-          refeicoesDia: refeicoes.map(
-            (r) => `${r.horario} ${r.nome}: ${r.descricao} (${r.proteinaG}g P)`
-          ),
-          listaComprasPendentes: listaCompras
-            .filter((i) => !i.comprado)
-            .map((i) => `${i.nome} (${i.quantidadeComprar} ${i.unidade})`),
-          habitosDia: habitos.map((h) => `${h.titulo} (${h.metaTexto})`),
-          contasBancarias: contas.map(
-            (c) => `${c.nome} (${c.tipo}): R$ ${c.saldoAtual.toFixed(2)}`
-          ),
-          cartoesCredito: cartoes.map(
-            (cc) =>
-              `${cc.nome}: Fatura R$ ${cc.faturaAtual.toFixed(2)} / Limite R$ ${cc.limiteTotal.toFixed(2)}`
-          ),
-          nomeUsuario: perfilCalibrado?.nomeUsuario,
+          contasBancarias: contas.map((c) => ({
+            nome: c.nome,
+            saldoAtual: c.saldoAtual,
+          })),
+          cartoesCredito: cartoes.map((cc) => ({
+            nome: cc.nome,
+            faturaAtual: cc.faturaAtual,
+            limiteTotal: cc.limiteTotal,
+            vencimentoDia: cc.vencimentoDia,
+          })),
+          tomLala: tom,
+          autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
+          tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
+          regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
           instrucoesPersonalizadasLala:
             perfilCalibrado?.instrucoesPersonalizadasLala,
-          historicoRecente: interacoes.slice(0, 6).map((it) => ({
+          historicoConversa: interacoes.slice(0, 8).map((it) => ({
             usuario: it.mensagemUsuario,
             lala: it.respostaLala,
+            dataHora: it.dataHora,
           })),
         },
-      });
+        listaAnexos
+      );
 
-      const autoExecutar = perfilCalibrado?.autonomiaLala !== "confirmar";
-      const acoesProcessadas = resultado.acoesPropostas.map((ac) => {
-        if (autoExecutar && !ac.executada) {
-          onExecutarAcao(ac);
-          return { ...ac, executada: true };
+      // Processa aprendizados ou pedidos de automação vindos pelo chat
+      if (setPerfilCalibrado) {
+        if (resultado.novaRegraAprendida) {
+          const regra = resultado.novaRegraAprendida.trim();
+          setPerfilCalibrado((prev) => {
+            const atuais = prev.regrasAprendidasLala || [];
+            if (atuais.includes(regra)) return prev;
+            return {
+              ...prev,
+              regrasAprendidasLala: [regra, ...atuais],
+            };
+          });
+          showToast(`🧠 Lala aprendeu: "${regra}"`);
         }
-        return ac;
+
+        if (
+          resultado.automatizarTipos &&
+          resultado.automatizarTipos.length > 0
+        ) {
+          setPerfilCalibrado((prev) => {
+            const atuais = new Set(prev.tiposAutomatizados || []);
+            resultado.automatizarTipos!.forEach((tp) => atuais.add(tp));
+            return {
+              ...prev,
+              tiposAutomatizados: Array.from(atuais),
+            };
+          });
+          showToast(
+            `⚡ Processo automatizado pela Lala a seu pedido!`
+          );
+        }
+
+        if (
+          resultado.pedirConfirmacaoTipos &&
+          resultado.pedirConfirmacaoTipos.length > 0
+        ) {
+          setPerfilCalibrado((prev) => {
+            const remover = new Set(resultado.pedirConfirmacaoTipos || []);
+            return {
+              ...prev,
+              tiposAutomatizados: (prev.tiposAutomatizados || []).filter(
+                (tp) => !remover.has(tp)
+              ),
+            };
+          });
+          showToast(
+            `🛡️ Lala voltará a pedir confirmação antes de aplicar esse processo.`
+          );
+        }
+      }
+
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
       });
 
-      const novaInteracaoId = Date.now();
+      const acoesProcessadas = (resultado.acoesPropostas || []).map((ac) => {
+        const autoParaEsteTipo = deveExecutarAutomaticamente(ac.tipo);
+        if (autoParaEsteTipo && !ac.executada) {
+          onExecutarAcao(ac, novaInteracaoId);
+          return { ...ac, executada: true, executadaEm: agoraHora };
+        }
+        return { ...ac, executada: false };
+      });
+
       const novaInteracao: InteracaoGovernanta = {
         id: novaInteracaoId,
-        dataHora: new Date().toLocaleTimeString("pt-BR", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
+        dataHora: agoraHora,
         mensagemUsuario: msgEnviada,
         ...resultado,
         acoesPropostas: acoesProcessadas,
@@ -496,171 +703,406 @@ export function AbaGovernantaLala({
     }
   };
 
-  const renderMatrizComparativa = (matriz: MatrizDecisaoLala) => (
-    <div
-      className="mt-3 p-3.5 rounded-2xl border space-y-2.5"
-      style={{ backgroundColor: t.bg, borderColor: t.border }}
-    >
-      <div className="flex items-center gap-2">
-        <Scale size={14} style={{ color: t.action }} />
-        <span className="text-xs font-bold" style={{ color: t.text }}>
-          {matriz.dilema}
-        </span>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {[matriz.opcaoA, matriz.opcaoB].map((op, idx) => (
-          <div
-            key={idx}
-            className="p-2.5 rounded-xl border space-y-1"
-            style={{ backgroundColor: t.card, borderColor: t.border }}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold" style={{ color: t.text }}>
-                {op.nome}
-              </span>
-              <span
-                className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded-md text-white"
-                style={{ backgroundColor: idx === 0 ? t.primary : t.action }}
-              >
-                {op.scoreFinal}/10
-              </span>
-            </div>
-            <p className="text-[11px]" style={{ color: t.primary }}>
-              + {op.pontosFortes.join(" · ")}
+  // Combina ações pendentes no chat + histórico de ações executadas/editadas/desfeitas
+  const itensHistoricoUnificado = useMemo(() => {
+    const idsNoHistorico = new Set(historicoAcoesLala.map((h) => h.acaoId));
+    const pendentesComoHistorico: RegistroHistoricoAcaoLala[] =
+      acoesPendentesConfirmacao
+        .filter((p) => !idsNoHistorico.has(p.acao.id))
+        .map((p) => ({
+          id: `pend-${p.acao.id}`,
+          acaoId: p.acao.id,
+          interacaoId: p.interacaoId,
+          dataHora: p.dataHora,
+          acao: p.acao,
+          desfeita: false,
+          editadaPeloUsuario: false,
+          snapshotAntes: {},
+        }));
+
+    const todos = [...pendentesComoHistorico, ...historicoAcoesLala];
+
+    return todos.filter((item) => {
+      if (filtroHistorico === "pendentes") {
+        if (item.acao.executada || item.acao.recusada || item.desfeita)
+          return false;
+      } else if (filtroHistorico === "aplicadas") {
+        if (!item.acao.executada || item.desfeita) return false;
+      } else if (filtroHistorico === "editadas") {
+        if (!item.editadaPeloUsuario && !item.acao.editadaPeloUsuario)
+          return false;
+      } else if (filtroHistorico === "desfeitas") {
+        if (!item.desfeita && !item.acao.desfeita) return false;
+      }
+
+      if (buscaHistorico.trim()) {
+        const q = buscaHistorico.toLowerCase();
+        const matchTitulo = item.acao.titulo.toLowerCase().includes(q);
+        const matchDetalhe = item.acao.detalhe.toLowerCase().includes(q);
+        const matchTipo = getNomeAmigavelTipoAcao(item.acao.tipo)
+          .toLowerCase()
+          .includes(q);
+        const matchNota = (item.notaAprendizado || "")
+          .toLowerCase()
+          .includes(q);
+        return matchTitulo || matchDetalhe || matchTipo || matchNota;
+      }
+
+      return true;
+    });
+  }, [
+    historicoAcoesLala,
+    acoesPendentesConfirmacao,
+    filtroHistorico,
+    buscaHistorico,
+  ]);
+
+  const adicionarRegraManual = () => {
+    const limpa = novaRegraInput.trim();
+    if (!limpa || !setPerfilCalibrado) return;
+    setPerfilCalibrado((prev) => ({
+      ...prev,
+      regrasAprendidasLala: [limpa, ...(prev.regrasAprendidasLala || [])],
+    }));
+    setNovaRegraInput("");
+    showToast("🧠 Nova regra de aprendizado adicionada à memória da Lala!");
+  };
+
+  const salvarEdicaoRegra = (idx: number) => {
+    const limpa = editandoRegraTexto.trim();
+    if (!limpa || !setPerfilCalibrado) return;
+    setPerfilCalibrado((prev) => {
+      const lista = [...(prev.regrasAprendidasLala || [])];
+      lista[idx] = limpa;
+      return { ...prev, regrasAprendidasLala: lista };
+    });
+    setEditandoRegraIdx(null);
+    setEditandoRegraTexto("");
+    showToast("Regra atualizada!");
+  };
+
+  const removerRegraAprendida = (idx: number) => {
+    if (!setPerfilCalibrado) return;
+    setPerfilCalibrado((prev) => ({
+      ...prev,
+      regrasAprendidasLala: (prev.regrasAprendidasLala || []).filter(
+        (_, i) => i !== idx
+      ),
+    }));
+    showToast("Regra removida da memória da Lala.");
+  };
+
+  const renderMatrizComparativa = (matriz: MatrizDecisaoLala) => {
+    if (!matriz.opcaoA || !matriz.opcaoB) {
+      return (
+        <div
+          className="mt-3 p-3.5 rounded-2xl border space-y-2"
+          style={{ backgroundColor: t.bg, borderColor: t.border }}
+        >
+          {matriz.cenarioA && (
+            <p className="text-xs" style={{ color: t.text }}>
+              <strong>Cenário A:</strong> {matriz.cenarioA}
             </p>
-          </div>
-        ))}
+          )}
+          {matriz.cenarioB && (
+            <p className="text-xs" style={{ color: t.text }}>
+              <strong>Cenário B:</strong> {matriz.cenarioB}
+            </p>
+          )}
+          <p className="text-xs font-medium" style={{ color: t.text }}>
+            <strong style={{ color: t.primary }}>Veredito:</strong>{" "}
+            {matriz.vereditoLala}
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="mt-3 p-3.5 rounded-2xl border space-y-2.5"
+        style={{ backgroundColor: t.bg, borderColor: t.border }}
+      >
+        <div className="flex items-center gap-2">
+          <Scale size={14} style={{ color: t.action }} />
+          <span className="text-xs font-bold" style={{ color: t.text }}>
+            {matriz.dilema}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {[matriz.opcaoA, matriz.opcaoB].map((op, idx) => (
+            <div
+              key={idx}
+              className="p-2.5 rounded-xl border space-y-1"
+              style={{ backgroundColor: t.card, borderColor: t.border }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold" style={{ color: t.text }}>
+                  {op.nome}
+                </span>
+                <span
+                  className="text-[10px] font-mono-num font-bold px-1.5 py-0.5 rounded-md text-white"
+                  style={{ backgroundColor: idx === 0 ? t.primary : t.action }}
+                >
+                  {op.scoreFinal}/10
+                </span>
+              </div>
+              <p className="text-[11px]" style={{ color: t.primary }}>
+                + {op.pontosFortes.join(" · ")}
+              </p>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs font-medium" style={{ color: t.text }}>
+          <strong style={{ color: t.primary }}>Veredito:</strong>{" "}
+          {matriz.vereditoLala}
+        </p>
       </div>
-      <p className="text-xs font-medium" style={{ color: t.text }}>
-        <strong style={{ color: t.primary }}>Veredito:</strong>{" "}
-        {matriz.vereditoLala}
-      </p>
-    </div>
-  );
+    );
+  };
+
+  const modoAutonomiaAtual = perfilCalibrado?.autonomiaLala ?? "confirmar";
+  const tiposAutomatizadosAtuais = perfilCalibrado?.tiposAutomatizados || [];
+  const contagensConfirmacao =
+    perfilCalibrado?.contagemConfirmacoesPorTipo || {};
+  const regrasAprendidas = perfilCalibrado?.regrasAprendidasLala || [];
 
   return (
     <div
-      className="flex flex-col h-[calc(100vh-140px)] min-h-[540px] max-h-[840px] rounded-3xl border overflow-hidden shadow-sm"
+      className="flex flex-col h-[calc(100vh-130px)] min-h-[560px] max-h-[860px] rounded-3xl border overflow-hidden shadow-sm"
       style={{ backgroundColor: t.card, borderColor: t.border }}
     >
-      {/* CABEÇALHO REFINADO DO BATE-PAPO */}
+      {/* CABEÇALHO REFINADO DA LALA */}
       <div
-        className="px-4 sm:px-5 py-3.5 border-b flex items-center justify-between gap-2 shrink-0"
+        className="px-4 sm:px-5 pt-3.5 pb-2.5 border-b space-y-2.5 shrink-0"
         style={{
           background: `linear-gradient(180deg, ${t.card} 0%, ${t.bg} 100%)`,
           borderColor: t.border,
         }}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="relative shrink-0">
-            <div
-              className="w-10 h-10 rounded-2xl flex items-center justify-center text-white shadow-sm"
-              style={{
-                background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-              }}
-            >
-              <Sparkles size={18} />
-            </div>
-            <span
-              className="w-3 h-3 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
-              style={{ backgroundColor: "#10B981", borderColor: t.card }}
-            />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-bold truncate" style={{ color: t.text }}>
-                Governanta Lala
-              </h2>
-              <span
-                className="text-[10px] font-bold px-2 py-0.5 rounded-full hidden sm:inline-block"
-                style={{ backgroundColor: `${t.primary}18`, color: t.primary }}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="relative shrink-0">
+              <div
+                className="w-10 h-10 rounded-2xl flex items-center justify-center text-white shadow-sm"
+                style={{
+                  background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                }}
               >
-                Visão & Voz Ativas
-              </span>
+                <Sparkles size={18} />
+              </div>
+              <span
+                className="w-3 h-3 rounded-full border-2 absolute -bottom-0.5 -right-0.5"
+                style={{ backgroundColor: "#10B981", borderColor: t.card }}
+              />
             </div>
-            <p className="text-[11px] truncate" style={{ color: t.textSoft }}>
-              Converse, envie múltiplos prints de contas/extratos ou peça qualquer alteração no app
-            </p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2
+                  className="text-sm sm:text-base font-bold truncate"
+                  style={{ color: t.text }}
+                >
+                  Governanta Lala
+                </h2>
+                <span
+                  className="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1"
+                  style={{
+                    backgroundColor:
+                      modoAutonomiaAtual === "confirmar"
+                        ? `${t.alert}18`
+                        : `${t.primary}18`,
+                    color:
+                      modoAutonomiaAtual === "confirmar" ? t.alert : t.primary,
+                  }}
+                >
+                  {modoAutonomiaAtual === "confirmar" ? (
+                    <>
+                      <ShieldAlert size={11} />
+                      <span>
+                        Modo Confirmação & Aprendizado
+                        {tiposAutomatizadosAtuais.length > 0
+                          ? ` (${tiposAutomatizadosAtuais.length} auto)`
+                          : ""}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Zap size={11} />
+                      <span>Modo Automático Ativo</span>
+                    </>
+                  )}
+                </span>
+              </div>
+              <p className="text-[11px] truncate" style={{ color: t.textSoft }}>
+                Todas as ações têm confirmação, edição para ensinar a Lala e botão de desfazer
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Seletor de Tom */}
+            <select
+              value={tom}
+              onChange={(e) => setTom(e.target.value as TomGovernanta)}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-semibold border outline-none cursor-pointer hidden sm:block"
+              style={{
+                backgroundColor: t.card,
+                color: t.text,
+                borderColor: t.border,
+              }}
+              title="Personalidade da Lala"
+            >
+              <option value="equilibrada">Tom: Equilibrada</option>
+              <option value="acolhedora">Tom: Acolhedora</option>
+              <option value="executiva">Tom: Executiva</option>
+              <option value="treinadora">Tom: Treinadora</option>
+            </select>
+
+            {/* Toggle Voz */}
+            <button
+              type="button"
+              onClick={toggleVozAutomatica}
+              className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all"
+              style={{
+                backgroundColor: vozAutomaticaLala ? `${t.primary}18` : t.card,
+                color: vozAutomaticaLala ? t.primary : t.textSoft,
+                borderColor: vozAutomaticaLala ? t.primary : t.border,
+              }}
+              title="Ativar/desativar resposta falada da Lala"
+            >
+              {vozAutomaticaLala ? (
+                <Volume2 size={14} />
+              ) : (
+                <VolumeX size={14} />
+              )}
+              <span className="hidden md:inline">
+                {vozAutomaticaLala ? "Voz ON" : "Mudo"}
+              </span>
+            </button>
+
+            {/* Botão Editar Dados do Perfil */}
+            {perfilCalibrado && setPerfilCalibrado && (
+              <button
+                type="button"
+                onClick={() => setPainelPerfilAberto((v) => !v)}
+                className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all"
+                style={{
+                  backgroundColor: painelPerfilAberto ? t.action : t.card,
+                  color: painelPerfilAberto ? "#fff" : t.text,
+                  borderColor: painelPerfilAberto ? t.action : t.border,
+                }}
+                title="Editar suas informações básicas e preferências"
+              >
+                <UserCog size={14} />
+                <span className="hidden md:inline">Meus Dados</span>
+              </button>
+            )}
+
+            {interacoes.length > 1 && subAba === "chat" && (
+              <button
+                type="button"
+                onClick={() => {
+                  setInteracoes((prev) => prev.slice(0, 1));
+                  showToast("Histórico de conversa limpo.");
+                }}
+                className="p-1.5 rounded-xl border cursor-pointer hover:opacity-80"
+                style={{
+                  backgroundColor: t.card,
+                  color: t.textSoft,
+                  borderColor: t.border,
+                }}
+                title="Limpar histórico de mensagens"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* Seletor de Tom */}
-          <select
-            value={tom}
-            onChange={(e) => setTom(e.target.value as TomGovernanta)}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-semibold border outline-none cursor-pointer"
-            style={{
-              backgroundColor: t.card,
-              color: t.text,
-              borderColor: t.border,
-            }}
-            title="Personalidade da Lala"
-          >
-            <option value="equilibrada">Tom: Equilibrada</option>
-            <option value="acolhedora">Tom: Acolhedora</option>
-            <option value="executiva">Tom: Executiva</option>
-            <option value="treinadora">Tom: Treinadora</option>
-          </select>
-
-          {/* Toggle Voz */}
+        {/* SUB-NAVEGAÇÃO DA LALA: BATE-PAPO | HISTÓRICO DE AÇÕES (EDITAR/DESFAZER) | APRENDIZADO & AUTOMAÇÕES */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pt-0.5">
           <button
             type="button"
-            onClick={toggleVozAutomatica}
-            className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all"
+            onClick={() => setSubAba("chat")}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all shrink-0"
             style={{
-              backgroundColor: vozAutomaticaLala ? `${t.primary}18` : t.card,
-              color: vozAutomaticaLala ? t.primary : t.textSoft,
-              borderColor: vozAutomaticaLala ? t.primary : t.border,
+              backgroundColor: subAba === "chat" ? t.primary : t.card,
+              color: subAba === "chat" ? "#fff" : t.text,
+              borderColor: subAba === "chat" ? t.primary : t.border,
             }}
-            title="Ativar/desativar resposta falada da Lala"
           >
-            {vozAutomaticaLala ? <Volume2 size={14} /> : <VolumeX size={14} />}
-            <span className="hidden sm:inline">
-              {vozAutomaticaLala ? "Voz ON" : "Mudo"}
+            <MessageSquare size={13} />
+            <span>Bate-Papo</span>
+            {acoesPendentesConfirmacao.length > 0 && (
+              <span
+                className="px-1.5 py-0.2 rounded-full text-[10px] font-extrabold"
+                style={{
+                  backgroundColor:
+                    subAba === "chat" ? "#ffffff" : `${t.alert}25`,
+                  color: subAba === "chat" ? t.primary : t.alert,
+                }}
+              >
+                {acoesPendentesConfirmacao.length} pendente
+                {acoesPendentesConfirmacao.length > 1 ? "s" : ""}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSubAba("historico")}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all shrink-0"
+            style={{
+              backgroundColor: subAba === "historico" ? t.primary : t.card,
+              color: subAba === "historico" ? "#fff" : t.text,
+              borderColor: subAba === "historico" ? t.primary : t.border,
+            }}
+          >
+            <History size={13} />
+            <span>Histórico de Ações (Editar / Desfazer)</span>
+            <span
+              className="px-1.5 py-0.2 rounded-full text-[10px] font-mono-num font-bold"
+              style={{
+                backgroundColor:
+                  subAba === "historico" ? "rgba(255,255,255,0.22)" : t.cardSubtle,
+                color: subAba === "historico" ? "#fff" : t.textSoft,
+              }}
+            >
+              {historicoAcoesLala.length + acoesPendentesConfirmacao.length}
             </span>
           </button>
 
-          {/* Botão Editar Dados do Perfil & Memória */}
-          {perfilCalibrado && setPerfilCalibrado && (
-            <button
-              type="button"
-              onClick={() => setPainelPerfilAberto((v) => !v)}
-              className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all"
-              style={{
-                backgroundColor: painelPerfilAberto ? t.action : t.card,
-                color: painelPerfilAberto ? "#fff" : t.text,
-                borderColor: painelPerfilAberto ? t.action : t.border,
-              }}
-              title="Editar suas informações básicas e preferências"
-            >
-              <UserCog size={14} />
-              <span className="hidden md:inline">Meus Dados</span>
-            </button>
-          )}
-
-          {interacoes.length > 1 && (
-            <button
-              type="button"
-              onClick={() => {
-                setInteracoes((prev) => prev.slice(0, 1));
-                showToast("Histórico de conversa limpo.");
-              }}
-              className="p-1.5 rounded-xl border cursor-pointer hover:opacity-80"
-              style={{
-                backgroundColor: t.card,
-                color: t.textSoft,
-                borderColor: t.border,
-              }}
-              title="Limpar histórico de mensagens"
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setSubAba("aprendizado")}
+            className="px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 border cursor-pointer transition-all shrink-0"
+            style={{
+              backgroundColor: subAba === "aprendizado" ? t.primary : t.card,
+              color: subAba === "aprendizado" ? "#fff" : t.text,
+              borderColor: subAba === "aprendizado" ? t.primary : t.border,
+            }}
+          >
+            <Brain size={13} />
+            <span>Confirmações & Automações</span>
+            {(regrasAprendidas.length > 0 ||
+              tiposAutomatizadosAtuais.length > 0) && (
+              <span
+                className="px-1.5 py-0.2 rounded-full text-[10px] font-mono-num font-bold"
+                style={{
+                  backgroundColor:
+                    subAba === "aprendizado"
+                      ? "rgba(255,255,255,0.22)"
+                      : `${t.primary}18`,
+                  color: subAba === "aprendizado" ? "#fff" : t.primary,
+                }}
+              >
+                {regrasAprendidas.length + tiposAutomatizadosAtuais.length}
+              </span>
+            )}
+          </button>
         </div>
       </div>
 
-      {/* PAINEL INLINE EDITÁVEL: MEUS DADOS & MEMÓRIA DA LALA (SUBSTITUI A ANTIGA CALIBRAGEM) */}
+      {/* PAINEL INLINE EDITÁVEL: MEUS DADOS & MEMÓRIA DA LALA */}
       {painelPerfilAberto && perfilCalibrado && setPerfilCalibrado && (
         <div
           className="px-4 sm:px-5 py-3.5 border-b space-y-3 shrink-0 animate-fade-in"
@@ -691,7 +1133,10 @@ export function AbaGovernantaLala({
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Seu Nome
               </label>
               <input
@@ -704,11 +1149,18 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Curso / Universidade
               </label>
               <input
@@ -721,11 +1173,18 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Período / Semestre
               </label>
               <input
@@ -738,11 +1197,18 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Frentes de Trabalho
               </label>
               <input
@@ -755,14 +1221,21 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
           </div>
 
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Meta Sono (h)
               </label>
               <input
@@ -777,11 +1250,18 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Meta Proteína (g)
               </label>
               <input
@@ -795,11 +1275,18 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div>
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
                 Meta Calorias (kcal)
               </label>
               <input
@@ -813,15 +1300,22 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs font-mono-num border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               />
             </div>
             <div className="col-span-3 sm:col-span-1">
-              <label className="text-[10px] font-bold uppercase block mb-1" style={{ color: t.textSoft }}>
-                Modo de Ação da Lala
+              <label
+                className="text-[10px] font-bold uppercase block mb-1"
+                style={{ color: t.textSoft }}
+              >
+                Modo Padrão da Lala
               </label>
               <select
-                value={perfilCalibrado.autonomiaLala || "auto"}
+                value={perfilCalibrado.autonomiaLala || "confirmar"}
                 onChange={(e) =>
                   setPerfilCalibrado((prev) => ({
                     ...prev,
@@ -830,411 +1324,1096 @@ export function AbaGovernantaLala({
                   }))
                 }
                 className="w-full px-2.5 py-1.5 rounded-xl text-xs border outline-none"
-                style={{ backgroundColor: t.card, color: t.text, borderColor: t.border }}
+                style={{
+                  backgroundColor: t.card,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
               >
-                <option value="auto">Aplicar direto no App</option>
-                <option value="confirmar">Pedir confirmação antes</option>
+                <option value="confirmar">
+                  Pedir confirmação (Aprendendo)
+                </option>
+                <option value="auto">Aplicar tudo automático</option>
               </select>
             </div>
           </div>
         </div>
       )}
 
-      {/* ÁREA DE MENSAGENS (ESTILO MENSAGEIRO MODERNO COM WIDGETS VISUAIS DO APP) */}
-      <div
-        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5"
-        style={{ backgroundColor: t.bg }}
-      >
-        {interacoesCronologicas.map((it) => {
-          const listaAnexosMsg =
-            it.anexos && it.anexos.length > 0
-              ? it.anexos
-              : it.anexo
-              ? [it.anexo]
-              : [];
-
-          return (
-            <div key={it.id} className="space-y-3">
-              {/* Balão do Usuário (Direita) */}
-              <div className="flex justify-end">
-                <div
-                  className="max-w-[85%] sm:max-w-[72%] rounded-3xl rounded-tr-md px-4 py-3 text-white shadow-xs space-y-2.5"
-                  style={{
-                    background: `linear-gradient(135deg, ${t.primary} 0%, ${t.primary}E6 100%)`,
-                  }}
+      {/* ==================== VISÃO 1: BATE-PAPO COM A LALA ==================== */}
+      {subAba === "chat" && (
+        <>
+          {/* Faixa rápida de ações aguardando confirmação, se houver */}
+          {acoesPendentesConfirmacao.length > 0 && (
+            <div
+              className="px-4 py-2 border-b flex items-center justify-between gap-2 shrink-0"
+              style={{
+                backgroundColor: `${t.alert}14`,
+                borderColor: `${t.alert}40`,
+              }}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <ShieldAlert
+                  size={14}
+                  className="shrink-0"
+                  style={{ color: t.alert }}
+                />
+                <span
+                  className="text-xs font-bold truncate"
+                  style={{ color: t.text }}
                 >
-                  {listaAnexosMsg.length > 0 && (
-                    <div
-                      className={`grid gap-2 ${
-                        listaAnexosMsg.length > 1 ? "grid-cols-2" : "grid-cols-1"
-                      }`}
-                    >
-                      {listaAnexosMsg.map((anx, idx) =>
-                        anx.mimeType.startsWith("image/") && anx.base64 ? (
-                          <img
-                            key={idx}
-                            src={`data:${anx.mimeType};base64,${anx.base64}`}
-                            alt={anx.nome}
-                            className="max-h-52 w-full rounded-2xl object-cover border border-white/20"
-                          />
-                        ) : (
-                          <div
-                            key={idx}
-                            className="px-3 py-2 rounded-xl bg-black/20 text-[11px] flex items-center gap-2 truncate"
-                          >
-                            <FileText size={13} />
-                            <span className="truncate">{anx.nome}</span>
-                          </div>
-                        )
-                      )}
-                    </div>
-                  )}
-                  <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
-                    {it.mensagemUsuario}
-                  </p>
-                  <span className="block text-[10px] text-white/75 text-right font-mono-num">
-                    {it.dataHora}
-                  </span>
-                </div>
+                  Você tem {acoesPendentesConfirmacao.length} ação(ões) da Lala aguardando sua revisão ou confirmação
+                </span>
               </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSubAba("historico");
+                  setFiltroHistorico("pendentes");
+                }}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 cursor-pointer"
+                style={{
+                  backgroundColor: t.alert,
+                  color: "#fff",
+                }}
+              >
+                Ver Pendentes
+              </button>
+            </div>
+          )}
 
-              {/* Balão da Lala (Esquerda) + Destaque Visual das Partes do App Alteradas */}
-              <div className="flex items-start gap-2.5 sm:gap-3">
-                <div
-                  className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white mt-0.5 shadow-2xs"
-                  style={{
-                    background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-                  }}
-                >
-                  <Sparkles size={14} />
-                </div>
+          <div
+            className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5"
+            style={{ backgroundColor: t.bg }}
+          >
+            {interacoesCronologicas.map((it) => {
+              const listaAnexosMsg =
+                it.anexos && it.anexos.length > 0
+                  ? it.anexos
+                  : it.anexo
+                  ? [it.anexo]
+                  : [];
 
-                <div className="max-w-[92%] sm:max-w-[82%] space-y-2.5 flex-1">
-                  {/* Texto conversacional da Lala */}
-                  <div
-                    className="rounded-3xl rounded-tl-md p-4 border shadow-xs space-y-2.5"
-                    style={{ backgroundColor: t.card, borderColor: t.border }}
-                  >
-                    <p
-                      className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap"
-                      style={{ color: t.text }}
+              const qtdPendentesCard = (it.acoesPropostas || []).filter(
+                (a) => !a.executada && !a.recusada && !a.desfeita
+              ).length;
+
+              return (
+                <div key={it.id} className="space-y-3">
+                  {/* Balão do Usuário (Direita) */}
+                  <div className="flex justify-end">
+                    <div
+                      className="max-w-[85%] sm:max-w-[72%] rounded-3xl rounded-tr-md px-4 py-3 text-white shadow-xs space-y-2.5"
+                      style={{
+                        background: `linear-gradient(135deg, ${t.primary} 0%, ${t.primary}E6 100%)`,
+                      }}
                     >
-                      {it.respostaLala}
-                    </p>
-
-                    {it.matrizDecisao &&
-                      renderMatrizComparativa(it.matrizDecisao)}
-
-                    {/* Rodapé do balão: Ouvir resposta + Horário */}
-                    <div className="flex items-center justify-between pt-1">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          reproduzirFalaDaLala(it.id, it.respostaLala)
-                        }
-                        className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                        style={{
-                          backgroundColor:
-                            idFalandoAgora === it.id
-                              ? t.action
-                              : carregandoVozId === it.id
-                              ? `${t.primary}20`
-                              : t.cardSubtle,
-                          color:
-                            idFalandoAgora === it.id ? "#fff" : t.textSoft,
-                        }}
-                      >
-                        {idFalandoAgora === it.id ? (
-                          <>
-                            <Square size={10} fill="#fff" />
-                            <span>Parar voz</span>
-                          </>
-                        ) : carregandoVozId === it.id ? (
-                          <>
-                            <Volume2 size={12} className="animate-pulse" />
-                            <span>Gerando voz...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Volume2 size={12} />
-                            <span>Ouvir</span>
-                          </>
-                        )}
-                      </button>
-
-                      <span
-                        className="text-[10px] font-mono-num"
-                        style={{ color: t.textSoft }}
-                      >
-                        Lala · {it.dataHora}
+                      {listaAnexosMsg.length > 0 && (
+                        <div
+                          className={`grid gap-2 ${
+                            listaAnexosMsg.length > 1
+                              ? "grid-cols-2"
+                              : "grid-cols-1"
+                          }`}
+                        >
+                          {listaAnexosMsg.map((anx, idx) =>
+                            anx.mimeType.startsWith("image/") && anx.base64 ? (
+                              <img
+                                key={idx}
+                                src={
+                                  anx.base64.startsWith("data:")
+                                    ? anx.base64
+                                    : `data:${anx.mimeType};base64,${anx.base64}`
+                                }
+                                alt={anx.nome}
+                                className="max-h-52 w-full rounded-2xl object-cover border border-white/20"
+                              />
+                            ) : (
+                              <div
+                                key={idx}
+                                className="px-3 py-2 rounded-xl bg-black/20 text-[11px] flex items-center gap-2 truncate"
+                              >
+                                <FileText size={13} />
+                                <span className="truncate">{anx.nome}</span>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                        {it.mensagemUsuario}
+                      </p>
+                      <span className="block text-[10px] text-white/75 text-right font-mono-num">
+                        {it.dataHora}
                       </span>
                     </div>
                   </div>
 
-                  {/* DESTAQUE VISUAL DE COMPONENTES DO APP ALTERADOS PELA LALA */}
-                  {it.acoesPropostas && it.acoesPropostas.length > 0 && (
-                    <div className="space-y-2 pl-0.5">
-                      <div className="flex items-center gap-1.5 px-1">
-                        <span
-                          className="w-2 h-2 rounded-full"
-                          style={{ backgroundColor: t.primary }}
-                        />
-                        <span
-                          className="text-[10px] font-extrabold uppercase tracking-wider"
-                          style={{ color: t.textSoft }}
-                        >
-                          Alterações realizadas no aplicativo ({it.acoesPropostas.length})
-                        </span>
-                      </div>
-
-                      <div className="space-y-2">
-                        {it.acoesPropostas.map((ac) => (
-                          <LalaAppActionCard
-                            key={ac.id}
-                            t={t}
-                            acao={ac}
-                            onExecutar={() => onExecutarAcao(ac, it.id)}
-                            onIrParaModulo={onIrParaAba}
-                          />
-                        ))}
-                      </div>
+                  {/* Balão da Lala (Esquerda) + Cards Interativos de Ação */}
+                  <div className="flex items-start gap-2.5 sm:gap-3">
+                    <div
+                      className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white mt-0.5 shadow-2xs"
+                      style={{
+                        background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                      }}
+                    >
+                      <Sparkles size={14} />
                     </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
 
-        {processando && (
-          <div className="flex items-start gap-2.5">
-            <div
-              className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white"
-              style={{
-                background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-              }}
-            >
-              <Sparkles size={14} className="animate-spin" />
-            </div>
-            <div
-              className="rounded-3xl rounded-tl-md px-4 py-3 border text-xs font-medium flex items-center gap-2"
-              style={{
-                backgroundColor: t.card,
-                borderColor: t.border,
-                color: t.textSoft,
-              }}
-            >
-              <MessageSquare size={13} style={{ color: t.primary }} />
-              <span>Lala está analisando e atualizando o aplicativo...</span>
-            </div>
-          </div>
-        )}
+                    <div className="max-w-[94%] sm:max-w-[85%] space-y-2.5 flex-1">
+                      {/* Texto conversacional da Lala */}
+                      <div
+                        className="rounded-3xl rounded-tl-md p-4 border shadow-xs space-y-2.5"
+                        style={{
+                          backgroundColor: t.card,
+                          borderColor: t.border,
+                        }}
+                      >
+                        <p
+                          className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap"
+                          style={{ color: t.text }}
+                        >
+                          {it.respostaLala}
+                        </p>
 
-        <div ref={chatEndRef} />
-      </div>
+                        {it.matrizDecisao &&
+                          renderMatrizComparativa(it.matrizDecisao)}
 
-      {/* BARRA INFERIOR DE MENSAGEM E MULTI-UPLOAD */}
-      <div
-        className="p-3 sm:p-4 border-t space-y-2.5 shrink-0"
-        style={{ backgroundColor: t.card, borderColor: t.border }}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/*,.pdf,.csv,.ofx,.txt,.ics,.json,audio/*"
-          onChange={handleSelecionarArquivos}
-          className="hidden"
-        />
+                        {/* Rodapé do balão: Ouvir resposta + Horário */}
+                        <div className="flex items-center justify-between pt-1">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              reproduzirFalaDaLala(it.id, it.respostaLala)
+                            }
+                            className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+                            style={{
+                              backgroundColor:
+                                idFalandoAgora === it.id
+                                  ? t.action
+                                  : carregandoVozId === it.id
+                                  ? `${t.primary}20`
+                                  : t.cardSubtle,
+                              color:
+                                idFalandoAgora === it.id ? "#fff" : t.textSoft,
+                            }}
+                          >
+                            {idFalandoAgora === it.id ? (
+                              <>
+                                <Square size={10} fill="#fff" />
+                                <span>Parar voz</span>
+                              </>
+                            ) : carregandoVozId === it.id ? (
+                              <>
+                                <Volume2 size={12} className="animate-pulse" />
+                                <span>Gerando voz...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Volume2 size={12} />
+                                <span>Ouvir</span>
+                              </>
+                            )}
+                          </button>
 
-        {/* Strip de Previews quando há 1 ou várias imagens selecionadas */}
-        {anexosAtuais.length > 0 && (
-          <div className="flex items-center gap-2 overflow-x-auto pb-1">
-            {anexosAtuais.map((anx, idx) => (
-              <div
-                key={idx}
-                className="relative group shrink-0 rounded-2xl border p-1.5 flex items-center gap-2"
-                style={{ backgroundColor: t.bg, borderColor: t.primary }}
-              >
-                {anx.mimeType.startsWith("image/") && anx.base64 ? (
-                  <img
-                    src={`data:${anx.mimeType};base64,${anx.base64}`}
-                    alt={anx.nome}
-                    className="w-12 h-12 rounded-xl object-cover"
-                  />
-                ) : (
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{
-                      backgroundColor: `${t.primary}15`,
-                      color: t.primary,
-                    }}
-                  >
-                    <Paperclip size={16} />
+                          <span
+                            className="text-[10px] font-mono-num"
+                            style={{ color: t.textSoft }}
+                          >
+                            Lala · {it.dataHora}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* DESTAQUE VISUAL DE AÇÕES DA LALA (CONFIRMAR, EDITAR OU DESFAZER) */}
+                      {it.acoesPropostas && it.acoesPropostas.length > 0 && (
+                        <div className="space-y-2 pl-0.5">
+                          <div className="flex items-center justify-between gap-2 px-1 flex-wrap">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className="w-2 h-2 rounded-full"
+                                style={{
+                                  backgroundColor:
+                                    qtdPendentesCard > 0 ? t.alert : t.primary,
+                                }}
+                              />
+                              <span
+                                className="text-[10px] font-extrabold uppercase tracking-wider"
+                                style={{ color: t.textSoft }}
+                              >
+                                {qtdPendentesCard > 0
+                                  ? `Ações propostas pela Lala (${qtdPendentesCard} aguardando sua confirmação)`
+                                  : `Ações desta conversa (${it.acoesPropostas.length})`}
+                              </span>
+                            </div>
+
+                            {qtdPendentesCard > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  it.acoesPropostas?.forEach((ac) => {
+                                    if (
+                                      !ac.executada &&
+                                      !ac.recusada &&
+                                      !ac.desfeita
+                                    ) {
+                                      onExecutarAcao(ac, it.id);
+                                    }
+                                  });
+                                }}
+                                className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-white flex items-center gap-1 cursor-pointer"
+                                style={{ backgroundColor: t.primary }}
+                              >
+                                <CheckCircle2 size={11} />
+                                Confirmar todas ({qtdPendentesCard})
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {it.acoesPropostas.map((ac) => {
+                              const regHist = historicoAcoesLala.find(
+                                (h) => h.acaoId === ac.id
+                              );
+                              const isAuto =
+                                modoAutonomiaAtual === "auto" ||
+                                tiposAutomatizadosAtuais.includes(ac.tipo);
+                              const numConf =
+                                contagensConfirmacao[ac.tipo] || 0;
+
+                              return (
+                                <LalaAppActionCard
+                                  key={ac.id}
+                                  t={t}
+                                  acao={ac}
+                                  dataHora={regHist?.dataHora || it.dataHora}
+                                  notaAprendizado={regHist?.notaAprendizado}
+                                  tipoAutomatizado={isAuto}
+                                  confirmacoesDesteTipo={numConf}
+                                  onExecutar={() => onExecutarAcao(ac, it.id)}
+                                  onDesfazer={
+                                    onDesfazerAcao
+                                      ? () => onDesfazerAcao(ac.id)
+                                      : undefined
+                                  }
+                                  onRecusar={
+                                    onRecusarAcao
+                                      ? () => onRecusarAcao(ac.id, it.id)
+                                      : undefined
+                                  }
+                                  onEditarEExecutar={
+                                    onEditarEExecutarAcao
+                                      ? (acaoEditada, nota) =>
+                                          onEditarEExecutarAcao(
+                                            acaoEditada,
+                                            nota,
+                                            it.id
+                                          )
+                                      : undefined
+                                  }
+                                  onToggleAutomacaoTipo={onToggleAutomacaoTipo}
+                                  onIrParaModulo={onIrParaAba}
+                                />
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-                <div className="max-w-[110px] pr-5">
-                  <p
-                    className="text-[11px] font-bold truncate"
-                    style={{ color: t.text }}
-                  >
-                    {anx.nome}
-                  </p>
-                  <p
-                    className="text-[10px] font-mono-num"
-                    style={{ color: t.textSoft }}
-                  >
-                    {formatarTamanhoBytes(anx.tamanhoBytes)}
-                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAnexosAtuais((prev) =>
-                      prev.filter((_, i) => i !== idx)
-                    )
-                  }
-                  className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center bg-black/60 text-white cursor-pointer"
-                  title="Remover anexo"
+              );
+            })}
+
+            {processando && (
+              <div className="flex items-start gap-2.5">
+                <div
+                  className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white"
+                  style={{
+                    background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                  }}
                 >
-                  <X size={11} />
-                </button>
+                  <Sparkles size={14} className="animate-spin" />
+                </div>
+                <div
+                  className="rounded-3xl rounded-tl-md px-4 py-3 border text-xs font-medium flex items-center gap-2"
+                  style={{
+                    backgroundColor: t.card,
+                    borderColor: t.border,
+                    color: t.textSoft,
+                  }}
+                >
+                  <MessageSquare size={13} style={{ color: t.primary }} />
+                  <span>Lala está preparando as ações para você revisar...</span>
+                </div>
               </div>
-            ))}
+            )}
 
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="h-14 px-3 rounded-2xl border border-dashed flex items-center gap-1.5 text-xs font-bold shrink-0 cursor-pointer"
-              style={{ borderColor: t.primary, color: t.primary }}
-            >
-              <Plus size={14} /> + Imagens
-            </button>
+            <div ref={chatEndRef} />
           </div>
-        )}
 
-        {gravando ? (
+          {/* BARRA INFERIOR DE MENSAGEM E MULTI-UPLOAD */}
           <div
-            className="p-2.5 rounded-2xl border flex items-center justify-between gap-3"
-            style={{
-              backgroundColor: `${t.danger}12`,
-              borderColor: t.danger,
-            }}
+            className="p-3 sm:p-4 border-t space-y-2.5 shrink-0"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
           >
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span
-                className="w-3 h-3 rounded-full animate-ping shrink-0"
-                style={{ backgroundColor: t.danger }}
-              />
-              <span
-                className="text-xs font-mono-num font-bold shrink-0"
-                style={{ color: t.danger }}
-              >
-                {formatarTempoGravacao(segundosGravacao)}
-              </span>
-              <span
-                className="text-xs truncate"
-                style={{ color: t.textSoft }}
-              >
-                {transcricaoAoVivo || "Ouvindo você..."}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={cancelarAudio}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer"
-                style={{
-                  backgroundColor: t.card,
-                  color: t.textSoft,
-                  borderColor: t.border,
-                }}
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={pararEEnviarAudio}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer"
-                style={{ backgroundColor: t.primary }}
-              >
-                <Send size={13} /> Enviar Áudio
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-              style={{
-                backgroundColor:
-                  anexosAtuais.length > 0 ? `${t.primary}18` : t.bg,
-                color: anexosAtuais.length > 0 ? t.primary : t.textSoft,
-                borderColor:
-                  anexosAtuais.length > 0 ? t.primary : t.border,
-              }}
-              title="Anexar 1 ou várias imagens, prints de contas, PDFs ou planilhas"
-            >
-              <Paperclip size={18} />
-            </button>
-
-            <textarea
-              rows={1}
-              value={mensagem}
-              onPaste={handlePaste}
-              onChange={(e) => setMensagem(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  enviarMensagemParaLala();
-                }
-              }}
-              placeholder={
-                anexosAtuais.length > 0
-                  ? `Diga o que a Lala deve fazer com os ${anexosAtuais.length} arquivo(s)...`
-                  : "Converse com a Lala, cole prints (Ctrl+V) ou peça alterações no app..."
-              }
-              className="flex-1 px-4 py-3 rounded-2xl text-xs sm:text-sm outline-none border resize-none max-h-32"
-              style={{
-                backgroundColor: t.bg,
-                color: t.text,
-                borderColor: t.border,
-              }}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,.pdf,.csv,.ofx,.txt,.ics,.json,audio/*"
+              onChange={handleSelecionarArquivos}
+              className="hidden"
             />
 
-            <button
-              type="button"
-              onClick={iniciarGravacaoDeVoz}
-              className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-              style={{
-                backgroundColor: t.bg,
-                color: t.primary,
-                borderColor: t.border,
-              }}
-              title="Gravar áudio para a Lala"
-            >
-              <Mic size={18} />
-            </button>
+            {anexosAtuais.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                {anexosAtuais.map((anx, idx) => (
+                  <div
+                    key={idx}
+                    className="relative group shrink-0 rounded-2xl border p-1.5 flex items-center gap-2"
+                    style={{ backgroundColor: t.bg, borderColor: t.primary }}
+                  >
+                    {anx.mimeType.startsWith("image/") && anx.base64 ? (
+                      <img
+                        src={
+                          anx.base64.startsWith("data:")
+                            ? anx.base64
+                            : `data:${anx.mimeType};base64,${anx.base64}`
+                        }
+                        alt={anx.nome}
+                        className="w-12 h-12 rounded-xl object-cover"
+                      />
+                    ) : (
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center"
+                        style={{
+                          backgroundColor: `${t.primary}15`,
+                          color: t.primary,
+                        }}
+                      >
+                        <Paperclip size={16} />
+                      </div>
+                    )}
+                    <div className="max-w-[110px] pr-5">
+                      <p
+                        className="text-[11px] font-bold truncate"
+                        style={{ color: t.text }}
+                      >
+                        {anx.nome}
+                      </p>
+                      <p
+                        className="text-[10px] font-mono-num"
+                        style={{ color: t.textSoft }}
+                      >
+                        {formatarTamanhoBytes(anx.tamanhoBytes)}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAnexosAtuais((prev) =>
+                          prev.filter((_, i) => i !== idx)
+                        )
+                      }
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center bg-black/60 text-white cursor-pointer"
+                      title="Remover anexo"
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
 
-            <button
-              type="button"
-              disabled={
-                processando ||
-                (!mensagem.trim() && anexosAtuais.length === 0)
-              }
-              onClick={() => enviarMensagemParaLala()}
-              className="p-3 rounded-2xl text-white shrink-0 cursor-pointer disabled:opacity-40 transition-all"
-              style={{ backgroundColor: t.primary }}
-              title="Enviar mensagem"
-            >
-              <Send size={18} />
-            </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="h-14 px-3 rounded-2xl border border-dashed flex items-center gap-1.5 text-xs font-bold shrink-0 cursor-pointer"
+                  style={{ borderColor: t.primary, color: t.primary }}
+                >
+                  <Plus size={14} /> + Imagens
+                </button>
+              </div>
+            )}
+
+            {gravando ? (
+              <div
+                className="p-2.5 rounded-2xl border flex items-center justify-between gap-3"
+                style={{
+                  backgroundColor: `${t.danger}12`,
+                  borderColor: t.danger,
+                }}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className="w-3 h-3 rounded-full animate-ping shrink-0"
+                    style={{ backgroundColor: t.danger }}
+                  />
+                  <span
+                    className="text-xs font-mono-num font-bold shrink-0"
+                    style={{ color: t.danger }}
+                  >
+                    {formatarTempoGravacao(segundosGravacao)}
+                  </span>
+                  <span
+                    className="text-xs truncate"
+                    style={{ color: t.textSoft }}
+                  >
+                    {transcricaoAoVivo || "Ouvindo você..."}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={cancelarAudio}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer"
+                    style={{
+                      backgroundColor: t.card,
+                      color: t.textSoft,
+                      borderColor: t.border,
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={pararEEnviarAudio}
+                    className="px-3.5 py-1.5 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer"
+                    style={{ backgroundColor: t.primary }}
+                  >
+                    <Send size={13} /> Enviar Áudio
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                  style={{
+                    backgroundColor:
+                      anexosAtuais.length > 0 ? `${t.primary}18` : t.bg,
+                    color: anexosAtuais.length > 0 ? t.primary : t.textSoft,
+                    borderColor:
+                      anexosAtuais.length > 0 ? t.primary : t.border,
+                  }}
+                  title="Anexar 1 ou várias imagens, prints de contas, PDFs ou planilhas"
+                >
+                  <Paperclip size={18} />
+                </button>
+
+                <textarea
+                  rows={1}
+                  value={mensagem}
+                  onPaste={handlePaste}
+                  onChange={(e) => setMensagem(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      enviarMensagemParaLala();
+                    }
+                  }}
+                  placeholder={
+                    anexosAtuais.length > 0
+                      ? `Diga o que a Lala deve fazer com os ${anexosAtuais.length} arquivo(s)...`
+                      : "Converse com a Lala, cole prints (Ctrl+V), ensine regras ou peça alterações..."
+                  }
+                  className="flex-1 px-4 py-3 rounded-2xl text-xs sm:text-sm outline-none border resize-none max-h-32"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={iniciarGravacaoDeVoz}
+                  className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.primary,
+                    borderColor: t.border,
+                  }}
+                  title="Gravar áudio para a Lala"
+                >
+                  <Mic size={18} />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={
+                    processando ||
+                    (!mensagem.trim() && anexosAtuais.length === 0)
+                  }
+                  onClick={() => enviarMensagemParaLala()}
+                  className="p-3 rounded-2xl text-white shrink-0 cursor-pointer disabled:opacity-40 transition-all"
+                  style={{ backgroundColor: t.primary }}
+                  title="Enviar mensagem"
+                >
+                  <Send size={18} />
+                </button>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
+
+      {/* ==================== VISÃO 2: HISTÓRICO DE AÇÕES DA LALA (EDITAR / DESFAZER) ==================== */}
+      {subAba === "historico" && (
+        <div
+          className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4"
+          style={{ backgroundColor: t.bg }}
+        >
+          {/* Cabeçalho e Filtros do Histórico */}
+          <div
+            className="p-4 rounded-2xl border space-y-3"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold flex items-center gap-2" style={{ color: t.text }}>
+                  <History size={16} style={{ color: t.primary }} />
+                  Central de Histórico & Controle de Ações da Lala
+                </h3>
+                <p className="text-xs" style={{ color: t.textSoft }}>
+                  Veja tudo o que a Lala propôs ou alterou no app. Você pode confirmar, editar qualquer detalhe (para ela aprender) ou desfazer a ação restaurando os dados anteriores.
+                </p>
+              </div>
+
+              <div className="relative min-w-[210px]">
+                <Search
+                  size={13}
+                  className="absolute left-3 top-1/2 -translate-y-1/2"
+                  style={{ color: t.textSoft }}
+                />
+                <input
+                  value={buscaHistorico}
+                  onChange={(e) => setBuscaHistorico(e.target.value)}
+                  placeholder="Buscar ação, valor ou módulo..."
+                  className="w-full pl-8 pr-3 py-1.5 rounded-xl text-xs border outline-none"
+                  style={{
+                    backgroundColor: t.bg,
+                    color: t.text,
+                    borderColor: t.border,
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                {
+                  id: "todas",
+                  label: `Todas (${
+                    historicoAcoesLala.length + acoesPendentesConfirmacao.length
+                  })`,
+                },
+                {
+                  id: "pendentes",
+                  label: `⏳ Aguardando Confirmação (${acoesPendentesConfirmacao.length})`,
+                },
+                {
+                  id: "aplicadas",
+                  label: `✅ Aplicadas (${
+                    historicoAcoesLala.filter((h) => !h.desfeita).length
+                  })`,
+                },
+                {
+                  id: "editadas",
+                  label: `✏️ Editadas por Mim (${
+                    historicoAcoesLala.filter((h) => h.editadaPeloUsuario)
+                      .length
+                  })`,
+                },
+                {
+                  id: "desfeitas",
+                  label: `↩️ Desfeitas (${
+                    historicoAcoesLala.filter((h) => h.desfeita).length
+                  })`,
+                },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() =>
+                    setFiltroHistorico(
+                      tab.id as
+                        | "todas"
+                        | "pendentes"
+                        | "aplicadas"
+                        | "editadas"
+                        | "desfeitas"
+                    )
+                  }
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold border cursor-pointer transition-all"
+                  style={{
+                    backgroundColor:
+                      filtroHistorico === tab.id ? t.primary : t.bg,
+                    color: filtroHistorico === tab.id ? "#fff" : t.textSoft,
+                    borderColor:
+                      filtroHistorico === tab.id ? t.primary : t.border,
+                  }}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Lista de Cards de Ação no Histórico */}
+          {itensHistoricoUnificado.length === 0 ? (
+            <div
+              className="p-8 rounded-2xl border text-center space-y-2"
+              style={{ backgroundColor: t.card, borderColor: t.border }}
+            >
+              <RotateCcw
+                size={28}
+                className="mx-auto opacity-50"
+                style={{ color: t.primary }}
+              />
+              <p className="text-sm font-bold" style={{ color: t.text }}>
+                Nenhuma ação encontrada neste filtro
+              </p>
+              <p className="text-xs max-w-md mx-auto" style={{ color: t.textSoft }}>
+                Assim que você conversar com a Lala ou enviar prints de contas, agendas ou tarefas, todas as ações propostas e realizadas aparecerão aqui para você editar ou desfazer quando quiser.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {itensHistoricoUnificado.map((item) => {
+                const isAuto =
+                  modoAutonomiaAtual === "auto" ||
+                  tiposAutomatizadosAtuais.includes(item.acao.tipo);
+                const numConf = contagensConfirmacao[item.acao.tipo] || 0;
+
+                return (
+                  <LalaAppActionCard
+                    key={item.id}
+                    t={t}
+                    acao={item.acao}
+                    dataHora={item.dataHora}
+                    notaAprendizado={item.notaAprendizado}
+                    tipoAutomatizado={isAuto}
+                    confirmacoesDesteTipo={numConf}
+                    onExecutar={() =>
+                      onExecutarAcao(item.acao, item.interacaoId)
+                    }
+                    onDesfazer={
+                      onDesfazerAcao
+                        ? () => onDesfazerAcao(item.acaoId)
+                        : undefined
+                    }
+                    onRecusar={
+                      onRecusarAcao
+                        ? () => onRecusarAcao(item.acaoId, item.interacaoId)
+                        : undefined
+                    }
+                    onEditarEExecutar={
+                      onEditarEExecutarAcao
+                        ? (acaoEditada, nota) =>
+                            onEditarEExecutarAcao(
+                              acaoEditada,
+                              nota,
+                              item.interacaoId
+                            )
+                        : undefined
+                    }
+                    onToggleAutomacaoTipo={onToggleAutomacaoTipo}
+                    onIrParaModulo={onIrParaAba}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================== VISÃO 3: APRENDIZADO & AUTOMAÇÕES PROGRESSIVAS ==================== */}
+      {subAba === "aprendizado" && (
+        <div
+          className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5"
+          style={{ backgroundColor: t.bg }}
+        >
+          {/* 1. Modo Geral de Confirmação vs Automação */}
+          <div
+            className="p-4 sm:p-5 rounded-2xl border space-y-3.5"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div>
+              <h3
+                className="text-sm font-bold flex items-center gap-2"
+                style={{ color: t.text }}
+              >
+                <ShieldAlert size={16} style={{ color: t.primary }} />
+                Como a Lala deve agir no início vs. no futuro?
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                De início, mantenha no modo <strong>Pedir Confirmação</strong> para revisar e editar as ações da Lala. Conforme ela for acertando do seu jeito, você pode automatizar processos específicos abaixo!
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!setPerfilCalibrado) return;
+                  setPerfilCalibrado((prev) => ({
+                    ...prev,
+                    autonomiaLala: "confirmar",
+                  }));
+                  showToast(
+                    "🛡️ Modo Confirmação ativado: a Lala pedirá sua aprovação antes de alterar o app (exceto nos processos que você automatizar abaixo)."
+                  );
+                }}
+                className="p-3.5 rounded-2xl border-2 text-left space-y-1.5 cursor-pointer transition-all"
+                style={{
+                  backgroundColor:
+                    modoAutonomiaAtual === "confirmar"
+                      ? `${t.primary}12`
+                      : t.bg,
+                  borderColor:
+                    modoAutonomiaAtual === "confirmar" ? t.primary : t.border,
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className="text-xs font-extrabold flex items-center gap-1.5"
+                    style={{ color: t.text }}
+                  >
+                    <ShieldAlert size={14} style={{ color: t.primary }} />
+                    Pedir Confirmação (Aprendendo com Você)
+                  </span>
+                  {modoAutonomiaAtual === "confirmar" && (
+                    <span
+                      className="text-[10px] font-bold px-2 py-0.5 rounded-full text-white"
+                      style={{ backgroundColor: t.primary }}
+                    >
+                      ATIVO
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px]" style={{ color: t.textSoft }}>
+                  A Lala prepara o card da ação no chat e aguarda você clicar em <strong>Confirmar</strong> ou <strong>Editar</strong>. Apenas os processos marcados como "Automatizado" na lista abaixo rodam direto.
+                </p>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (!setPerfilCalibrado) return;
+                  setPerfilCalibrado((prev) => ({
+                    ...prev,
+                    autonomiaLala: "auto",
+                  }));
+                  showToast(
+                    "⚡ Modo Automático Total ativado: a Lala aplicará tudo imediatamente (você ainda pode editar ou desfazer no Histórico)."
+                  );
+                }}
+                className="p-3.5 rounded-2xl border-2 text-left space-y-1.5 cursor-pointer transition-all"
+                style={{
+                  backgroundColor:
+                    modoAutonomiaAtual === "auto" ? `${t.action}12` : t.bg,
+                  borderColor:
+                    modoAutonomiaAtual === "auto" ? t.action : t.border,
+                }}
+              >
+                <div className="flex items-center justify-between">
+                  <span
+                    className="text-xs font-extrabold flex items-center gap-1.5"
+                    style={{ color: t.text }}
+                  >
+                    <Zap size={14} style={{ color: t.action }} />
+                    Automático Total (Executar Tudo Direto)
+                  </span>
+                  {modoAutonomiaAtual === "auto" && (
+                    <span
+                      className="text-[10px] font-bold px-2 py-0.5 rounded-full text-white"
+                      style={{ backgroundColor: t.action }}
+                    >
+                      ATIVO
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px]" style={{ color: t.textSoft }}>
+                  A Lala executa todas as alterações direto no app sem perguntar antes. Você continua podendo revisar, editar ou desfazer tudo no Histórico.
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {/* 2. Regras & Preferências que a Lala aprendeu com você */}
+          <div
+            className="p-4 sm:p-5 rounded-2xl border space-y-3.5"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div>
+              <h3
+                className="text-sm font-bold flex items-center gap-2"
+                style={{ color: t.text }}
+              >
+                <Brain size={16} style={{ color: t.action }} />
+                O que a Lala já aprendeu com suas edições e instruções ({regrasAprendidas.length})
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                Sempre que você edita uma ação da Lala ou ensina algo no chat, a regra fica salva aqui para ela acertar de primeira nas próximas vezes.
+              </p>
+            </div>
+
+            {/* Adicionar nova regra manualmente */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                value={novaRegraInput}
+                onChange={(e) => setNovaRegraInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    adicionarRegraManual();
+                  }
+                }}
+                placeholder="Ex: Sempre que eu mandar Uber, lance na categoria Transporte & UERJ..."
+                className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                style={{
+                  backgroundColor: t.bg,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              />
+              <button
+                type="button"
+                onClick={adicionarRegraManual}
+                disabled={!novaRegraInput.trim()}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+                style={{ backgroundColor: t.primary }}
+              >
+                <Plus size={14} /> Ensinar Regra à Lala
+              </button>
+            </div>
+
+            {regrasAprendidas.length === 0 ? (
+              <div
+                className="p-4 rounded-xl border text-xs"
+                style={{
+                  backgroundColor: t.bg,
+                  borderColor: t.border,
+                  color: t.textSoft,
+                }}
+              >
+                Ainda não há regras registradas. Quando a Lala propuser uma ação e você clicar em <strong>"Editar Ação"</strong> (ou escrever uma regra acima), ela memorizará seu jeito aqui!
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {regrasAprendidas.map((regra, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-xl border flex items-center justify-between gap-2"
+                    style={{ backgroundColor: t.bg, borderColor: t.border }}
+                  >
+                    {editandoRegraIdx === idx ? (
+                      <div className="flex-1 flex items-center gap-2">
+                        <input
+                          value={editandoRegraTexto}
+                          onChange={(e) =>
+                            setEditandoRegraTexto(e.target.value)
+                          }
+                          className="flex-1 px-2.5 py-1.5 rounded-lg text-xs border outline-none"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.text,
+                            borderColor: t.primary,
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => salvarEdicaoRegra(idx)}
+                          className="px-2.5 py-1 rounded-lg text-xs font-bold text-white cursor-pointer"
+                          style={{ backgroundColor: t.primary }}
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditandoRegraIdx(null)}
+                          className="px-2 py-1 rounded-lg text-xs border cursor-pointer"
+                          style={{
+                            backgroundColor: t.card,
+                            color: t.textSoft,
+                            borderColor: t.border,
+                          }}
+                        >
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-start gap-2 min-w-0">
+                          <span
+                            className="w-5 h-5 rounded-lg flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5"
+                            style={{
+                              backgroundColor: `${t.primary}18`,
+                              color: t.primary,
+                            }}
+                          >
+                            {idx + 1}
+                          </span>
+                          <p
+                            className="text-xs leading-relaxed"
+                            style={{ color: t.text }}
+                          >
+                            {regra}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditandoRegraIdx(idx);
+                              setEditandoRegraTexto(regra);
+                            }}
+                            className="p-1.5 rounded-lg border cursor-pointer"
+                            style={{
+                              backgroundColor: t.card,
+                              color: t.textSoft,
+                              borderColor: t.border,
+                            }}
+                            title="Editar regra"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => removerRegraAprendida(idx)}
+                            className="p-1.5 rounded-lg border cursor-pointer"
+                            style={{
+                              backgroundColor: t.card,
+                              color: t.danger,
+                              borderColor: t.border,
+                            }}
+                            title="Excluir regra"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 3. Automação por Processo (Pedir Confirmação vs Automatizado) */}
+          <div
+            className="p-4 sm:p-5 rounded-2xl border space-y-3.5"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div>
+              <h3
+                className="text-sm font-bold flex items-center gap-2"
+                style={{ color: t.text }}
+              >
+                <Zap size={16} style={{ color: t.primary }} />
+                Automação por Processo (Automatize só o que já estiver redondo)
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                Escolha quais tipos de ação ainda precisam da sua confirmação e quais a Lala já pode fazer sozinha automaticamente.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {PROCESSOS_CONFIGURAVEIS.map((proc) => {
+                const jaAutomatizado =
+                  modoAutonomiaAtual === "auto" ||
+                  tiposAutomatizadosAtuais.includes(proc.tipo);
+                const numConfirmacoes = contagensConfirmacao[proc.tipo] || 0;
+
+                return (
+                  <div
+                    key={proc.tipo}
+                    className="p-3.5 rounded-2xl border flex items-center justify-between gap-3"
+                    style={{
+                      backgroundColor: jaAutomatizado
+                        ? `${t.primary}08`
+                        : t.bg,
+                      borderColor: jaAutomatizado ? t.primary : t.border,
+                    }}
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span
+                          className="text-xs font-bold"
+                          style={{ color: t.text }}
+                        >
+                          {proc.nome}
+                        </span>
+                        <span
+                          className="text-[10px] font-mono-num font-semibold px-2 py-0.5 rounded-full"
+                          style={{
+                            backgroundColor: t.cardSubtle,
+                            color: t.textSoft,
+                          }}
+                        >
+                          {numConfirmacoes}x confirmada
+                          {numConfirmacoes === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      <p
+                        className="text-[11px] leading-snug"
+                        style={{ color: t.textSoft }}
+                      >
+                        {proc.descricao}
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (modoAutonomiaAtual === "auto" && setPerfilCalibrado) {
+                          // Se estava em auto global e clicou para pedir confirmação neste processo, muda para modo confirmar mantendo os outros
+                          const todosMenosEste = PROCESSOS_CONFIGURAVEIS.map(
+                            (p) => p.tipo
+                          ).filter((tp) => tp !== proc.tipo);
+                          setPerfilCalibrado((prev) => ({
+                            ...prev,
+                            autonomiaLala: "confirmar",
+                            tiposAutomatizados: todosMenosEste,
+                          }));
+                          showToast(
+                            `🛡️ "${proc.nome}" agora pedirá sua confirmação antes!`
+                          );
+                          return;
+                        }
+                        if (onToggleAutomacaoTipo) {
+                          onToggleAutomacaoTipo(proc.tipo, !jaAutomatizado);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-xl text-[11px] font-bold shrink-0 flex items-center gap-1.5 border cursor-pointer transition-all"
+                      style={{
+                        backgroundColor: jaAutomatizado ? t.primary : t.card,
+                        color: jaAutomatizado ? "#fff" : t.alert,
+                        borderColor: jaAutomatizado ? t.primary : t.alert,
+                      }}
+                    >
+                      {jaAutomatizado ? (
+                        <>
+                          <Zap size={12} />
+                          <span>Automatizado</span>
+                        </>
+                      ) : (
+                        <>
+                          <ShieldAlert size={12} />
+                          <span>Pedir Confirmação</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

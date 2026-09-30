@@ -339,6 +339,14 @@ export function AbaCalendario({
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "NETWORK_INSTABILITY") {
+          if (!silencioso) {
+            showToast(
+              "Conexão instável no momento. Exibindo sua agenda salva localmente."
+            );
+          }
+          return;
+        }
         if (!silencioso) {
           if (msg === "AUTH_REQUIRED" || msg === "SCOPE_REQUIRED") {
             try {

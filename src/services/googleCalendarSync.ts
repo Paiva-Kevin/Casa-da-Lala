@@ -3,9 +3,11 @@
 // with full native Google Calendar fields (all-day, start/end time, recurrence, location, description, reminders).
 
 import {
+  fetchWithNetworkRetry,
   getAccessToken,
   getConnectedGoogleAccounts,
   invalidateExpiredToken,
+  isNetworkInstabilityError,
   trySilentTokenRefresh,
 } from './googleDriveSync';
 
@@ -427,11 +429,13 @@ export async function listarEventosGoogleCalendarMes(
   const seenKeys = new Set<string>();
   let anySuccess = false;
   let scopeError = false;
+  let authError = false;
+  let networkError = false;
 
   await Promise.all(
     targets.map(async (target) => {
       try {
-        let res = await fetch(
+        let res = await fetchWithNetworkRetry(
           `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
             target.calendarId
           )}/events?${params.toString()}`,
@@ -442,14 +446,14 @@ export async function listarEventosGoogleCalendarMes(
           }
         );
 
-        if (res.status === 401 || res.status === 403) {
+        if (res.status === 401) {
           invalidateExpiredToken(target.token);
           const renewed = await trySilentTokenRefresh(
             target.contaEmail !== 'primary' ? target.contaEmail : undefined
           );
           if (renewed) {
             target.token = renewed;
-            res = await fetch(
+            res = await fetchWithNetworkRetry(
               `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
                 target.calendarId
               )}/events?${params.toString()}`,
@@ -463,7 +467,10 @@ export async function listarEventosGoogleCalendarMes(
         }
 
         if (res.status === 401 || res.status === 403) {
-          invalidateExpiredToken(target.token);
+          if (res.status === 401) {
+            invalidateExpiredToken(target.token);
+            authError = true;
+          }
           let detail = '';
           try {
             const errJson = await res.json();
@@ -501,15 +508,20 @@ export async function listarEventosGoogleCalendarMes(
             }
           }
         });
-      } catch {
-        // ignore network error on individual calendar so others still load
+      } catch (err) {
+        if (isNetworkInstabilityError(err)) {
+          networkError = true;
+        }
       }
     })
   );
 
   if (!anySuccess && targets.length > 0) {
+    if (networkError || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      throw new Error('NETWORK_INSTABILITY');
+    }
     if (scopeError) throw new Error('SCOPE_REQUIRED');
-    throw new Error('AUTH_REQUIRED');
+    if (authError) throw new Error('AUTH_REQUIRED');
   }
 
   return allMapped;
@@ -693,7 +705,7 @@ export async function criarEventoGoogleCalendar(
 
   const body = buildGoogleEventBody(input);
 
-  const res = await fetch(
+  const res = await fetchWithNetworkRetry(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
       target.calendarId
     )}/events`,
@@ -707,7 +719,7 @@ export async function criarEventoGoogleCalendar(
     }
   );
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }
@@ -743,7 +755,7 @@ export async function atualizarEventoGoogleCalendar(
 
   const body = buildGoogleEventBody(input);
 
-  const res = await fetch(
+  const res = await fetchWithNetworkRetry(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
       target.calendarId
     )}/events/${encodeURIComponent(gcalId)}`,
@@ -757,7 +769,7 @@ export async function atualizarEventoGoogleCalendar(
     }
   );
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }
@@ -791,7 +803,7 @@ export async function excluirEventoGoogleCalendar(
     calendarIdOrAccount
   );
 
-  const res = await fetch(
+  const res = await fetchWithNetworkRetry(
     `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(
       target.calendarId
     )}/events/${encodeURIComponent(gcalId)}`,
@@ -803,7 +815,7 @@ export async function excluirEventoGoogleCalendar(
     }
   );
 
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
     invalidateExpiredToken(target.token);
     throw new Error('AUTH_REQUIRED');
   }

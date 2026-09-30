@@ -53,6 +53,9 @@ export interface PerfilUsuarioCalibrado {
   instrucoesPersonalizadasLala?: string;
   horarioAcordar?: string;
   horarioDormir?: string;
+  tiposAutomatizados?: AcaoGovernanta["tipo"][];
+  contagemConfirmacoesPorTipo?: Partial<Record<AcaoGovernanta["tipo"], number>>;
+  regrasAprendidasLala?: string[];
 }
 
 export type IntencaoImportacaoArquivo =
@@ -127,6 +130,10 @@ export interface AcaoGovernanta {
   titulo: string;
   detalhe: string;
   executada: boolean;
+  desfeita?: boolean;
+  recusada?: boolean;
+  editadaPeloUsuario?: boolean;
+  executadaEm?: string;
   payload?: {
     texto?: string;
     valor?: number;
@@ -289,9 +296,55 @@ export interface AcaoGovernanta {
 }
 
 export interface MatrizDecisaoLala {
-  cenarioA: string;
-  cenarioB: string;
+  cenarioA?: string;
+  cenarioB?: string;
+  dilema?: string;
+  opcaoA?: {
+    nome: string;
+    scoreFinal: number;
+    pontosFortes: string[];
+  };
+  opcaoB?: {
+    nome: string;
+    scoreFinal: number;
+    pontosFortes: string[];
+  };
   vereditoLala: string;
+}
+
+export interface SnapshotEstadoAcaoLala {
+  tarefas?: TaskItem[];
+  compromissos?: Compromisso[];
+  contas?: ContaBancaria[];
+  cartoes?: CartaoCredito[];
+  lancamentos?: LancamentoFinanceiro[];
+  petsPerfil?: PetPerfil[];
+  estoqueCasa?: ItemEstoqueCasa[];
+  listaCompras?: ItemListaCompras[];
+  refeicoes?: ItemRefeicao[];
+  fichasTreino?: FichaTreino[];
+  disciplinas?: Disciplina[];
+  projetos?: ProjetoTrabalho[];
+  habitos?: HabitoDiario[];
+  metas?: MetaItem[];
+  radarItens?: ItemRadar[];
+  checkin?: CheckinProntidao;
+  perfilCalibrado?: PerfilUsuarioCalibrado;
+  repositorio?: ArquivoRepositorio[];
+  ultimoSRPE?: number;
+  volumeSemana?: number[];
+}
+
+export interface RegistroHistoricoAcaoLala {
+  id: string;
+  acaoId: string;
+  interacaoId?: number;
+  dataHora: string;
+  acao: AcaoGovernanta;
+  desfeita: boolean;
+  editadaPeloUsuario?: boolean;
+  notaAprendizado?: string;
+  snapshotAntes: SnapshotEstadoAcaoLala;
 }
 
 export interface InteracaoGovernanta {
@@ -314,6 +367,9 @@ export interface InteracaoGovernanta {
   matrizDecisao?: MatrizDecisaoLala;
   guardadoNoCofre?: boolean;
   sugestoesResposta?: string[];
+  novaRegraAprendida?: string;
+  automatizarTipos?: AcaoGovernanta["tipo"][];
+  pedirConfirmacaoTipos?: AcaoGovernanta["tipo"][];
 }
 
 export type AbaTipo = TabId;

@@ -911,6 +911,7 @@ export function CasaPetsScreen({
                         {
                           id: Date.now(),
                           nome: novoComodoNome.trim(),
+                          icone: "home",
                           rotinas: [],
                         },
                       ]);
@@ -1422,7 +1423,7 @@ export function CasaPetsScreen({
                           quantidadeAtual: 2,
                           quantidadeMinima: Math.max(1, Number(novoEstoqueMin) || 1),
                           unidade: novoEstoqueUn.trim() || "un",
-                          precoEstimado: 18,
+                          precoEstimadoReposicao: 18,
                         },
                       ]);
                       setNovoEstoqueNome("");

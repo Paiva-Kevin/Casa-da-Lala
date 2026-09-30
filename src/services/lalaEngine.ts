@@ -31,6 +31,8 @@ export interface LalaContextSnapshot {
   }[];
   tomLala?: string;
   autonomiaLala?: "auto" | "confirmar";
+  tiposAutomatizados?: AcaoGovernanta["tipo"][];
+  regrasAprendidasLala?: string[];
   instrucoesPersonalizadasLala?: string;
   horarioAcordar?: string;
   horarioDormir?: string;
@@ -1251,16 +1253,87 @@ export function processarMensagemLocalLala(
   };
 }
 
+export interface ConsultarLalaInputObject {
+  mensagem: string;
+  tom?: string;
+  anexo?: AnexoLala;
+  anexos?: AnexoLala[];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  contexto?: any;
+}
+
 export async function consultarLalaUnificada(
-  texto: string,
-  ctx: LalaContextSnapshot,
+  textoOuObj: string | ConsultarLalaInputObject,
+  ctxArg?: LalaContextSnapshot,
   anexoOuAnexos?: AnexoLala | AnexoLala[]
 ): Promise<Omit<InteracaoGovernanta, "id" | "dataHora" | "mensagemUsuario">> {
-  const listaAnexos: AnexoLala[] = Array.isArray(anexoOuAnexos)
-    ? anexoOuAnexos
-    : anexoOuAnexos
-    ? [anexoOuAnexos]
-    : [];
+  const texto =
+    typeof textoOuObj === "string"
+      ? textoOuObj
+      : String(textoOuObj?.mensagem || "");
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rawCtx: any =
+    typeof textoOuObj === "object" && textoOuObj !== null
+      ? textoOuObj.contexto || ctxArg || {}
+      : ctxArg || {};
+
+  const ctx: LalaContextSnapshot = {
+    nomeUsuario: rawCtx.nomeUsuario,
+    prontidaoScore: Number(rawCtx.prontidaoScore ?? 80),
+    horasSono: Number(rawCtx.horasSono ?? 7.5),
+    dinheiroLivreHoje: Number(rawCtx.dinheiroLivreHoje ?? 100),
+    sachesRestantes: Number(
+      rawCtx.sachesRestantes ?? rawCtx.sachesEstoque ?? 6
+    ),
+    tarefasHojeCount: Number(
+      rawCtx.tarefasHojeCount ??
+        (Array.isArray(rawCtx.tarefasPendentesHoje)
+          ? rawCtx.tarefasPendentesHoje.length
+          : 3)
+    ),
+    prioridade1: String(
+      rawCtx.prioridade1 ||
+        (Array.isArray(rawCtx.tarefasPendentesHoje) &&
+        rawCtx.tarefasPendentesHoje[0]
+          ? rawCtx.tarefasPendentesHoje[0]
+          : "Foco do dia")
+    ),
+    disciplinasUERJ: Array.isArray(rawCtx.disciplinasUERJ)
+      ? rawCtx.disciplinasUERJ
+      : [],
+    projetosAtivos: Array.isArray(rawCtx.projetosAtivos)
+      ? rawCtx.projetosAtivos
+      : [],
+    contasBancarias: rawCtx.contasBancarias,
+    cartoesCredito: rawCtx.cartoesCredito,
+    tomLala:
+      rawCtx.tomLala ||
+      (typeof textoOuObj === "object" ? textoOuObj?.tom : undefined),
+    autonomiaLala: rawCtx.autonomiaLala || "confirmar",
+    tiposAutomatizados: rawCtx.tiposAutomatizados || [],
+    regrasAprendidasLala: rawCtx.regrasAprendidasLala || [],
+    instrucoesPersonalizadasLala: rawCtx.instrucoesPersonalizadasLala,
+    horarioAcordar: rawCtx.horarioAcordar,
+    horarioDormir: rawCtx.horarioDormir,
+    historicoConversa:
+      rawCtx.historicoConversa || rawCtx.historicoRecente || [],
+  };
+
+  const rawAnexos =
+    typeof textoOuObj === "object" && textoOuObj !== null
+      ? textoOuObj.anexos && textoOuObj.anexos.length > 0
+        ? textoOuObj.anexos
+        : textoOuObj.anexo
+        ? [textoOuObj.anexo]
+        : []
+      : Array.isArray(anexoOuAnexos)
+      ? anexoOuAnexos
+      : anexoOuAnexos
+      ? [anexoOuAnexos]
+      : [];
+
+  const listaAnexos: AnexoLala[] = rawAnexos.filter(Boolean);
   const primeiroAnexo = listaAnexos[0];
 
   // Se o usuário pediu explicitamente "só guardar" um arquivo, executa direto
@@ -1272,36 +1345,50 @@ export async function consultarLalaUnificada(
   let data: any = null;
 
   if (typeof navigator !== "undefined" && navigator.onLine) {
-    // 1. Tenta via rota de backend (/api/lala/interact)
-    try {
-      const res = await fetch("/api/lala/interact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mensagem: texto,
-          contextoApp: ctx,
-          historicoConversa: ctx.historicoConversa,
-          anexo: primeiroAnexo,
-          anexos: listaAnexos,
-        }),
-      });
+    const payloadBody = JSON.stringify({
+      mensagem: texto,
+      contextoApp: ctx,
+      historicoConversa: ctx.historicoConversa,
+      anexo: primeiroAnexo,
+      anexos: listaAnexos,
+    });
 
-      const contentType = res.headers.get("content-type") || "";
-      if (res.ok && contentType.includes("application/json")) {
-        const parsed = await res.json();
-        if (parsed && parsed.respostaLala) {
-          data = parsed;
+    // 1. Tenta via rota de backend local (/api/lala/interact) e URLs Cloud Run (caso hospedado em Firebase Hosting estático)
+    const apiEndpoints = [
+      "/api/lala/interact",
+      "https://ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
+      "https://ais-dev-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
+    ];
+
+    for (const endpoint of apiEndpoints) {
+      if (data) break;
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: payloadBody,
+        });
+
+        const contentType = res.headers.get("content-type") || "";
+        if (res.ok && contentType.includes("application/json")) {
+          const parsed = await res.json();
+          if (parsed && parsed.respostaLala) {
+            data = parsed;
+            break;
+          }
         }
+      } catch {
+        // Tenta o próximo endpoint ou o SDK direto
       }
-    } catch {
-      // Continua para tentativa direta caso esteja em hospedagem estática (Firebase Hosting / GitHub)
     }
 
-    // 2. Fallback Multimodal Direto via SDK (@google/genai) caso o app esteja hospedado em servidor estático (Firebase Hosting)
+    // 2. Fallback Multimodal Direto via SDK (@google/genai) com múltiplos modelos caso o app esteja em hospedagem estática
     if (!data) {
       try {
         const clientKey =
-          (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) || "";
+          (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) ||
+          (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) ||
+          "";
         if (clientKey) {
           const ai = new GoogleGenAI({ apiKey: clientKey });
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1326,31 +1413,128 @@ export async function consultarLalaUnificada(
             }
           }
 
-          parts.push({
-            text: `Você é a Lala, governanta pessoal do app Casa da Lala.
-Contexto atual da usuária: ${JSON.stringify(ctx)}
-Mensagem da usuária: ${texto || "Analise as imagens/arquivos anexados e atualize o aplicativo com todos os saldos, faturas, gastos, receitas, compromissos ou tarefas encontrados."}
+          const historicoFormatado =
+            Array.isArray(ctx.historicoConversa) &&
+            ctx.historicoConversa.length > 0
+              ? ctx.historicoConversa
+                  .slice(-10)
+                  .map(
+                    (h) =>
+                      `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+                  )
+                  .join("\n---\n")
+              : "Início da conversa.";
 
-IMPORTANTE:
-- NUNCA retorne apenas "GUARDAR_SEGUNDO_CEREBRO" quando a usuária enviar prints de contas bancárias, faturas, gastos, horários ou listas!
-- Se houver prints de contas bancárias, saldos ou cartões de crédito, extraia todos os valores e gere a ação "ATUALIZAR_CONTAS_FINANCAS" preenchendo "contasAjuste" ([{ "nome": "Banco", "saldoAtual": 123.45 }]) e/ou "cartoesAjuste" ([{ "nome": "Cartão", "faturaAtual": 123.45, "limiteTotal": 1000, "vencimentoDia": 10 }]), além de "REGISTRAR_GASTO" ou "REGISTRAR_RECEITA" se houver transações!
-- Retorne APENAS um JSON válido com: { "modoDetectado": "comando", "transcricaoAudioUsuario": "", "respostaLala": "sua resposta detalhada em pt-BR", "tituloCard": "Resumo", "tags": ["Finanças"], "acoesPropostas": [ { "tipo": "...", "titulo": "...", "detalhe": "...", "substituirExistentes": false, "valor": 0, "categoriaGasto": "Mercado", "texto": "", "contasAjuste": [], "cartoesAjuste": [], "compromissos": [], "refeicoes": [], "itensCompras": [], "disciplinas": [] } ] }`,
-          });
+          const systemInstruction = `Você é a Lala, a governanta pessoal e assistente de vida do aplicativo "Casa da Lala".
+Você conversa em formato de BATE-PAPO fluido, direto, caloroso e inteligente.
 
-          const response = await ai.models.generateContent({
-            model: "gemini-3.8-flash",
-            contents: parts,
-            config: {
-              responseMimeType: "application/json",
-            },
-          });
-          const raw = (response.text || "{}")
-            .replace(/^```json\s*/i, "")
-            .replace(/```\s*$/i, "")
-            .trim();
-          const parsed = JSON.parse(raw);
-          if (parsed && parsed.respostaLala) {
-            data = parsed;
+Contexto atual do aplicativo da usuária (inclui autonomiaLala, tiposAutomatizados e regrasAprendidasLala):
+${JSON.stringify(ctx)}
+
+Histórico recente da conversa:
+${historicoFormatado}
+
+MISSÃO PRINCIPAL:
+1. Você administra, filtra e atualiza QUALQUER parte do aplicativo a partir do que a usuária escrever, falar por áudio ou enviar em 1 ou várias imagens/prints/arquivos!
+2. REGRAS APRENDIDAS E CONFIRMAÇÃO PROGRESSIVA:
+   - Respeite rigorosamente as "regrasAprendidasLala" e "instrucoesPersonalizadasLala" presentes no contexto (são correções e preferências que a usuária já te ensinou!).
+   - Por padrão, a usuária prefere revisar e CONFIRMAR cada ação antes de alterar o app (exceto para tipos listados em "tiposAutomatizados" ou quando "autonomiaLala" === "auto"). Gere sempre as ações detalhadas em "acoesPropostas" e avise na "respostaLala" que deixou o card abaixo pronto para ela conferir, editar (para te ensinar) ou confirmar com 1 toque.
+   - Se a usuária ensinar uma regra ou preferência no chat, preencha "novaRegraAprendida".
+   - Se a usuária pedir para automatizar algum processo daqui pra frente, inclua os tipos em "automatizarTipos". Se pedir para voltar a confirmar, use "pedirConfirmacaoTipos".
+3. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
+   - Só gere a ação "GUARDAR_SEGUNDO_CEREBRO" se a usuária pedir EXPLICITAMENTE para guardar/arquivar o documento no Segundo Cérebro.
+   - Se a usuária enviar PRINTS DE CONTA BANCÁRIA, SALDO, EXTRATO, PIX OU CARTÃO DE CRÉDITO (ou der comandos sobre a conta dela): leia todos os números e nomes dos bancos/cartões nas imagens e gere IMEDIATAMENTE as ações "ATUALIZAR_CONTAS_FINANCAS" (com contasAjuste e/ou cartoesAjuste), "REGISTRAR_GASTO" e/ou "REGISTRAR_RECEITA"!
+   - Se a usuária enviar PRINTS DE HORÁRIOS, AGENDA, CALENDÁRIO OU AULAS: extraia os eventos/disciplinas e gere "AGENDAR_COMPROMISSO" e/ou "ATUALIZAR_GRADE_UERJ".
+   - Se enviar PRINTS/ARQUIVOS DE DIETA, CARDÁPIO OU MERCADO: extraia as refeições e ingredientes e gere "ATUALIZAR_DIETA_E_COMPRAS" ou "CRIAR_LISTA_COMPRAS".
+   - Se enviar PRINTS/ARQUIVOS DE TAREFAS, PROJETOS OU TREINO: gere "CRIAR_TAREFA", "ATUALIZAR_PROJETOS_TRABALHO" ou "ATUALIZAR_TREINO".
+4. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você preparou ou atualizou no app!
+
+Retorne SEMPRE um objeto JSON válido exatamente neste formato:
+{
+  "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
+  "transcricaoAudioUsuario": "string opcional se enviou áudio",
+  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você preparou/atualizou",
+  "tituloCard": "Resumo curto em até 5 palavras",
+  "tags": ["Tag1", "Tag2"],
+  "novaRegraAprendida": "string opcional se a usuária ensinou uma regra",
+  "automatizarTipos": [],
+  "pedirConfirmacaoTipos": [],
+  "acoesPropostas": [
+    {
+      "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
+      "titulo": "Título claro da ação executada",
+      "detalhe": "Explicação curta",
+      "substituirExistentes": false,
+      "texto": "string opcional",
+      "valor": 0,
+      "categoriaGasto": "Mercado" | "Pets" | "Transporte & UERJ" | "Saúde & Corpo" | "Lazer & Outros" | "Fixos & Reserva",
+      "contasAjuste": [{ "nome": "Nome do Banco/Conta", "saldoAtual": 1234.56 }],
+      "cartoesAjuste": [{ "nome": "Nome do Cartão", "faturaAtual": 500.00, "limiteTotal": 3000.00, "vencimentoDia": 10 }],
+      "compromissos": [{ "titulo": "Nome do evento", "hora": "14:00", "duracaoMin": 60, "diaMes": 30, "mes": 9, "ano": 2026, "local": "", "categoria": "pessoal", "sincronizarGoogle": true }],
+      "refeicoes": [{ "horario": "08:00", "nome": "Café da Manhã", "descricao": "Itens", "proteinaG": 30, "kcal": 400 }],
+      "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],
+      "disciplinas": [{ "nome": "Matéria", "professor": "Prof", "horarioSala": "Seg 08h-10h", "aulasTotaisSemestre": 30, "faltasMax": 7 }],
+      "petsAjuste": [{ "nome": "Nina", "racao": "Royal Canin", "estoqueSaches": 12, "estoqueRacaoKg": 4, "proximaVet": "Em dia" }],
+      "fichaTreino": { "nome": "Treino A", "foco": "Força", "exercicios": [{ "nome": "Agachamento", "series": 4, "reps": "10", "cargaKg": 40, "descansoSeg": 90 }] },
+      "projetos": [{ "nome": "Projeto", "papel": "Autora", "tarefa": "Entrega", "prazo": "Sexta", "prioridade": "alta" }],
+      "habitos": [{ "titulo": "Hábito", "categoria": "Saúde", "metaTexto": "Diário" }],
+      "metas": [{ "titulo": "Meta", "categoria": "Finanças", "prazo": "Dezembro", "marcos": ["Passo 1"] }],
+      "perfilCheckin": { "nomeUsuario": "Nome", "horasSono": 7.5, "energiaFisica": 8, "focoMental": 8 }
+    }
+  ]
+}`;
+
+          const temAudio = listaAnexos.some((a) =>
+            a.mimeType?.startsWith("audio/")
+          );
+          let promptFinal =
+            texto ||
+            (temAudio
+              ? "Ouça com atenção esta mensagem de voz da usuária, transcreva o que ela disse em 'transcricaoAudioUsuario', responda em 'respostaLala' e gere todas as ações correspondentes."
+              : "Analise detalhadamente a(s) imagem(ns) / arquivo(s) em anexo, extraia todos os valores, saldos, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
+
+          const anexosNaoAudio = listaAnexos.filter(
+            (a) => !a.mimeType?.startsWith("audio/")
+          );
+          if (anexosNaoAudio.length > 0) {
+            promptFinal += `\n\n[${anexosNaoAudio.length} arquivo(s)/imagem(ns) anexado(s): ${anexosNaoAudio
+              .map((a) => `"${a.nome}" (${a.mimeType})`)
+              .join(", ")}]`;
+            for (const a of anexosNaoAudio) {
+              if (a.textoExtraido) {
+                promptFinal += `\nConteúdo de "${a.nome}":\n${a.textoExtraido.slice(0, 10000)}`;
+              }
+            }
+          }
+          parts.push({ text: promptFinal });
+
+          const modelsToTry = [
+            "gemini-3.8-flash",
+            "gemini-2.5-flash",
+            "gemini-flash-latest",
+          ];
+          for (const modelName of modelsToTry) {
+            try {
+              const response = await ai.models.generateContent({
+                model: modelName,
+                contents: parts,
+                config: {
+                  systemInstruction,
+                  responseMimeType: "application/json",
+                },
+              });
+              const raw = (response.text || "{}")
+                .replace(/^```json\s*/i, "")
+                .replace(/```\s*$/i, "")
+                .trim();
+              const parsed = JSON.parse(raw);
+              if (parsed && parsed.respostaLala) {
+                data = parsed;
+                break;
+              }
+            } catch {
+              // Tenta próximo modelo
+            }
           }
         }
       } catch {
@@ -1429,6 +1613,17 @@ IMPORTANTE:
           : undefined,
         guardadoNoCofre: pediuParaGuardarExplicitamente,
         acoesPropostas: acoesFiltradas,
+        novaRegraAprendida:
+          typeof data.novaRegraAprendida === "string" &&
+          data.novaRegraAprendida.trim()
+            ? data.novaRegraAprendida.trim()
+            : undefined,
+        automatizarTipos: Array.isArray(data.automatizarTipos)
+          ? data.automatizarTipos
+          : undefined,
+        pedirConfirmacaoTipos: Array.isArray(data.pedirConfirmacaoTipos)
+          ? data.pedirConfirmacaoTipos
+          : undefined,
       };
     }
   }
@@ -1525,23 +1720,31 @@ export async function falarTextoComVozDaLala(
 
   // 2. Tenta gerar voz natural da Lala via servidor Gemini TTS (gemini-3.8-flash-lite-tts)
   if (typeof navigator !== "undefined" && navigator.onLine) {
-    try {
-      const res = await fetch("/api/lala/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ texto: cleanText, tomLala }),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { audioBase64?: string };
-        if (data?.audioBase64) {
-          const played = await playBase64Audio(data.audioBase64);
-          if (played) {
-            return { audioBase64: data.audioBase64 };
+    const ttsEndpoints = [
+      "/api/lala/tts",
+      "https://ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/tts",
+      "https://ais-dev-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/tts",
+    ];
+    for (const ttsUrl of ttsEndpoints) {
+      try {
+        const res = await fetch(ttsUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ texto: cleanText, tomLala }),
+        });
+        const contentType = res.headers.get("content-type") || "";
+        if (res.ok && contentType.includes("application/json")) {
+          const data = (await res.json()) as { audioBase64?: string };
+          if (data?.audioBase64) {
+            const played = await playBase64Audio(data.audioBase64);
+            if (played) {
+              return { audioBase64: data.audioBase64 };
+            }
           }
         }
+      } catch {
+        // Tenta próximo endpoint ou síntese de voz nativa do navegador
       }
-    } catch {
-      // Fallback para síntese de voz nativa do navegador
     }
   }
 

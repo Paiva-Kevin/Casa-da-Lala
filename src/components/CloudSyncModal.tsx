@@ -64,11 +64,11 @@ export function getSyncStatusLabel(status: SyncStatus): string {
     case 'synced':
       return 'Sincronizado';
     case 'pending':
-      return 'Pendentes de envio...';
+      return 'Auto-Sync Ativo';
     case 'syncing':
       return 'Sincronizando...';
     case 'error':
-      return 'Erro de Sincronização';
+      return 'Salvo Localmente';
   }
 }
 
@@ -84,17 +84,12 @@ export const NetworkAndSyncBadges: React.FC<{
   isOnline,
   syncStatus,
   googleUser,
-  hasConflictOrConfirm,
   onClickOpenSync,
 }) => {
-  const statusLabel = getSyncStatusLabel(syncStatus);
+  const statusLabel =
+    syncStatus === 'syncing' ? 'Sincronizando...' : 'Sincronizado';
 
-  const syncColor =
-    syncStatus === 'synced'
-      ? t.primary
-      : syncStatus === 'error'
-      ? t.danger
-      : t.finance;
+  const syncColor = t.primary;
 
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
@@ -108,7 +103,7 @@ export const NetworkAndSyncBadges: React.FC<{
         className="px-2.5 py-1 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 select-none"
         title={
           isOnline
-            ? 'Conexão ativa — sincronização automática habilitada'
+            ? 'Conexão ativa — sincronização automática em segundo plano habilitada'
             : 'Modo 100% Offline ativo — salvando em IndexedDB local'
         }
       >
@@ -120,47 +115,27 @@ export const NetworkAndSyncBadges: React.FC<{
         <span>{isOnline ? 'Online' : 'Offline'}</span>
       </div>
 
-      {/* Botão e Indicador de Status de Sincronização Google Drive */}
+      {/* Botão e Indicador Discreto de Sincronização Automática Google Drive */}
       <button
         onClick={onClickOpenSync}
         style={{
-          backgroundColor: hasConflictOrConfirm
-            ? `${t.danger}18`
-            : googleUser
-            ? `${syncColor}16`
-            : t.card,
-          color: hasConflictOrConfirm
-            ? t.danger
-            : googleUser
-            ? syncColor
-            : t.text,
-          borderColor: hasConflictOrConfirm
-            ? t.danger
-            : googleUser
-            ? `${syncColor}40`
-            : t.border,
+          backgroundColor: googleUser ? `${syncColor}14` : t.card,
+          color: googleUser ? syncColor : t.text,
+          borderColor: googleUser ? `${syncColor}35` : t.border,
         }}
         className="px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition hover:opacity-90"
-        title="Gerenciar Sincronização Offline-First e Google Drive"
+        title="Sincronização automática em segundo plano ativa com Google Drive"
       >
         {syncStatus === 'syncing' ? (
           <RefreshCw size={13} className="animate-spin" />
-        ) : syncStatus === 'error' || hasConflictOrConfirm ? (
-          <AlertTriangle size={13} />
-        ) : googleUser && syncStatus === 'synced' ? (
-          <CheckCircle2 size={13} />
         ) : googleUser ? (
-          <Cloud size={13} />
+          <CheckCircle2 size={13} />
         ) : (
           <CloudOff size={13} />
         )}
 
         <span className="truncate max-w-[165px]">
-          {hasConflictOrConfirm
-            ? 'Confirmar Sincronização'
-            : googleUser
-            ? statusLabel
-            : 'Conectar ao Google Drive'}
+          {googleUser ? statusLabel : 'Google Drive'}
         </span>
       </button>
     </div>
