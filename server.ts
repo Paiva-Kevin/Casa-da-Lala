@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_BUILD_VERSION = "v18.0";
+const APP_BUILD_VERSION = "v19.0";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const SNAPSHOT_FILE = path.join(DATA_DIR, "cloud_snapshot.json");
 
@@ -356,8 +356,109 @@ async function startServer() {
       const force = Boolean(req.query.force);
 
       if (force || !existingHasCustom || incomingTime >= existingTime - 1000) {
+        const mergedRecords = { ...incoming.records };
+
+        if (existingHasCustom && existing?.records) {
+          const existingPerfil = existing.records.perfil_calibrado || {};
+          const incomingPerfil = incoming.records.perfil_calibrado || {};
+          const chatClearedAt = Math.max(
+            Number(existingPerfil.ultimaLimpezaChatEm || 0),
+            Number(incomingPerfil.ultimaLimpezaChatEm || 0)
+          );
+
+          // Merge interacoes_lala so no conversation turn is ever lost across tabs/devices
+          if (
+            Array.isArray(existing.records.interacoes_lala) &&
+            Array.isArray(incoming.records.interacoes_lala)
+          ) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const byId = new Map<number, any>();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let welcome: any = null;
+            for (const item of [
+              ...incoming.records.interacoes_lala,
+              ...existing.records.interacoes_lala,
+            ]) {
+              if (!item || typeof item !== "object") continue;
+              const numId = Number(item.id) || 0;
+              if (numId === 1) {
+                if (!welcome) welcome = item;
+                continue;
+              }
+              if (
+                chatClearedAt > 0 &&
+                numId > 1_000_000_000_000 &&
+                numId < chatClearedAt - 500
+              ) {
+                continue;
+              }
+              const prev = byId.get(numId);
+              if (!prev) {
+                byId.set(numId, item);
+              } else if (prev.processandoResposta && !item.processandoResposta) {
+                byId.set(numId, item);
+              }
+            }
+            const sorted = Array.from(byId.values()).sort(
+              (a, b) => (Number(b.id) || 0) - (Number(a.id) || 0)
+            );
+            if (welcome) sorted.push(welcome);
+            mergedRecords.interacoes_lala = sorted.slice(0, 120);
+          }
+
+          // Merge perfil_calibrado memories & rules
+          if (existing.records.perfil_calibrado && incoming.records.perfil_calibrado) {
+            const memA = Array.isArray(incomingPerfil.itensMemoriaViva)
+              ? incomingPerfil.itensMemoriaViva
+              : [];
+            const memB = Array.isArray(existingPerfil.itensMemoriaViva)
+              ? existingPerfil.itensMemoriaViva
+              : [];
+            const mergedMem = [...memA];
+            for (const m of memB) {
+              if (
+                m?.texto &&
+                !mergedMem.some(
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  (x: any) =>
+                    String(x?.texto || "").toLowerCase().trim() ===
+                    String(m.texto).toLowerCase().trim()
+                )
+              ) {
+                mergedMem.push(m);
+              }
+            }
+            const rulesA = Array.isArray(incomingPerfil.regrasAprendidasLala)
+              ? incomingPerfil.regrasAprendidasLala
+              : [];
+            const rulesB = Array.isArray(existingPerfil.regrasAprendidasLala)
+              ? existingPerfil.regrasAprendidasLala
+              : [];
+            const mergedRules = [...rulesA];
+            for (const r of rulesB) {
+              if (
+                typeof r === "string" &&
+                r.trim() &&
+                !mergedRules.some(
+                  (x: string) => x.toLowerCase().trim() === r.toLowerCase().trim()
+                )
+              ) {
+                mergedRules.push(r);
+              }
+            }
+            mergedRecords.perfil_calibrado = {
+              ...existingPerfil,
+              ...incomingPerfil,
+              itensMemoriaViva: mergedMem.slice(0, 100),
+              regrasAprendidasLala: mergedRules.slice(0, 60),
+              ultimaLimpezaChatEm: chatClearedAt > 0 ? chatClearedAt : undefined,
+            };
+          }
+        }
+
         const toSave = {
           ...incoming,
+          records: mergedRecords,
           updatedAt: incomingTime,
           updatedAtISO: new Date(incomingTime).toISOString(),
         };
@@ -404,6 +505,7 @@ async function startServer() {
             usuario: string;
             lala: string;
             dataHora?: string;
+            acoesResumo?: string;
           }[];
           anexo?: {
             nome: string;
@@ -444,10 +546,12 @@ async function startServer() {
       const historicoFormatado =
         Array.isArray(historicoConversa) && historicoConversa.length > 0
           ? historicoConversa
-              .slice(-10)
+              .slice(-25)
               .map(
                 (h) =>
-                  `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+                  `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}${
+                    h.acoesResumo ? `\n[Ações geradas nesta mensagem: ${h.acoesResumo}]` : ""
+                  }`
               )
               .join("\n---\n")
           : "Início da conversa.";

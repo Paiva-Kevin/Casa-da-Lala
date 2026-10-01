@@ -39,6 +39,7 @@ import {
   ItemAprendizadoLala,
   ItemListaCompras,
   ItemRefeicao,
+  LancamentoFinanceiro,
   MatrizDecisaoLala,
   PerfilUsuarioCalibrado,
   PetPerfil,
@@ -78,6 +79,7 @@ interface AbaGovernantaLalaProps {
   dinheiroLivreHoje: number;
   contas?: ContaBancaria[];
   cartoes?: CartaoCredito[];
+  lancamentos?: LancamentoFinanceiro[];
   repositorio: ArquivoRepositorio[];
   perfilCalibrado?: PerfilUsuarioCalibrado;
   setPerfilCalibrado?: React.Dispatch<React.SetStateAction<PerfilUsuarioCalibrado>>;
@@ -194,6 +196,7 @@ export function AbaGovernantaLala({
   dinheiroLivreHoje,
   contas = [],
   cartoes = [],
+  lancamentos = [],
   perfilCalibrado,
   setPerfilCalibrado,
   historicoAcoesLala = [],
@@ -216,7 +219,13 @@ export function AbaGovernantaLala({
   const [editandoRegraIdx, setEditandoRegraIdx] = useState<number | null>(null);
   const [editandoRegraTexto, setEditandoRegraTexto] = useState("");
 
-  const [mensagem, setMensagem] = useState("");
+  const [mensagem, setMensagem] = useState<string>(() => {
+    try {
+      return localStorage.getItem("casa_lala_chat_draft") || "";
+    } catch {
+      return "";
+    }
+  });
   const [gravando, setGravando] = useState(false);
   const [processando, setProcessando] = useState(false);
   const [envioEmAndamento, setEnvioEmAndamento] = useState<{
@@ -226,6 +235,19 @@ export function AbaGovernantaLala({
   } | null>(null);
   const [anexosAtuais, setAnexosAtuais] = useState<AnexoLala[]>([]);
   const [painelPerfilAberto, setPainelPerfilAberto] = useState(false);
+
+  // Salva rascunho da mensagem automaticamente para não perder texto digitado ao atualizar/trocar aba
+  useEffect(() => {
+    try {
+      if (mensagem) {
+        localStorage.setItem("casa_lala_chat_draft", mensagem);
+      } else {
+        localStorage.removeItem("casa_lala_chat_draft");
+      }
+    } catch {
+      // ignore
+    }
+  }, [mensagem]);
 
   // Memória Viva (5 dimensões: contexto, acao_usuario, decisao, rotina, forma_de_uso)
   const [filtroCategoriaMemoria, setFiltroCategoriaMemoria] = useState<
@@ -579,7 +601,8 @@ export function AbaGovernantaLala({
   const enviarMensagemParaLala = async (
     textoCustom?: string,
     anexosOverride?: AnexoLala[],
-    veioDeVoz?: boolean
+    veioDeVoz?: boolean,
+    reusarInteracaoId?: number
   ) => {
     const texto = (textoCustom ?? mensagem).trim();
     const listaAnexos = anexosOverride ?? anexosAtuais;
@@ -596,13 +619,47 @@ export function AbaGovernantaLala({
       minute: "2-digit",
     });
 
-    setMensagem("");
-    setAnexosAtuais([]);
+    if (textoCustom === undefined) {
+      setMensagem("");
+      try {
+        localStorage.removeItem("casa_lala_chat_draft");
+      } catch {
+        // ignore
+      }
+    }
+    if (anexosOverride === undefined) {
+      setAnexosAtuais([]);
+    }
     setProcessando(true);
-    setEnvioEmAndamento({
-      texto: msgEnviada,
-      anexos: listaAnexos,
-      hora: horaEnvio,
+    setEnvioEmAndamento(null);
+
+    const novaInteracaoId = reusarInteracaoId || Date.now();
+
+    // Persiste a mensagem da usuária IMEDIATAMENTE no histórico antes mesmo da chamada de rede
+    // para garantir que nenhuma parte da conversa jamais suma se a página recarregar ou oscilar!
+    const interacaoPendente: InteracaoGovernanta = {
+      id: novaInteracaoId,
+      dataHora: horaEnvio,
+      modo: "comando",
+      processandoResposta: true,
+      mensagemUsuario: msgEnviada,
+      respostaLala:
+        listaAnexos.length > 0
+          ? `Lendo seus ${listaAnexos.length} arquivo(s)/print(s) e preparando tudo...`
+          : "Analisando sua mensagem e preparando tudo para você...",
+      anexo: listaAnexos.length > 0 ? listaAnexos[0] : undefined,
+      anexos: listaAnexos.length > 0 ? listaAnexos : undefined,
+      acoesPropostas: [],
+    };
+
+    setInteracoes((prev) => {
+      const jaExiste = prev.some((it) => it.id === novaInteracaoId);
+      if (jaExiste) {
+        return prev.map((it) =>
+          it.id === novaInteracaoId ? interacaoPendente : it
+        );
+      }
+      return [interacaoPendente, ...prev];
     });
 
     // Se a usuária fez uma pergunta de acompanhamento sobre prints/contas enviados na mensagem anterior sem reanexar,
@@ -615,8 +672,12 @@ export function AbaGovernantaLala({
       )
     ) {
       const interacaoComAnexo = interacoes
-        .slice(0, 10)
-        .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
+        .slice(0, 12)
+        .find(
+          (it) =>
+            it.id !== novaInteracaoId &&
+            ((it.anexos && it.anexos.length > 0) || it.anexo)
+        );
       if (interacaoComAnexo) {
         anexosParaAnalise =
           interacaoComAnexo.anexos && interacaoComAnexo.anexos.length > 0
@@ -628,7 +689,6 @@ export function AbaGovernantaLala({
     }
 
     try {
-      const novaInteracaoId = Date.now();
       const resultado = await consultarLalaUnificada(
         msgEnviada,
         {
@@ -655,13 +715,21 @@ export function AbaGovernantaLala({
             limiteTotal: cc.limiteTotal,
             vencimentoDia: cc.vencimentoDia,
           })),
+          gastosPrevistosERecorrentes: lancamentos.slice(0, 35).map(
+            (l) =>
+              `${l.descricao}: R$ ${Number(l.valor || 0)
+                .toFixed(2)
+                .replace(".", ",")} (${l.status}, ${
+                l.semData ? "Sem data" : l.data || "Sem data"
+              }${l.recorrente ? ", recorrente" : ""})`
+          ),
           tomLala: tom,
           autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
           tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
           regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
           itensMemoriaViva: perfilCalibrado?.itensMemoriaViva || [],
           ultimasAcoesNoApp: historicoAcoesLala
-            .slice(0, 12)
+            .slice(0, 15)
             .map(
               (h) =>
                 `${h.acao.titulo} (${
@@ -677,12 +745,30 @@ export function AbaGovernantaLala({
           horarioAcordar: perfilCalibrado?.horarioAcordar,
           horarioDormir: perfilCalibrado?.horarioDormir,
           historicoConversa: interacoes
-            .slice(0, 10)
+            .filter((it) => it.id !== novaInteracaoId && !it.processandoResposta)
+            .slice(0, 25)
             .reverse()
             .map((it) => ({
               usuario: it.mensagemUsuario,
               lala: it.respostaLala,
               dataHora: it.dataHora,
+              acoesResumo:
+                it.acoesPropostas && it.acoesPropostas.length > 0
+                  ? it.acoesPropostas
+                      .map(
+                        (a) =>
+                          `${a.tipo}: ${a.titulo} (${
+                            a.executada
+                              ? "confirmada"
+                              : a.recusada
+                              ? "recusada"
+                              : a.desfeita
+                              ? "desfeita"
+                              : "aguardando confirmação"
+                          })`
+                      )
+                      .join(" | ")
+                  : undefined,
             })),
         },
         anexosParaAnalise
@@ -803,6 +889,7 @@ export function AbaGovernantaLala({
       const novaInteracao: InteracaoGovernanta = {
         id: novaInteracaoId,
         dataHora: agoraHora,
+        processandoResposta: false,
         mensagemUsuario: msgEnviada,
         ...resultado,
         anexo:
@@ -818,16 +905,64 @@ export function AbaGovernantaLala({
         acoesPropostas: acoesProcessadas,
       };
 
-      setInteracoes((prev) => [novaInteracao, ...prev]);
+      setInteracoes((prev) => {
+        const existe = prev.some((it) => it.id === novaInteracaoId);
+        if (existe) {
+          return prev.map((it) =>
+            it.id === novaInteracaoId ? novaInteracao : it
+          );
+        }
+        return [novaInteracao, ...prev];
+      });
 
       if (vozAutomaticaLala || veioDeVoz) {
         reproduzirFalaDaLala(novaInteracaoId, resultado.respostaLala);
       }
+    } catch {
+      setInteracoes((prev) =>
+        prev.map((it) =>
+          it.id === novaInteracaoId
+            ? {
+                ...it,
+                processandoResposta: false,
+                respostaLala:
+                  "Tive uma oscilação momentânea ao concluir esta resposta, mas sua mensagem está salva aqui. Clique em 'Reanalisar' logo abaixo para eu processar imediatamente!",
+              }
+            : it
+        )
+      );
     } finally {
       setProcessando(false);
       setEnvioEmAndamento(null);
     }
   };
+
+  // Se uma mensagem ficou com processandoResposta: true (ex: página recarregou durante análise), retoma automaticamente!
+  const retomouPendenteRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    if (processando) return;
+    const pendente = interacoes.find(
+      (it) =>
+        it.processandoResposta === true &&
+        !retomouPendenteRef.current.has(it.id)
+    );
+    if (pendente) {
+      retomouPendenteRef.current.add(pendente.id);
+      const anx =
+        pendente.anexos && pendente.anexos.length > 0
+          ? pendente.anexos
+          : pendente.anexo
+          ? [pendente.anexo]
+          : [];
+      enviarMensagemParaLala(
+        pendente.mensagemUsuario,
+        anx,
+        false,
+        pendente.id
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interacoes, processando]);
 
   // Combina ações pendentes no chat + histórico de ações executadas/editadas/desfeitas
   const itensHistoricoUnificado = useMemo(() => {
@@ -1134,6 +1269,7 @@ export function AbaGovernantaLala({
                       interacoes,
                       perfilCalibrado
                     );
+                    const agoraTs = Date.now();
                     if (setPerfilCalibrado) {
                       setPerfilCalibrado((prev) => ({
                         ...prev,
@@ -1141,6 +1277,7 @@ export function AbaGovernantaLala({
                           consolidado.itensMemoriaVivaAtualizados,
                         regrasAprendidasLala:
                           consolidado.regrasAprendidasAtualizadas,
+                        ultimaLimpezaChatEm: agoraTs,
                       }));
                     }
 
@@ -1648,7 +1785,10 @@ export function AbaGovernantaLala({
                         background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
                       }}
                     >
-                      <Sparkles size={14} />
+                      <Sparkles
+                        size={14}
+                        className={it.processandoResposta ? "animate-spin" : ""}
+                      />
                     </div>
 
                     <div className="max-w-[94%] sm:max-w-[85%] space-y-2.5 flex-1">
@@ -1657,12 +1797,16 @@ export function AbaGovernantaLala({
                         className="rounded-3xl rounded-tl-md p-4 border shadow-xs space-y-2.5"
                         style={{
                           backgroundColor: t.card,
-                          borderColor: t.border,
+                          borderColor: it.processandoResposta ? t.primary : t.border,
                         }}
                       >
                         <p
-                          className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap"
-                          style={{ color: t.text }}
+                          className={`text-xs sm:text-sm leading-relaxed whitespace-pre-wrap ${
+                            it.processandoResposta ? "animate-pulse font-medium" : ""
+                          }`}
+                          style={{
+                            color: it.processandoResposta ? t.primary : t.text,
+                          }}
                         >
                           {it.respostaLala}
                         </p>
@@ -1727,83 +1871,83 @@ export function AbaGovernantaLala({
                         )}
 
                         {/* Rodapé do balão: Ouvir resposta + Reanalisar + Horário */}
-                        <div className="flex items-center justify-between pt-1 gap-2 flex-wrap">
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                reproduzirFalaDaLala(it.id, it.respostaLala)
-                              }
-                              className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                              style={{
-                                backgroundColor:
-                                  idFalandoAgora === it.id
-                                    ? t.action
-                                    : carregandoVozId === it.id
-                                    ? `${t.primary}20`
-                                    : t.cardSubtle,
-                                color:
-                                  idFalandoAgora === it.id ? "#fff" : t.textSoft,
-                              }}
-                            >
-                              {idFalandoAgora === it.id ? (
-                                <>
-                                  <Square size={10} fill="#fff" />
-                                  <span>Parar voz</span>
-                                </>
-                              ) : carregandoVozId === it.id ? (
-                                <>
-                                  <Volume2 size={12} className="animate-pulse" />
-                                  <span>Gerando voz...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Volume2 size={12} />
-                                  <span>Ouvir</span>
-                                </>
-                              )}
-                            </button>
-
-                            {it.id !== 1 && (
+                        {!it.processandoResposta && (
+                          <div className="flex items-center justify-between pt-1 gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                disabled={processando}
-                                onClick={() => {
-                                  const anexosParaReenviar =
-                                    it.anexos && it.anexos.length > 0
-                                      ? it.anexos
-                                      : it.anexo
-                                      ? [it.anexo]
-                                      : [];
-                                  // Remove a interação antiga com falha antes de reanalisar para substituir de forma limpa
-                                  setInteracoes((prev) =>
-                                    prev.filter((item) => item.id !== it.id)
-                                  );
-                                  enviarMensagemParaLala(
-                                    it.mensagemUsuario,
-                                    anexosParaReenviar
-                                  );
-                                }}
-                                className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all hover:opacity-85"
+                                onClick={() =>
+                                  reproduzirFalaDaLala(it.id, it.respostaLala)
+                                }
+                                className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
                                 style={{
-                                  backgroundColor: `${t.primary}15`,
-                                  color: t.primary,
+                                  backgroundColor:
+                                    idFalandoAgora === it.id
+                                      ? t.action
+                                      : carregandoVozId === it.id
+                                      ? `${t.primary}20`
+                                      : t.cardSubtle,
+                                  color:
+                                    idFalandoAgora === it.id ? "#fff" : t.textSoft,
                                 }}
-                                title="Pedir para a Lala ler e analisar novamente esta mensagem e os prints anexados"
                               >
-                                <RotateCcw size={11} />
-                                <span>Reanalisar</span>
+                                {idFalandoAgora === it.id ? (
+                                  <>
+                                    <Square size={10} fill="#fff" />
+                                    <span>Parar voz</span>
+                                  </>
+                                ) : carregandoVozId === it.id ? (
+                                  <>
+                                    <Volume2 size={12} className="animate-pulse" />
+                                    <span>Gerando voz...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Volume2 size={12} />
+                                    <span>Ouvir</span>
+                                  </>
+                                )}
                               </button>
-                            )}
-                          </div>
 
-                          <span
-                            className="text-[10px] font-mono-num"
-                            style={{ color: t.textSoft }}
-                          >
-                            Lala · {it.dataHora}
-                          </span>
-                        </div>
+                              {it.id !== 1 && (
+                                <button
+                                  type="button"
+                                  disabled={processando}
+                                  onClick={() => {
+                                    const anexosParaReenviar =
+                                      it.anexos && it.anexos.length > 0
+                                        ? it.anexos
+                                        : it.anexo
+                                        ? [it.anexo]
+                                        : [];
+                                    enviarMensagemParaLala(
+                                      it.mensagemUsuario,
+                                      anexosParaReenviar,
+                                      false,
+                                      it.id
+                                    );
+                                  }}
+                                  className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all hover:opacity-85"
+                                  style={{
+                                    backgroundColor: `${t.primary}15`,
+                                    color: t.primary,
+                                  }}
+                                  title="Pedir para a Lala ler e analisar novamente esta mensagem e os prints anexados"
+                                >
+                                  <RotateCcw size={11} />
+                                  <span>Reanalisar</span>
+                                </button>
+                              )}
+                            </div>
+
+                            <span
+                              className="text-[10px] font-mono-num"
+                              style={{ color: t.textSoft }}
+                            >
+                              Lala · {it.dataHora}
+                            </span>
+                          </div>
+                        )}
                       </div>
 
                       {/* DESTAQUE VISUAL DE AÇÕES DA LALA (CONFIRMAR, EDITAR OU DESFAZER) */}
@@ -1906,7 +2050,7 @@ export function AbaGovernantaLala({
               );
             })}
 
-            {processando && (
+            {processando && envioEmAndamento && (
               <div className="space-y-3">
                 {envioEmAndamento && (
                   <div className="flex justify-end">

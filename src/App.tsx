@@ -112,6 +112,8 @@ import {
   idbGetRecord,
   idbSetRecord,
   importFullBackupPayload,
+  mergeHistoricoAcoesLala,
+  mergeInteracoesLala,
   SyncMetadata,
   syncSnapshotWithServer,
   updateSyncMetadata,
@@ -158,36 +160,55 @@ function useLocalStorageState<T>(
   const isInitialMount = useRef(true);
   const isHydratingRef = useRef(false);
 
-  // Hydrate from IndexedDB primary offline storage on mount without marking dirty
+  // Hydrate from IndexedDB primary offline storage on mount without marking dirty or overwriting IDB with stale localStorage
   useEffect(() => {
     let mounted = true;
     idbGetRecord<T>(key).then((idbVal) => {
-      if (mounted && idbVal !== undefined) {
-        setState((prev) => {
-          try {
-            if (JSON.stringify(prev) === JSON.stringify(idbVal)) {
-              return prev;
-            }
-          } catch {
-            // ignore
-          }
-          isHydratingRef.current = true;
-          return idbVal;
-        });
+      if (!mounted) return;
+      if (idbVal === undefined) {
+        // Seed IndexedDB only if no record exists in IDB yet
+        idbSetRecord(key, state, false);
+        return;
       }
+      setState((prev) => {
+        let nextVal: T = idbVal;
+        if (key === "interacoes_lala") {
+          nextVal = mergeInteracoesLala<unknown>(prev, idbVal) as unknown as T;
+        } else if (key === "historico_acoes_lala") {
+          nextVal = mergeHistoricoAcoesLala<unknown>(prev, idbVal) as unknown as T;
+        }
+        try {
+          if (JSON.stringify(prev) === JSON.stringify(nextVal)) {
+            return prev;
+          }
+        } catch {
+          // ignore
+        }
+        isHydratingRef.current = true;
+        return nextVal;
+      });
     });
     return () => {
       mounted = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
-  // Listen for full backup restoration events from Google Drive
+  // Listen for full backup restoration events from Google Drive / Server Snapshot
   useEffect(() => {
     const handleRestore = () => {
       idbGetRecord<T>(key).then((idbVal) => {
         if (idbVal !== undefined) {
-          isHydratingRef.current = true;
-          setState(idbVal);
+          setState((prev) => {
+            let nextVal: T = idbVal;
+            if (key === "interacoes_lala") {
+              nextVal = mergeInteracoesLala<unknown>(prev, idbVal) as unknown as T;
+            } else if (key === "historico_acoes_lala") {
+              nextVal = mergeHistoricoAcoesLala<unknown>(prev, idbVal) as unknown as T;
+            }
+            isHydratingRef.current = true;
+            return nextVal;
+          });
         }
       });
     };
@@ -198,11 +219,11 @@ function useLocalStorageState<T>(
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false;
-      idbSetRecord(key, state, false);
       return;
     }
     if (isHydratingRef.current) {
       isHydratingRef.current = false;
+      // Ensure any merged state from hydration is persisted to IDB without triggering dirty loop
       idbSetRecord(key, state, false);
       return;
     }
@@ -1024,9 +1045,14 @@ export default function App() {
           sachesDadosHoje: 0,
         }))
       );
+      const agoraTs = Date.now();
+      setPerfilCalibrado((prev) => ({
+        ...prev,
+        ultimaLimpezaChatEm: agoraTs,
+      }));
       setInteracoesLala([
         {
-          id: Date.now(),
+          id: agoraTs + 1,
           dataHora: new Date().toLocaleTimeString("pt-BR", {
             hour: "2-digit",
             minute: "2-digit",
@@ -1066,6 +1092,7 @@ export default function App() {
       setContas,
       setCartoes,
       setPetsPerfil,
+      setPerfilCalibrado,
       setInteracoesLala,
       setDemoLimpo,
       showToast,
@@ -3179,6 +3206,14 @@ export default function App() {
         limiteTotal: c.limiteTotal,
         vencimentoDia: c.vencimentoDia,
       })),
+      gastosPrevistosERecorrentes: lancamentos.slice(0, 30).map(
+        (l) =>
+          `${l.descricao}: R$ ${Number(l.valor || 0)
+            .toFixed(2)
+            .replace(".", ",")} (${l.status}, ${
+            l.semData ? "Sem data" : l.data || "Sem data"
+          }${l.recorrente ? ", recorrente" : ""})`
+      ),
       regrasAprendidasLala: perfilCalibrado.regrasAprendidasLala || [],
       itensMemoriaViva: perfilCalibrado.itensMemoriaViva || [],
       ultimasAcoesNoApp: historicoAcoesLala
@@ -3193,19 +3228,64 @@ export default function App() {
                 : "confirmada"
             })`
         ),
+      historicoConversa: interacoesLala
+        .slice(0, 25)
+        .reverse()
+        .map((it) => ({
+          usuario: it.mensagemUsuario,
+          lala: it.respostaLala,
+          dataHora: it.dataHora,
+          acoesResumo:
+            it.acoesPropostas && it.acoesPropostas.length > 0
+              ? it.acoesPropostas
+                  .map(
+                    (a) =>
+                      `${a.tipo}: ${a.titulo} (${
+                        a.executada
+                          ? "confirmada"
+                          : a.recusada
+                          ? "recusada"
+                          : a.desfeita
+                          ? "desfeita"
+                          : "aguardando confirmação"
+                      })`
+                  )
+                  .join(" | ")
+              : undefined,
+        })),
     };
-
-    const resultado = await consultarLalaUnificada(
-      promptInicial,
-      ctx,
-      anexoOuAnexos
-    );
 
     const idNova = Date.now();
     const agoraHora = new Date().toLocaleTimeString("pt-BR", {
       hour: "2-digit",
       minute: "2-digit",
     });
+
+    const listaAnexosTemp = Array.isArray(anexoOuAnexos)
+      ? anexoOuAnexos
+      : anexoOuAnexos
+      ? [anexoOuAnexos]
+      : [];
+
+    // Persiste a mensagem imediatamente antes da chamada à IA para nunca perder o que foi enviado
+    const interacaoPendente: InteracaoGovernanta = {
+      id: idNova,
+      dataHora: agoraHora,
+      modo: "comando",
+      processandoResposta: true,
+      mensagemUsuario: promptInicial,
+      respostaLala: "Analisando sua mensagem e preparando tudo para você...",
+      anexo: listaAnexosTemp[0],
+      anexos: listaAnexosTemp.length > 0 ? listaAnexosTemp : undefined,
+      acoesPropostas: [],
+    };
+    setInteracoesLala((prev) => [interacaoPendente, ...prev]);
+
+    const resultado = await consultarLalaUnificada(
+      promptInicial,
+      ctx,
+      anexoOuAnexos
+    );
 
     if (
       resultado.aprendizadosExtraidos &&
@@ -3252,12 +3332,22 @@ export default function App() {
     const novaInteracao: InteracaoGovernanta = {
       id: idNova,
       dataHora: agoraHora,
+      processandoResposta: false,
       mensagemUsuario: promptInicial,
       ...resultado,
+      anexo: listaAnexosTemp[0] || resultado.anexo,
+      anexos:
+        listaAnexosTemp.length > 0 ? listaAnexosTemp : resultado.anexos,
       acoesPropostas: acoesComExecucao,
     };
 
-    setInteracoesLala((prev) => [novaInteracao, ...prev]);
+    setInteracoesLala((prev) => {
+      const existe = prev.some((it) => it.id === idNova);
+      if (existe) {
+        return prev.map((it) => (it.id === idNova ? novaInteracao : it));
+      }
+      return [novaInteracao, ...prev];
+    });
     if (acoesComExecucao.some((a) => !a.executada)) {
       showToast(
         "A Lala preparou as alterações! Confira e confirme na aba da Lala."
@@ -3773,6 +3863,7 @@ export default function App() {
                 dinheiroLivreHoje={dinheiroLivreInfo.livreHoje}
                 contas={contas}
                 cartoes={cartoes}
+                lancamentos={lancamentos}
                 repositorio={repositorio}
                 perfilCalibrado={perfilCalibrado}
                 setPerfilCalibrado={setPerfilCalibrado}
@@ -4055,6 +4146,7 @@ export default function App() {
         projetos={projetos}
         contas={contas}
         cartoes={cartoes}
+        lancamentos={lancamentos}
         perfilCalibrado={perfilCalibrado}
         setPerfilCalibrado={setPerfilCalibrado}
         themeMode={themeMode}

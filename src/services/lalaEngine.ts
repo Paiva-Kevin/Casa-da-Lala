@@ -178,6 +178,28 @@ export function consolidarMemoriaAntesDeLimparChat(
             ac.executada ? "confirmacao_acao" : "conversa"
           );
         } else if (
+          ac.tipo === "REGISTRAR_GASTO" &&
+          ac.payload?.lancamentosAjuste &&
+          ac.payload.lancamentosAjuste.length > 0
+        ) {
+          const resumoLancs = ac.payload.lancamentosAjuste
+            .map(
+              (l) =>
+                `${l.descricao}: R$ ${Number(l.valor || 0)
+                  .toFixed(2)
+                  .replace(".", ",")} (${
+                  l.semData || !l.data || l.data === "Sem data"
+                    ? "Sem data"
+                    : l.data
+                })`
+            )
+            .join(" · ");
+          adicionarMemoriaUnica(
+            "contexto",
+            `Despesas recorrentes/previstas informadas: ${resumoLancs}`,
+            ac.executada ? "confirmacao_acao" : "conversa"
+          );
+        } else if (
           ac.executada &&
           ac.titulo &&
           ac.tipo !== "LIMPAR_DADOS_EXEMPLO"
@@ -186,6 +208,16 @@ export function consolidarMemoriaAntesDeLimparChat(
             "acao_usuario",
             `Ação realizada no app: ${ac.titulo}`,
             "confirmacao_acao"
+          );
+        } else if (
+          !ac.executada &&
+          ac.titulo &&
+          ac.tipo !== "LIMPAR_DADOS_EXEMPLO"
+        ) {
+          adicionarMemoriaUnica(
+            "contexto",
+            `Assunto em andamento antes de reiniciar o chat: ${ac.titulo} (${ac.detalhe || ac.tipo})`,
+            "conversa"
           );
         }
       }
@@ -223,6 +255,26 @@ export function consolidarMemoriaAntesDeLimparChat(
       ) {
         adicionarMemoriaUnica("decisao", msg.slice(0, 180), "conversa");
       }
+    }
+  }
+
+  // 4. Guarda um resumo dos últimos assuntos conversados antes da limpeza para continuidade imediata
+  const ultimasInteracoes = interacoesReais.slice(-3);
+  if (ultimasInteracoes.length > 0) {
+    const topicosRecentes = ultimasInteracoes
+      .map((it) => {
+        const u = (it.mensagemUsuario || "").trim().slice(0, 90);
+        const card = (it.tituloCard || "").trim();
+        return card ? `${card} ("${u}")` : `"${u}"`;
+      })
+      .filter(Boolean)
+      .join(" | ");
+    if (topicosRecentes) {
+      adicionarMemoriaUnica(
+        "contexto",
+        `Últimos assuntos conversados antes de reiniciar o chat: ${topicosRecentes}`,
+        "conversa"
+      );
     }
   }
 
@@ -396,6 +448,7 @@ export interface LalaContextSnapshot {
     limiteTotal: number;
     vencimentoDia: number;
   }[];
+  gastosPrevistosERecorrentes?: string[];
   tomLala?: string;
   autonomiaLala?: "auto" | "confirmar";
   tiposAutomatizados?: AcaoGovernanta["tipo"][];
@@ -409,6 +462,7 @@ export interface LalaContextSnapshot {
     usuario: string;
     lala: string;
     dataHora?: string;
+    acoesResumo?: string;
   }[];
 }
 
@@ -2499,10 +2553,14 @@ export async function consultarLalaUnificada(
         Array.isArray(ctxSanitizado.historicoConversa) &&
         ctxSanitizado.historicoConversa.length > 0
           ? ctxSanitizado.historicoConversa
-              .slice(-10)
+              .slice(-25)
               .map(
                 (h) =>
-                  `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+                  `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}${
+                    h.acoesResumo
+                      ? `\n[Ações geradas nesta mensagem: ${h.acoesResumo}]`
+                      : ""
+                  }`
               )
               .join("\n---\n")
           : "Início da conversa.";

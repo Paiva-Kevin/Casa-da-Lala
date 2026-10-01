@@ -84,17 +84,101 @@ export async function idbGetRecord<T>(key: string): Promise<T | undefined> {
   }
 }
 
+function createLightweightLocalStorageCopy<T>(key: string, value: T): unknown {
+  if (key === 'interacoes_lala' && Array.isArray(value)) {
+    return value.map((item, idx) => {
+      if (!item || typeof item !== 'object') return item;
+      const copy: Record<string, unknown> = { ...item };
+      // Never store large TTS audio blobs in localStorage (IndexedDB keeps them)
+      delete copy.audioLalaBase64;
+      delete copy.audioUsuarioBase64;
+      // Only keep small image base64 in localStorage for the latest 2 messages; IndexedDB keeps all full-res attachments
+      const stripAnexo = (anx: unknown) => {
+        if (!anx || typeof anx !== 'object') return anx;
+        const a = { ...(anx as Record<string, unknown>) };
+        if (
+          idx >= 2 ||
+          (typeof a.base64 === 'string' && a.base64.length > 90000)
+        ) {
+          delete a.base64;
+        }
+        return a;
+      };
+      if (copy.anexo) {
+        copy.anexo = stripAnexo(copy.anexo);
+      }
+      if (Array.isArray(copy.anexos)) {
+        copy.anexos = copy.anexos.map(stripAnexo);
+      }
+      return copy;
+    });
+  }
+  if (key === 'repositorio' && Array.isArray(value)) {
+    return value.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const copy: Record<string, unknown> = { ...item };
+      if (typeof copy.urlPreview === 'string' && copy.urlPreview.length > 90000) {
+        delete copy.urlPreview;
+      }
+      return copy;
+    });
+  }
+  return value;
+}
+
+function safeSetLocalStorage(fullKey: string, data: unknown): void {
+  try {
+    localStorage.setItem(fullKey, JSON.stringify(data));
+  } catch {
+    // QuotaExceededError recovery: free up heavy base64 strings in localStorage and retry
+    try {
+      const rawChat = localStorage.getItem(STORAGE_PREFIX + 'interacoes_lala');
+      if (rawChat) {
+        const parsedChat = JSON.parse(rawChat);
+        if (Array.isArray(parsedChat)) {
+          const ultraLight = parsedChat.map((it) => {
+            if (!it || typeof it !== 'object') return it;
+            const c = { ...it };
+            delete c.audioLalaBase64;
+            delete c.audioUsuarioBase64;
+            if (c.anexo && typeof c.anexo === 'object') {
+              const ca = { ...c.anexo };
+              delete ca.base64;
+              c.anexo = ca;
+            }
+            if (Array.isArray(c.anexos)) {
+              c.anexos = c.anexos.map((ax: unknown) => {
+                if (!ax || typeof ax !== 'object') return ax;
+                const cax = { ...(ax as Record<string, unknown>) };
+                delete cax.base64;
+                return cax;
+              });
+            }
+            return c;
+          });
+          localStorage.setItem(
+            STORAGE_PREFIX + 'interacoes_lala',
+            JSON.stringify(ultraLight)
+          );
+        }
+      }
+      localStorage.setItem(fullKey, JSON.stringify(data));
+    } catch (err2) {
+      console.warn('LocalStorage mirror warning after cleanup:', err2);
+    }
+  }
+}
+
 export async function idbSetRecord<T>(
   key: string,
   value: T,
   markPendingSync = true
 ): Promise<void> {
   const now = Date.now();
-  try {
-    localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
-  } catch (err) {
-    console.warn('LocalStorage mirror warning:', err);
-  }
+  safeSetLocalStorage(
+    STORAGE_PREFIX + key,
+    createLightweightLocalStorageCopy(key, value)
+  );
 
   try {
     const db = await openOfflineDB();
@@ -389,22 +473,232 @@ export async function exportFullBackupPayload(): Promise<AppBackupPayload> {
   };
 }
 
+export function mergeInteracoesLala<T = Record<string, unknown>>(
+  localRaw: unknown,
+  remoteRaw: unknown,
+  chatClearedAt = 0
+): T[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const localList: any[] = Array.isArray(localRaw) ? localRaw : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const remoteList: any[] = Array.isArray(remoteRaw) ? remoteRaw : [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mergeAnexos = (aList?: any[], bList?: any[]) => {
+    const base = Array.isArray(aList) && aList.length > 0 ? aList : Array.isArray(bList) ? bList : [];
+    const other = base === aList ? (Array.isArray(bList) ? bList : []) : (Array.isArray(aList) ? aList : []);
+    if (base.length === 0) return undefined;
+    return base.map((anx, i) => {
+      const match = other[i] || other.find((o) => o?.nome === anx?.nome);
+      if (match && !anx?.base64 && match?.base64) {
+        return { ...anx, base64: match.base64 };
+      }
+      return anx;
+    });
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mergeAcoes = (aAcoes?: any[], bAcoes?: any[]) => {
+    const listA = Array.isArray(aAcoes) ? aAcoes : [];
+    const listB = Array.isArray(bAcoes) ? bAcoes : [];
+    if (listA.length === 0) return listB;
+    if (listB.length === 0) return listA;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const map = new Map<string, any>();
+    for (const ac of [...listB, ...listA]) {
+      if (!ac || typeof ac !== 'object') continue;
+      const key = String(ac.id || `${ac.tipo}-${ac.titulo}`);
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, ac);
+      } else {
+        map.set(key, {
+          ...prev,
+          ...ac,
+          executada: Boolean(prev.executada || ac.executada),
+          desfeita: Boolean(prev.desfeita || ac.desfeita),
+          recusada: Boolean(prev.recusada || ac.recusada),
+          editadaPeloUsuario: Boolean(prev.editadaPeloUsuario || ac.editadaPeloUsuario),
+          executadaEm: ac.executadaEm || prev.executadaEm,
+          payload: ac.editadaPeloUsuario
+            ? ac.payload
+            : prev.editadaPeloUsuario
+            ? prev.payload
+            : ac.payload || prev.payload,
+        });
+      }
+    }
+    return Array.from(map.values());
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mergeTwoItems = (existing: any, incoming: any) => {
+    // Prefer the item that has finished processing (processandoResposta !== true)
+    const primary =
+      existing.processandoResposta && !incoming.processandoResposta
+        ? incoming
+        : !existing.processandoResposta && incoming.processandoResposta
+        ? existing
+        : existing;
+    const secondary = primary === existing ? incoming : existing;
+
+    const mergedAnexos = mergeAnexos(primary.anexos, secondary.anexos);
+    const mergedAnexo =
+      primary.anexo || secondary.anexo
+        ? {
+            ...(secondary.anexo || {}),
+            ...(primary.anexo || {}),
+            base64: primary.anexo?.base64 || secondary.anexo?.base64,
+          }
+        : undefined;
+
+    return {
+      ...secondary,
+      ...primary,
+      processandoResposta: Boolean(
+        primary.processandoResposta && secondary.processandoResposta
+      ),
+      anexo: mergedAnexo,
+      anexos: mergedAnexos,
+      audioLalaBase64: primary.audioLalaBase64 || secondary.audioLalaBase64,
+      acoesPropostas: mergeAcoes(primary.acoesPropostas, secondary.acoesPropostas),
+    };
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const byId = new Map<number, any>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let welcomeCard: any = null;
+
+  // Process local first, then remote so local is primary on ties
+  for (const item of [...localList, ...remoteList]) {
+    if (!item || typeof item !== 'object') continue;
+    const numId = Number(item.id) || 0;
+    if (numId === 1) {
+      if (
+        !welcomeCard ||
+        (Array.isArray(item.tags) && item.tags.includes('Memória Preservada'))
+      ) {
+        welcomeCard = item;
+      }
+      continue;
+    }
+    // If chat was explicitly cleared at chatClearedAt, ignore messages from before chatClearedAt
+    if (
+      chatClearedAt > 0 &&
+      numId > 1_000_000_000_000 &&
+      numId < chatClearedAt - 500
+    ) {
+      continue;
+    }
+
+    // Check if an identical message (by id or same user text + same minute) already exists
+    let matchedId: number | null = byId.has(numId) ? numId : null;
+    if (matchedId === null && item.mensagemUsuario) {
+      for (const [k, v] of byId.entries()) {
+        if (
+          String(v.mensagemUsuario || '').trim() ===
+            String(item.mensagemUsuario || '').trim() &&
+          String(v.dataHora || '') === String(item.dataHora || '') &&
+          Math.abs(k - numId) < 60000
+        ) {
+          matchedId = k;
+          break;
+        }
+      }
+    }
+
+    if (matchedId !== null) {
+      byId.set(matchedId, mergeTwoItems(byId.get(matchedId), item));
+    } else if (numId > 0) {
+      byId.set(numId, item);
+    }
+  }
+
+  const sortedReal = Array.from(byId.values()).sort(
+    (a, b) => (Number(b.id) || 0) - (Number(a.id) || 0)
+  );
+
+  if (welcomeCard) {
+    sortedReal.push(welcomeCard);
+  } else if (sortedReal.length === 0 && localList.length > 0) {
+    sortedReal.push(localList[0]);
+  }
+
+  return sortedReal.slice(0, 120) as T[];
+}
+
+export function mergeHistoricoAcoesLala<T = Record<string, unknown>>(
+  localRaw: unknown,
+  remoteRaw: unknown
+): T[] {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const localList: any[] = Array.isArray(localRaw) ? localRaw : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const remoteList: any[] = Array.isArray(remoteRaw) ? remoteRaw : [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const byAcaoId = new Map<string, any>();
+
+  for (const item of [...localList, ...remoteList]) {
+    if (!item || typeof item !== 'object') continue;
+    const key = String(item.acaoId || item.id || '');
+    if (!key) continue;
+    const existing = byAcaoId.get(key);
+    if (!existing) {
+      byAcaoId.set(key, item);
+    } else {
+      byAcaoId.set(key, {
+        ...existing,
+        ...item,
+        desfeita: Boolean(existing.desfeita || item.desfeita),
+        editadaPeloUsuario: Boolean(
+          existing.editadaPeloUsuario || item.editadaPeloUsuario
+        ),
+        notaAprendizado: item.notaAprendizado || existing.notaAprendizado,
+      });
+    }
+  }
+
+  return Array.from(byAcaoId.values()).slice(0, 80) as T[];
+}
+
 export async function importFullBackupPayload(
   payload: AppBackupPayload
 ): Promise<void> {
   if (!payload || !payload.records) return;
 
-  // Preserve Lala's learned memory & rules if local has items that remote doesn't have yet
+  // Preserve Lala's learned memory, rules, conversation messages & action history
   const localPerfil = await idbGetRecord<{
     itensMemoriaViva?: { id: string; texto: string; categoria: string; dataHora?: string }[];
     regrasAprendidasLala?: string[];
+    ultimaLimpezaChatEm?: number;
   }>('perfil_calibrado');
 
+  const localInteracoes = await idbGetRecord<unknown[]>('interacoes_lala');
+  const localHistorico = await idbGetRecord<unknown[]>('historico_acoes_lala');
   const localDemoLimpo = await idbGetRecord<boolean>('demo_limpo');
+
+  const incomingPerfilObj = (payload.records.perfil_calibrado || {}) as {
+    ultimaLimpezaChatEm?: number;
+  };
+  const chatClearedAt = Math.max(
+    Number(localPerfil?.ultimaLimpezaChatEm || 0),
+    Number(incomingPerfilObj?.ultimaLimpezaChatEm || 0)
+  );
 
   for (const [key, value] of Object.entries(payload.records)) {
     if (key === 'demo_limpo' && localDemoLimpo === true) {
       await idbSetRecord(key, true, false);
+    } else if (key === 'interacoes_lala') {
+      const mergedChat = mergeInteracoesLala(
+        localInteracoes,
+        value,
+        chatClearedAt
+      );
+      await idbSetRecord(key, mergedChat, false);
+    } else if (key === 'historico_acoes_lala') {
+      const mergedHist = mergeHistoricoAcoesLala(localHistorico, value);
+      await idbSetRecord(key, mergedHist, false);
     } else if (key === 'contas' && Array.isArray(value)) {
       const contasLimpas = (value as { nome?: string; saldoAtual?: number }[]).filter(
         (c) => {
@@ -472,6 +766,7 @@ export async function importFullBackupPayload(
           ...incomingPerfil,
           itensMemoriaViva: mergedMem,
           regrasAprendidasLala: mergedRules,
+          ultimaLimpezaChatEm: chatClearedAt > 0 ? chatClearedAt : undefined,
         },
         false
       );

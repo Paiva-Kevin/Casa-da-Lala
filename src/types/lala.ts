@@ -79,6 +79,7 @@ export interface PerfilUsuarioCalibrado {
   contagemConfirmacoesPorTipo?: Partial<Record<AcaoGovernanta["tipo"], number>>;
   regrasAprendidasLala?: string[];
   itensMemoriaViva?: ItemAprendizadoLala[];
+  ultimaLimpezaChatEm?: number;
 }
 
 export type IntencaoImportacaoArquivo =
@@ -393,6 +394,7 @@ export interface InteracaoGovernanta {
   id: number;
   dataHora: string;
   modo: ModoInteracaoLala;
+  processandoResposta?: boolean;
   humorUsuario?: string;
   mensagemUsuario: string;
   transcricaoAudioUsuario?: string;

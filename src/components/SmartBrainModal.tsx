@@ -26,6 +26,7 @@ import {
   Disciplina,
   IntencaoImportacaoArquivo,
   InteracaoGovernanta,
+  LancamentoFinanceiro,
   OrcamentoCategoria,
   PerfilUsuarioCalibrado,
   PetPerfil,
@@ -74,6 +75,7 @@ interface SmartBrainModalProps {
   projetos: ProjetoTrabalho[];
   contas?: ContaBancaria[];
   cartoes?: CartaoCredito[];
+  lancamentos?: LancamentoFinanceiro[];
   perfilCalibrado?: PerfilUsuarioCalibrado;
   setPerfilCalibrado?: React.Dispatch<React.SetStateAction<PerfilUsuarioCalibrado>>;
   themeMode: ThemeMode;
@@ -115,6 +117,7 @@ export function SmartBrainModal({
   projetos,
   contas = [],
   cartoes = [],
+  lancamentos = [],
   perfilCalibrado,
   setPerfilCalibrado,
   irParaLalaCompleta,
@@ -331,12 +334,30 @@ export function SmartBrainModal({
     if (!anexoAudioDireto) setAnexosAtuais([]);
 
     const historicoConversa = [...interacoesLala]
-      .slice(0, 8)
+      .filter((it) => !it.processandoResposta)
+      .slice(0, 25)
       .reverse()
       .map((it) => ({
         usuario: it.mensagemUsuario,
         lala: it.respostaLala,
         dataHora: it.dataHora,
+        acoesResumo:
+          it.acoesPropostas && it.acoesPropostas.length > 0
+            ? it.acoesPropostas
+                .map(
+                  (a) =>
+                    `${a.tipo}: ${a.titulo} (${
+                      a.executada
+                        ? "confirmada"
+                        : a.recusada
+                        ? "recusada"
+                        : a.desfeita
+                        ? "desfeita"
+                        : "aguardando confirmação"
+                    })`
+                )
+                .join(" | ")
+            : undefined,
       }));
 
     const ctx = {
@@ -359,6 +380,14 @@ export function SmartBrainModal({
         limiteTotal: cc.limiteTotal,
         vencimentoDia: cc.vencimentoDia,
       })),
+      gastosPrevistosERecorrentes: lancamentos.slice(0, 35).map(
+        (l) =>
+          `${l.descricao}: R$ ${Number(l.valor || 0)
+            .toFixed(2)
+            .replace(".", ",")} (${l.status}, ${
+            l.semData ? "Sem data" : l.data || "Sem data"
+          }${l.recorrente ? ", recorrente" : ""})`
+      ),
       tomLala: perfilCalibrado?.tomLala,
       autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
       tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
@@ -371,18 +400,39 @@ export function SmartBrainModal({
       historicoConversa,
     };
 
-    try {
-      const idNova = Date.now();
-      const msgEfetiva =
-        txt ||
-        (listaParaEnviar.length > 0
-          ? `Lala, analise ${
-              listaParaEnviar.length === 1
-                ? `a imagem/arquivo "${listaParaEnviar[0].nome}"`
-                : `estas ${listaParaEnviar.length} imagens/arquivos`
-            } e atualize o aplicativo para mim.`
-          : "");
+    const idNova = Date.now();
+    const agoraHoraEnvio = new Date().toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const msgEfetiva =
+      txt ||
+      (listaParaEnviar.length > 0
+        ? `Lala, analise ${
+            listaParaEnviar.length === 1
+              ? `a imagem/arquivo "${listaParaEnviar[0].nome}"`
+              : `estas ${listaParaEnviar.length} imagens/arquivos`
+          } e atualize o aplicativo para mim.`
+        : "");
 
+    // Persiste a mensagem imediatamente antes da chamada à IA
+    const interacaoPendente: InteracaoGovernanta = {
+      id: idNova,
+      dataHora: agoraHoraEnvio,
+      modo: "comando",
+      processandoResposta: true,
+      mensagemUsuario:
+        msgEfetiva === "🎤 [Mensagem de Áudio]"
+          ? "🎤 Mensagem de áudio enviada"
+          : msgEfetiva,
+      respostaLala: "Analisando sua mensagem e preparando tudo...",
+      anexo: listaParaEnviar.length > 0 ? listaParaEnviar[0] : undefined,
+      anexos: listaParaEnviar.length > 0 ? listaParaEnviar : undefined,
+      acoesPropostas: [],
+    };
+    setInteracoesLala((prev) => [interacaoPendente, ...prev]);
+
+    try {
       let anexosParaAnalise = listaParaEnviar;
       if (
         listaParaEnviar.length === 0 &&
@@ -391,8 +441,12 @@ export function SmartBrainModal({
         )
       ) {
         const interacaoComAnexo = interacoesLala
-          .slice(0, 10)
-          .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
+          .slice(0, 12)
+          .find(
+            (it) =>
+              it.id !== idNova &&
+              ((it.anexos && it.anexos.length > 0) || it.anexo)
+          );
         if (interacaoComAnexo) {
           anexosParaAnalise =
             interacaoComAnexo.anexos && interacaoComAnexo.anexos.length > 0
@@ -473,6 +527,7 @@ export function SmartBrainModal({
       const novaInteracao: InteracaoGovernanta = {
         id: idNova,
         dataHora: agoraHora,
+        processandoResposta: false,
         mensagemUsuario:
           resultado.transcricaoAudioUsuario ||
           (msgEfetiva === "🎤 [Mensagem de Áudio]"
@@ -492,7 +547,13 @@ export function SmartBrainModal({
         acoesPropostas: acoesMarcadas,
       };
 
-      setInteracoesLala((prev) => [novaInteracao, ...prev]);
+      setInteracoesLala((prev) => {
+        const existe = prev.some((it) => it.id === idNova);
+        if (existe) {
+          return prev.map((it) => (it.id === idNova ? novaInteracao : it));
+        }
+        return [novaInteracao, ...prev];
+      });
 
       const vozAtivaSalva =
         typeof window !== "undefined" &&
@@ -514,6 +575,19 @@ export function SmartBrainModal({
           }
         });
       }
+    } catch {
+      setInteracoesLala((prev) =>
+        prev.map((it) =>
+          it.id === idNova
+            ? {
+                ...it,
+                processandoResposta: false,
+                respostaLala:
+                  "Tive uma oscilação momentânea, mas sua mensagem está salva no bate-papo. Você pode reanalisar na aba da Lala!",
+              }
+            : it
+        )
+      );
     } finally {
       setProcessando(false);
     }
@@ -636,6 +710,7 @@ export function SmartBrainModal({
                     interacoesLala,
                     perfilCalibrado
                   );
+                  const agoraTs = Date.now();
                   if (setPerfilCalibrado) {
                     setPerfilCalibrado((prev) => ({
                       ...prev,
@@ -643,6 +718,7 @@ export function SmartBrainModal({
                         consolidado.itensMemoriaVivaAtualizados,
                       regrasAprendidasLala:
                         consolidado.regrasAprendidasAtualizadas,
+                      ultimaLimpezaChatEm: agoraTs,
                     }));
                   }
                   const agoraHora = new Date().toLocaleTimeString("pt-BR", {
