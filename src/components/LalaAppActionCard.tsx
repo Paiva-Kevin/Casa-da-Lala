@@ -644,10 +644,112 @@ export function LalaAppActionCard({
               </div>
             )}
 
+            {/* PREVIEW COMPLETO DE LISTA DE GASTOS RECORRENTES / PAGAMENTOS PREVISTOS (SEM CORTAR NENHUM ITEM) */}
+            {p?.lancamentosAjuste && p.lancamentosAjuste.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between px-1">
+                  <span
+                    className="text-[10px] font-extrabold uppercase tracking-wider"
+                    style={{ color: t.textSoft }}
+                  >
+                    Todos os {p.lancamentosAjuste.length} lançamentos incluídos:
+                  </span>
+                  <span
+                    className="text-[11px] font-mono-num font-extrabold"
+                    style={{ color: t.action }}
+                  >
+                    Total: R${" "}
+                    {p.lancamentosAjuste
+                      .reduce((s, i) => s + (Number(i.valor) || 0), 0)
+                      .toFixed(2)
+                      .replace(".", ",")}
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-80 overflow-y-auto pr-0.5">
+                  {p.lancamentosAjuste.map((lanc, idx) => {
+                    const ehSemData =
+                      lanc.semData === true ||
+                      !lanc.data ||
+                      /^(sem\s*data|n[ãa]o\s*informad)/i.test(String(lanc.data));
+                    return (
+                      <div
+                        key={`lanc-${idx}`}
+                        className="p-2.5 rounded-xl border flex items-center justify-between gap-2"
+                        style={{
+                          backgroundColor: t.card,
+                          borderColor: t.border,
+                        }}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span
+                              className="text-[10px] font-mono-num font-bold opacity-60"
+                              style={{ color: t.textSoft }}
+                            >
+                              {idx + 1}.
+                            </span>
+                            <p
+                              className="text-[11px] font-bold truncate"
+                              style={{ color: t.text }}
+                            >
+                              {lanc.descricao}
+                            </p>
+                            {lanc.recorrente && (
+                              <span
+                                className="px-1.5 py-0.2 rounded-md text-[9px] font-bold"
+                                style={{
+                                  backgroundColor: `${t.primary}18`,
+                                  color: t.primary,
+                                }}
+                              >
+                                Recorrente
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                            <span
+                              className="px-1.5 py-0.5 rounded text-[9px] font-bold"
+                              style={{
+                                backgroundColor: ehSemData
+                                  ? t.cardSubtle
+                                  : `${t.finance}18`,
+                                color: ehSemData ? t.textSoft : t.finance,
+                              }}
+                            >
+                              {ehSemData ? "Sem data definida" : lanc.data}
+                            </span>
+                            <span
+                              className="text-[9px] truncate"
+                              style={{ color: t.textSoft }}
+                            >
+                              {lanc.categoria || "Moradia & Fixos"} ·{" "}
+                              {lanc.status === "previsto" ? "Previsto" : "Realizado"}
+                            </span>
+                          </div>
+                        </div>
+                        <span
+                          className="text-xs font-mono-num font-extrabold shrink-0"
+                          style={{
+                            color:
+                              lanc.tipo === "receita" ? t.primary : t.action,
+                          }}
+                        >
+                          {lanc.tipo === "receita" ? "+" : "−"}R${" "}
+                          {Number(lanc.valor || 0)
+                            .toFixed(2)
+                            .replace(".", ",")}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* PREVIEW VISUAL DE COMPROMISSOS AGENDADOS */}
             {p?.compromissos && p.compromissos.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {p.compromissos.slice(0, 6).map((comp, idx) => (
+                {p.compromissos.map((comp, idx) => (
                   <div
                     key={idx}
                     className="px-2.5 py-1 rounded-xl border text-[11px] flex items-center gap-1.5"
@@ -657,10 +759,13 @@ export function LalaAppActionCard({
                       className="font-mono-num font-bold"
                       style={{ color: meta.corDestaque }}
                     >
+                      {comp.diaMes
+                        ? `Dia ${String(comp.diaMes).padStart(2, "0")} · `
+                        : ""}
                       {comp.hora}
                     </span>
                     <span
-                      className="font-semibold truncate max-w-[180px]"
+                      className="font-semibold truncate max-w-[200px]"
                       style={{ color: t.text }}
                     >
                       {comp.titulo}
@@ -673,7 +778,7 @@ export function LalaAppActionCard({
             {/* PREVIEW VISUAL DE DISCIPLINAS UERJ */}
             {p?.disciplinas && p.disciplinas.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {p.disciplinas.slice(0, 6).map((d, idx) => (
+                {p.disciplinas.map((d, idx) => (
                   <div
                     key={idx}
                     className="px-2.5 py-1 rounded-xl border text-[11px] flex items-center gap-1.5"
@@ -697,7 +802,7 @@ export function LalaAppActionCard({
             {/* PREVIEW VISUAL DE REFEIÇÕES / COMPRAS */}
             {p?.refeicoes && p.refeicoes.length > 0 && (
               <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {p.refeicoes.slice(0, 6).map((r, idx) => (
+                {p.refeicoes.map((r, idx) => (
                   <div
                     key={idx}
                     className="px-2.5 py-1 rounded-xl border text-[11px] flex items-center gap-1.5"
@@ -795,10 +900,189 @@ export function LalaAppActionCard({
               </div>
             </div>
 
+            {/* Edição de Lista de Gastos Recorrentes / Lançamentos */}
+            {draftAcao.payload?.lancamentosAjuste &&
+              draftAcao.payload.lancamentosAjuste.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="text-[10px] font-bold"
+                      style={{ color: t.textSoft }}
+                    >
+                      Despesas / Pagamentos ({draftAcao.payload.lancamentosAjuste.length} itens — deixe data vazia p/ Sem data)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftAcao((prev) => ({
+                          ...prev,
+                          payload: {
+                            ...prev.payload,
+                            lancamentosAjuste: [
+                              ...(prev.payload?.lancamentosAjuste || []),
+                              {
+                                descricao: "Nova despesa",
+                                valor: 0,
+                                tipo: "despesa",
+                                status: "previsto",
+                                data: "Sem data",
+                                diaVencimento: null,
+                                semData: true,
+                                recorrente: true,
+                                metodo: "Conta / Pix",
+                                categoria: "Moradia & Fixos",
+                              },
+                            ],
+                          },
+                        }))
+                      }
+                      className="text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
+                      style={{ color: t.primary }}
+                    >
+                      <Plus size={11} /> Despesa
+                    </button>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
+                    {(draftAcao.payload.lancamentosAjuste || []).map(
+                      (lanc, idx) => (
+                        <div
+                          key={idx}
+                          className="grid grid-cols-12 gap-1.5 items-center"
+                        >
+                          <input
+                            value={lanc.descricao}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setDraftAcao((prev) => {
+                                const list = [
+                                  ...(prev.payload?.lancamentosAjuste || []),
+                                ];
+                                list[idx] = { ...list[idx], descricao: val };
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    lancamentosAjuste: list,
+                                  },
+                                };
+                              });
+                            }}
+                            placeholder="Descrição"
+                            className="col-span-5 px-2 py-1 rounded-lg border text-xs outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                          />
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={lanc.valor}
+                            onChange={(e) => {
+                              const val = Number(e.target.value) || 0;
+                              setDraftAcao((prev) => {
+                                const list = [
+                                  ...(prev.payload?.lancamentosAjuste || []),
+                                ];
+                                list[idx] = { ...list[idx], valor: val };
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    lancamentosAjuste: list,
+                                  },
+                                };
+                              });
+                            }}
+                            placeholder="R$"
+                            className="col-span-3 px-2 py-1 rounded-lg border text-xs font-mono-num outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                          />
+                          <input
+                            value={
+                              lanc.semData || lanc.data === "Sem data"
+                                ? ""
+                                : lanc.data || ""
+                            }
+                            onChange={(e) => {
+                              const rawD = e.target.value;
+                              const ehSem =
+                                !rawD.trim() ||
+                                /^(sem\s*data|n[ãa]o\s*informad)/i.test(
+                                  rawD.trim()
+                                );
+                              const mDia =
+                                rawD.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
+                                rawD.match(/\bdia\s+(\d{1,2})\b/i) ||
+                                rawD.match(/^(\d{1,2})$/);
+                              const dNum = mDia ? parseInt(mDia[1], 10) : null;
+                              setDraftAcao((prev) => {
+                                const list = [
+                                  ...(prev.payload?.lancamentosAjuste || []),
+                                ];
+                                list[idx] = {
+                                  ...list[idx],
+                                  data: ehSem ? "Sem data" : rawD,
+                                  diaVencimento:
+                                    !ehSem && dNum && dNum >= 1 && dNum <= 31
+                                      ? dNum
+                                      : null,
+                                  semData: ehSem,
+                                };
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    lancamentosAjuste: list,
+                                  },
+                                };
+                              });
+                            }}
+                            placeholder="Sem data (ou Dia 10)"
+                            className="col-span-3 px-2 py-1 rounded-lg border text-xs font-mono-num outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftAcao((prev) => ({
+                                ...prev,
+                                payload: {
+                                  ...prev.payload,
+                                  lancamentosAjuste: (
+                                    prev.payload?.lancamentosAjuste || []
+                                  ).filter((_, i) => i !== idx),
+                                },
+                              }))
+                            }
+                            className="col-span-1 p-1 text-red-500 flex justify-center cursor-pointer"
+                            title="Remover item"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+
             {/* Campos específicos de Gasto / Receita / Tarefa */}
-            {(draftAcao.tipo === "REGISTRAR_GASTO" ||
-              draftAcao.tipo === "REGISTRAR_RECEITA" ||
-              draftAcao.tipo === "CRIAR_TAREFA") && (
+            {(!draftAcao.payload?.lancamentosAjuste ||
+              draftAcao.payload.lancamentosAjuste.length <= 1) &&
+              (draftAcao.tipo === "REGISTRAR_GASTO" ||
+                draftAcao.tipo === "REGISTRAR_RECEITA" ||
+                draftAcao.tipo === "CRIAR_TAREFA") && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div className="sm:col-span-1">
                   <label

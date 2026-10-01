@@ -315,10 +315,10 @@ export function hasRealUserCustomizations(
     return true;
   }
   const contas = records.contas as
-    | { id?: string; nome?: string; saldoAtual?: number }[]
+    | { id?: string | number; nome?: string; saldoAtual?: number }[]
     | undefined;
   if (Array.isArray(contas)) {
-    const demoIds = new Set(['conta-1', 'conta-2', 'conta-3']);
+    const demoIds = new Set(['conta-1', 'conta-2', 'conta-3', '1', '2', '3']);
     const demoBalances = new Set([620, 210, 0, 2450, 385.5, 240, 420]);
     const isDefaultDemoContas =
       contas.length === 0 ||
@@ -330,6 +330,29 @@ export function hasRealUserCustomizations(
     if (!isDefaultDemoContas) {
       return true;
     }
+  }
+  const lancamentos = records.lancamentos as
+    | { id?: number; recorrente?: boolean; semData?: boolean }[]
+    | undefined;
+  if (
+    Array.isArray(lancamentos) &&
+    lancamentos.some(
+      (l) =>
+        Number(l?.id) > 1000 ||
+        l?.recorrente === true ||
+        l?.semData !== undefined
+    )
+  ) {
+    return true;
+  }
+  const compromissos = records.compromissos as
+    | { id?: string | number }[]
+    | undefined;
+  if (
+    Array.isArray(compromissos) &&
+    compromissos.some((c) => Number(c?.id) > 2000)
+  ) {
+    return true;
   }
   return false;
 }

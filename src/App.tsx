@@ -1510,6 +1510,24 @@ export default function App() {
     );
   };
 
+  const normalizarCategoriaFinancas = (
+    catRaw?: string
+  ): OrcamentoCategoria["categoria"] => {
+    const c = (catRaw || "").trim();
+    if (c === "Pets (Nina & Tobias)" || c === "Pets") return "Pets";
+    if (c === "Mobilidade & UERJ" || c === "Transporte") return "Transporte";
+    if (
+      c === "Mercado" ||
+      c === "Moradia & Fixos" ||
+      c === "Estudos & UERJ" ||
+      c === "Dívida" ||
+      c === "Lazer & Outros"
+    ) {
+      return c;
+    }
+    return "Moradia & Fixos";
+  };
+
   const adicionarLancamento = (
     valor: number,
     categoria: OrcamentoCategoria["categoria"],
@@ -1519,20 +1537,67 @@ export default function App() {
     afetaEstoquePets?: boolean,
     contaId = 1,
     cartaoId = 1,
-    tipo: "despesa" | "receita" = "despesa"
+    tipo: "despesa" | "receita" = "despesa",
+    dataCustom?: string,
+    diaVencimentoCustom?: number | null,
+    semDataCustom?: boolean,
+    recorrenteCustom?: boolean
   ) => {
+    const rawData = (dataCustom || "").trim();
+    let diaVenc: number | null =
+      typeof diaVencimentoCustom === "number" &&
+      diaVencimentoCustom >= 1 &&
+      diaVencimentoCustom <= 31
+        ? diaVencimentoCustom
+        : null;
+
+    if (diaVenc === null && rawData) {
+      const mBarra = rawData.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+      const mDia = rawData.match(/\bdia\s+(\d{1,2})\b/i);
+      if (mBarra) {
+        const d = parseInt(mBarra[1], 10);
+        if (d >= 1 && d <= 31) diaVenc = d;
+      } else if (mDia) {
+        const d = parseInt(mDia[1], 10);
+        if (d >= 1 && d <= 31) diaVenc = d;
+      }
+    }
+
+    const ehSemData =
+      semDataCustom === true ||
+      (!rawData && diaVenc === null && (status === "previsto" || recorrenteCustom)) ||
+      /^(sem\s*data|n[ãa]o\s*informad|indefinid|a\s*definir)$/i.test(rawData);
+
+    const dataFinal = ehSemData
+      ? status === "previsto" || recorrenteCustom
+        ? "Sem data"
+        : "Hoje"
+      : rawData ||
+        (diaVenc !== null
+          ? recorrenteCustom
+            ? `Todo dia ${String(diaVenc).padStart(2, "0")}`
+            : `Dia ${String(diaVenc).padStart(2, "0")}`
+          : status === "previsto"
+          ? "Sem data"
+          : "Hoje");
+
+    const catNormalizada = normalizarCategoriaFinancas(categoria);
+
     const novo: LancamentoFinanceiro = {
-      id: Date.now(),
+      id: Date.now() + Math.floor(Math.random() * 1000),
       mesKey: mesSelecionado,
-      data: "hoje",
+      data: dataFinal,
       descricao,
       tipo,
       status,
       metodo,
       contaId: metodo === "Conta / Pix" ? contaId : undefined,
       cartaoId: metodo === "Cartão de Crédito" ? cartaoId : undefined,
-      categoria,
+      categoria: catNormalizada,
       valor,
+      recorrente: Boolean(recorrenteCustom),
+      diaVencimento: ehSemData ? null : diaVenc,
+      semData: ehSemData,
     };
 
     setLancamentos((prev) => [novo, ...prev]);
@@ -1860,15 +1925,239 @@ export default function App() {
         break;
       }
       case "REGISTRAR_GASTO": {
+        const listaAjuste = acao.payload?.lancamentosAjuste;
+        const contaPadraoId = contas[0]?.id ?? 1;
+        const cartaoPadraoId = cartoes[0]?.id ?? 1;
+
+        if (Array.isArray(listaAjuste) && listaAjuste.length > 0) {
+          const novosLancamentos: LancamentoFinanceiro[] = [];
+          let totalRealizadoConta = 0;
+          let totalRealizadoCartao = 0;
+          let comprouSachePet = false;
+
+          listaAjuste.forEach((item, idx) => {
+            const val = Number(item.valor) || 0;
+            if (val <= 0) return;
+            const desc = (item.descricao || "Despesa").trim();
+            const cat = normalizarCategoriaFinancas(
+              item.categoria || acao.payload?.categoriaGasto || "Moradia & Fixos"
+            );
+            const metodo: "Conta / Pix" | "Cartão de Crédito" =
+              item.metodo === "Cartão de Crédito"
+                ? "Cartão de Crédito"
+                : "Conta / Pix";
+            const tipoItem: "despesa" | "receita" =
+              item.tipo === "receita" ? "receita" : "despesa";
+            const recorrente = Boolean(item.recorrente);
+            const statusItem: "realizado" | "previsto" =
+              item.status === "realizado"
+                ? "realizado"
+                : item.status === "previsto" || recorrente
+                ? "previsto"
+                : acao.payload?.statusGasto || "realizado";
+
+            const rawData = String(item.data || "").trim();
+            let diaVenc: number | null =
+              typeof item.diaVencimento === "number" &&
+              item.diaVencimento >= 1 &&
+              item.diaVencimento <= 31
+                ? item.diaVencimento
+                : null;
+
+            if (diaVenc === null && rawData) {
+              const mBarra = rawData.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+              const mDia = rawData.match(/\bdia\s+(\d{1,2})\b/i);
+              if (mBarra) {
+                const d = parseInt(mBarra[1], 10);
+                if (d >= 1 && d <= 31) diaVenc = d;
+              } else if (mDia) {
+                const d = parseInt(mDia[1], 10);
+                if (d >= 1 && d <= 31) diaVenc = d;
+              }
+            }
+
+            // Se a usuária não informou data, NUNCA assume nem inventa dia!
+            const ehSemData =
+              item.semData === true ||
+              !rawData ||
+              /^(sem\s*data|n[ãa]o\s*informad|indefinid|a\s*definir)$/i.test(
+                rawData
+              ) ||
+              ((statusItem === "previsto" || recorrente) &&
+                rawData.toLowerCase() === "hoje" &&
+                diaVenc === null);
+
+            if (ehSemData) {
+              diaVenc = null;
+            }
+
+            const dataFormatada = ehSemData
+              ? statusItem === "previsto" || recorrente
+                ? "Sem data"
+                : "Hoje"
+              : rawData ||
+                (diaVenc !== null
+                  ? recorrente
+                    ? `Todo dia ${String(diaVenc).padStart(2, "0")}`
+                    : `Dia ${String(diaVenc).padStart(2, "0")}`
+                  : "Sem data");
+
+            // Verifica se a data menciona mês específico (08, 09, 10)
+            let mesAlvo: MesFinanceiroKey = mesSelecionado;
+            const mMes = rawData.match(/\b\d{1,2}\/(08|09|10)\b/);
+            if (mMes) {
+              mesAlvo = `2026-${mMes[1]}` as MesFinanceiroKey;
+            }
+
+            novosLancamentos.push({
+              id: Date.now() + idx * 10 + Math.floor(Math.random() * 9),
+              mesKey: mesAlvo,
+              data: dataFormatada,
+              descricao: desc,
+              tipo: tipoItem,
+              status: statusItem,
+              metodo,
+              contaId: metodo === "Conta / Pix" ? contaPadraoId : undefined,
+              cartaoId:
+                metodo === "Cartão de Crédito" ? cartaoPadraoId : undefined,
+              categoria: cat,
+              valor: val,
+              recorrente,
+              diaVencimento: diaVenc,
+              semData: ehSemData,
+            });
+
+            if (statusItem === "realizado") {
+              if (metodo === "Conta / Pix") {
+                totalRealizadoConta += tipoItem === "receita" ? val : -val;
+              } else if (tipoItem === "despesa") {
+                totalRealizadoCartao += val;
+              }
+            }
+            if (cat === "Pets" && desc.toLowerCase().includes("sachê")) {
+              comprouSachePet = true;
+            }
+          });
+
+          if (novosLancamentos.length > 0) {
+            setLancamentos((prev) => {
+              // Se a usuária enviou uma lista de gastos recorrentes/previstos (2+ itens) ou pediu substituição,
+              // limpamos os lançamentos previstos de demonstração (id <= 10) para nunca exibir datas fictícias de exemplo!
+              let base = prev.filter((existente) => {
+                if (
+                  (novosLancamentos.length >= 2 ||
+                    acao.payload?.substituirLancamentos) &&
+                  existente.id <= 10 &&
+                  existente.status === "previsto"
+                ) {
+                  return false;
+                }
+                return true;
+              });
+
+              for (const novo of novosLancamentos) {
+                const normNovo = novo.descricao
+                  .toLowerCase()
+                  .normalize("NFD")
+                  .replace(/[\u0300-\u036f]/g, "")
+                  .trim();
+                const idxExist = base.findIndex((ex) => {
+                  const normEx = ex.descricao
+                    .toLowerCase()
+                    .normalize("NFD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .trim();
+                  return (
+                    normEx === normNovo &&
+                    ex.status === "previsto" &&
+                    novo.status === "previsto" &&
+                    (ex.mesKey === novo.mesKey || ex.recorrente || novo.recorrente)
+                  );
+                });
+                if (idxExist >= 0) {
+                  base[idxExist] = {
+                    ...base[idxExist],
+                    valor: novo.valor,
+                    data: novo.data,
+                    diaVencimento: novo.diaVencimento,
+                    semData: novo.semData,
+                    recorrente: novo.recorrente,
+                    categoria: novo.categoria,
+                    metodo: novo.metodo,
+                  };
+                } else {
+                  base = [novo, ...base];
+                }
+              }
+              return base;
+            });
+
+            if (totalRealizadoConta !== 0) {
+              setContas((prev) =>
+                prev.map((c) =>
+                  c.id === contaPadraoId
+                    ? {
+                        ...c,
+                        saldoAtual: Math.max(
+                          0,
+                          c.saldoAtual + totalRealizadoConta
+                        ),
+                      }
+                    : c
+                )
+              );
+            }
+            if (totalRealizadoCartao > 0) {
+              setCartoes((prev) =>
+                prev.map((ct) =>
+                  ct.id === cartaoPadraoId
+                    ? {
+                        ...ct,
+                        faturaAtual: ct.faturaAtual + totalRealizadoCartao,
+                      }
+                    : ct
+                )
+              );
+            }
+            if (comprouSachePet) {
+              setPetsPerfil((prev) =>
+                prev.map((p) => ({
+                  ...p,
+                  estoqueSaches: p.estoqueSaches + 10,
+                }))
+              );
+            }
+
+            showToast(
+              novosLancamentos.length === 1
+                ? `Lançamento "${novosLancamentos[0].descricao}" registrado (${novosLancamentos[0].data})!`
+                : `Todas as ${novosLancamentos.length} despesas foram registradas pela Lala!`
+            );
+          }
+          break;
+        }
+
         const val = acao.payload?.valor || 20;
-        const cat = acao.payload?.categoriaGasto || "Mercado";
+        const cat = normalizarCategoriaFinancas(
+          acao.payload?.categoriaGasto || "Mercado"
+        );
+        const statusGasto =
+          acao.payload?.statusGasto ||
+          (acao.payload?.recorrente ? "previsto" : "realizado");
         adicionarLancamento(
           val,
           cat,
           acao.payload?.texto || acao.titulo,
           "Conta / Pix",
-          "realizado",
-          cat === "Pets"
+          statusGasto,
+          cat === "Pets",
+          contaPadraoId,
+          cartaoPadraoId,
+          "despesa",
+          acao.payload?.data,
+          acao.payload?.diaVencimento,
+          acao.payload?.semData,
+          acao.payload?.recorrente
         );
         break;
       }

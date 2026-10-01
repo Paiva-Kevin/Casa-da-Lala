@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_BUILD_VERSION = "v17.0";
+const APP_BUILD_VERSION = "v18.0";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const SNAPSHOT_FILE = path.join(DATA_DIR, "cloud_snapshot.json");
 
@@ -55,6 +55,27 @@ function hasServerCustomizations(records: any): boolean {
     return true;
   }
   if (Array.isArray(records.contas) && !isDemoAccountsOnly(records.contas)) {
+    return true;
+  }
+  if (
+    Array.isArray(records.lancamentos) &&
+    records.lancamentos.some((l: { id?: number }) => Number(l?.id) > 1000)
+  ) {
+    return true;
+  }
+  if (
+    records.financas_mensais_v1 &&
+    typeof records.financas_mensais_v1 === "object" &&
+    Object.keys(records.financas_mensais_v1).length > 0
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(records.compromissos) &&
+    records.compromissos.some((c: { id?: string }) =>
+      String(c?.id || "").startsWith("comp-")
+    )
+  ) {
     return true;
   }
   return false;
@@ -472,14 +493,18 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
      c) PROIBIÇÃO DE CONTAS FANTASMAS E VALORES INVENTADOS: Em "contasAjuste", inclua SOMENTE os bancos/contas que aparecem visualmente nos prints enviados ou que foram citados pela usuária! NUNCA invente bancos (como "Itaú") nem invente valores que não estejam escritos nas imagens ou no texto!
      d) Defina "substituirExistentes": true na ação "ATUALIZAR_CONTAS_FINANCAS" sempre que a usuária enviar prints das contas dela para calibrar/atualizar as finanças, garantindo que contas antigas de exemplo sejam removidas e as novas (como PicPay, Nubank, etc.) sejam criadas/atualizadas.
    - Se ela pedir "atualize meu saldo" por texto sem anexar prints e sem informar valor numérico, gere a ação "ATUALIZAR_CONTAS_FINANCAS" para edição rápida no card.
-4. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
+4. LISTAS DE GASTOS RECORRENTES, CONTAS FIXAS E PAGAMENTOS PREVISTOS (REGRA DE OURO):
+   - Quando a usuária enviar uma lista de gastos recorrentes, despesas fixas, boletos, assinaturas ou pagamentos previstos (por texto, áudio ou imagem), você DEVE confirmar e incluir **100% de todas as despesas enviadas sem omitir NENHUMA**, tanto no texto de "respostaLala" (listando uma por uma com valor e data/sem data) quanto no array "lancamentosAjuste" dentro da ação "REGISTRAR_GASTO".
+   - PROIBIDO INVENTAR OU ASSUMIR DATAS: Se a usuária informou o dia de vencimento (ex: "dia 10", "vence dia 15", "05/05"), preencha "diaVencimento": 10, "data": "Todo dia 10" (ou "10/05"), "semData": false. Se a usuária NÃO informou data/dia para uma despesa (ex: "Netflix R$ 55,90" ou "Condomínio R$ 620"), preencha OBRIGATORIAMENTE "semData": true, "diaVencimento": null e "data": "Sem data". NUNCA invente dias nem use a data de hoje para gastos previstos/recorrentes sem data!
+   - Não use "AGENDAR_COMPROMISSO" para despesas financeiras/boletos; use "REGISTRAR_GASTO" com "lancamentosAjuste" contendo todos os itens!
+5. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
    - Se a usuária pedir para automatizar um tipo de ação (ex: "automatize atualizações de saldo", "pode fazer gastos direto"), preencha "automatizarTipos". Se pedir para voltar a confirmar, preencha "pedirConfirmacaoTipos".
 
 Retorne SEMPRE um objeto JSON válido exatamente neste formato:
 {
   "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
   "transcricaoAudioUsuario": "string opcional se enviou áudio",
-  "respostaLala": "Sua resposta natural, inteligente e contextualizada em pt-BR, detalhando exatamente os valores/bancos/dados que você identificou e preparou para ela",
+  "respostaLala": "Sua resposta natural, inteligente e contextualizada em pt-BR, detalhando exatamente todos os valores/bancos/despesas que você identificou sem omitir nenhum",
   "tituloCard": "Resumo curto em até 5 palavras",
   "tags": ["Tag1", "Tag2"],
   "novaRegraAprendida": "string opcional resumindo uma preferência ou regra ensinada pela usuária",
@@ -504,10 +529,16 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       "substituirExistentes": false,
       "texto": "string opcional (para CRIAR_TAREFA, REGISTRAR_GASTO, REGISTRAR_RECEITA)",
       "valor": 0,
-      "categoriaGasto": "Mercado" | "Pets" | "Transporte" | "Estudos & UERJ" | "Lazer & Outros" | "Moradia & Fixos" | "Dívida",
+      "categoriaGasto": "Mercado" | "Pets (Nina & Tobias)" | "Mobilidade & UERJ" | "Lazer & Outros" | "Moradia & Fixos",
+      "data": "string opcional (ex: Todo dia 10, 15/05 ou Sem data)",
+      "diaVencimento": null,
+      "semData": true,
+      "statusGasto": "previsto" | "realizado",
+      "recorrente": true,
       "srpe": 0,
       "contasAjuste": [{ "nome": "Nome exato do Banco lido", "saldoAtual": 0 }],
       "cartoesAjuste": [{ "nome": "Nome exato do Cartão lido", "faturaAtual": 0, "limiteTotal": 0, "vencimentoDia": 10 }],
+      "lancamentosAjuste": [{ "descricao": "Nome da despesa", "valor": 0, "tipo": "despesa", "status": "previsto", "data": "Todo dia 10 ou Sem data", "diaVencimento": 10, "semData": false, "recorrente": true, "metodo": "Conta / Pix", "categoria": "Moradia & Fixos" }],
       "compromissos": [{ "titulo": "Nome do evento", "hora": "14:00", "duracaoMin": 60, "diaMes": 30, "mes": 9, "ano": 2026, "local": "", "categoria": "pessoal", "sincronizarGoogle": true }],
       "refeicoes": [{ "horario": "08:00", "nome": "Café da Manhã", "descricao": "Itens", "proteinaG": 30, "kcal": 400 }],
       "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],

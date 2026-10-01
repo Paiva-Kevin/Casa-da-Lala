@@ -29,6 +29,7 @@ import {
   ThemeTokens,
 } from "../../types/lala";
 import { parseGastoNatural } from "../../data/initialData";
+import { extrairListaLancamentosOuGastosRecorrentes } from "../../services/lalaEngine";
 import {
   CATALOGO_BANCOS,
   detectarBancoIdPorNome,
@@ -265,7 +266,11 @@ interface FinancasScreenProps {
     afetaEstoquePets?: boolean,
     contaId?: number,
     cartaoId?: number,
-    tipo?: "despesa" | "receita"
+    tipo?: "despesa" | "receita",
+    dataCustom?: string,
+    diaVencimentoCustom?: number | null,
+    semDataCustom?: boolean,
+    recorrenteCustom?: boolean
   ) => void;
   dinheiroLivreInfo: {
     livreHoje: number;
@@ -324,6 +329,8 @@ export function FinancasScreen({
   );
   const [valorManual, setValorManual] = useState("");
   const [descManual, setDescManual] = useState("");
+  const [dataManual, setDataManual] = useState("");
+  const [recorrenteManual, setRecorrenteManual] = useState(false);
   const [catManual, setCatManual] =
     useState<OrcamentoCategoria["categoria"]>("Mercado");
 
@@ -459,7 +466,9 @@ export function FinancasScreen({
     setTextoNotificacaoBanco("");
   };
 
-  const lancamentosMes = lancamentos.filter((l) => l.mesKey === mesSelecionado);
+  const lancamentosMes = lancamentos.filter(
+    (l) => l.mesKey === mesSelecionado || Boolean(l.recorrente)
+  );
 
   const receitasRealizadas = lancamentosMes
     .filter((l) => l.tipo === "receita" && l.status === "realizado")
@@ -500,6 +509,35 @@ export function FinancasScreen({
   });
 
   const submeterNatural = () => {
+    const extraidos = extrairListaLancamentosOuGastosRecorrentes(inputNatural);
+    if (extraidos.length > 0) {
+      extraidos.forEach((item) => {
+        const catNorm: OrcamentoCategoria["categoria"] =
+          item.categoria === "Pets (Nina & Tobias)"
+            ? "Pets"
+            : item.categoria === "Mobilidade & UERJ"
+            ? "Transporte"
+            : (item.categoria as OrcamentoCategoria["categoria"]);
+        adicionarLancamento(
+          item.valor,
+          catNorm,
+          item.descricao,
+          item.metodo,
+          item.status,
+          catNorm === "Pets" && item.descricao.toLowerCase().includes("sachê"),
+          contas[0]?.id ?? 1,
+          cartoes[0]?.id ?? 1,
+          item.tipo,
+          item.data,
+          item.diaVencimento,
+          item.semData,
+          item.recorrente
+        );
+      });
+      setInputNatural("");
+      return;
+    }
+
     const parsed = parseGastoNatural(inputNatural);
     if (!parsed) return;
     adicionarLancamento(
@@ -511,7 +549,11 @@ export function FinancasScreen({
       parsed.afetaEstoquePets,
       contas[0]?.id ?? 1,
       cartoes[0]?.id ?? 1,
-      "despesa"
+      "despesa",
+      "Hoje",
+      null,
+      true,
+      false
     );
     setInputNatural("");
   };
@@ -519,6 +561,15 @@ export function FinancasScreen({
   const submeterManual = () => {
     const val = parseFloat(valorManual.replace(",", "."));
     if (isNaN(val) || val <= 0) return;
+    const rawData = dataManual.trim();
+    const semDataInformada =
+      !rawData || /^(sem\s*data|n[ãa]o\s*informad)$/i.test(rawData);
+    const dataEnviar = semDataInformada
+      ? statusLanc === "previsto" || recorrenteManual
+        ? "Sem data"
+        : "Hoje"
+      : rawData;
+
     adicionarLancamento(
       val,
       catManual,
@@ -529,10 +580,16 @@ export function FinancasScreen({
       catManual === "Pets" && tipoLanc === "despesa",
       metodoLanc === "Conta / Pix" ? contaEscolhidaId : undefined,
       metodoLanc === "Cartão de Crédito" ? cartaoEscolhidoId : undefined,
-      tipoLanc
+      tipoLanc,
+      dataEnviar,
+      null,
+      semDataInformada,
+      recorrenteManual
     );
     setValorManual("");
     setDescManual("");
+    setDataManual("");
+    setRecorrenteManual(false);
   };
 
   const criarNovaConta = () => {
@@ -1385,6 +1442,42 @@ export function FinancasScreen({
                       ))}
                     </select>
                   )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    value={dataManual}
+                    onChange={(e) => setDataManual(e.target.value)}
+                    placeholder={
+                      statusLanc === "previsto" || recorrenteManual
+                        ? "Dia/Data (ex: Todo dia 10, 15/10 ou vazio = Sem data)"
+                        : "Data (opcional, vazio = Hoje)"
+                    }
+                    className="p-2.5 rounded-xl text-xs font-mono-num outline-none border"
+                    style={{
+                      background: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                  <label
+                    className="p-2.5 rounded-xl text-xs font-semibold border flex items-center gap-2 cursor-pointer select-none"
+                    style={{
+                      background: t.bg,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={recorrenteManual}
+                      onChange={(e) => {
+                        setRecorrenteManual(e.target.checked);
+                        if (e.target.checked) setStatusLanc("previsto");
+                      }}
+                    />
+                    <span>Gasto recorrente mensal</span>
+                  </label>
                 </div>
 
                 <div className="flex gap-2">
@@ -3096,21 +3189,53 @@ export function FinancasScreen({
                   />
                 </div>
 
-                <div>
-                  <label
-                    className="text-[10px] font-bold uppercase block mb-1"
-                    style={{ color: t.textSoft }}
-                  >
-                    Data
-                  </label>
+                 <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label
+                      className="text-[10px] font-bold uppercase block"
+                      style={{ color: t.textSoft }}
+                    >
+                      Data / Vencimento
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setLancamentoEditando({
+                          ...lancamentoEditando,
+                          data: "Sem data",
+                          diaVencimento: null,
+                          semData: true,
+                        })
+                      }
+                      className="text-[10px] font-bold underline cursor-pointer"
+                      style={{ color: t.action }}
+                    >
+                      Definir Sem data
+                    </button>
+                  </div>
                   <input
                     value={lancamentoEditando.data}
-                    onChange={(e) =>
+                    placeholder="Ex: Todo dia 10, 15/10 ou Sem data"
+                    onChange={(e) => {
+                      const valData = e.target.value;
+                      const mDia =
+                        valData.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
+                        valData.match(/\bdia\s+(\d{1,2})\b/i) ||
+                        valData.match(/^(\d{1,2})$/);
+                      const dNum = mDia ? parseInt(mDia[1], 10) : null;
+                      const ehSem =
+                        !valData.trim() ||
+                        /^(sem\s*data|n[ãa]o\s*informad)/i.test(valData.trim());
                       setLancamentoEditando({
                         ...lancamentoEditando,
-                        data: e.target.value,
-                      })
-                    }
+                        data: valData,
+                        diaVencimento:
+                          !ehSem && dNum && dNum >= 1 && dNum <= 31
+                            ? dNum
+                            : null,
+                        semData: ehSem,
+                      });
+                    }}
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
                     style={{
                       backgroundColor: t.bg,

@@ -161,10 +161,29 @@ export interface AcaoGovernanta {
     texto?: string;
     valor?: number;
     categoriaGasto?: OrcamentoCategoria["categoria"];
+    data?: string;
+    diaVencimento?: number | null;
+    semData?: boolean;
+    statusGasto?: "realizado" | "previsto";
+    recorrente?: boolean;
+    substituirLancamentos?: boolean;
     srpe?: number;
     areaNota?: ArquivoRepositorio["area"];
     anexo?: AnexoLala;
     substituirExistentes?: boolean;
+    lancamentosAjuste?: {
+      descricao: string;
+      valor: number;
+      tipo?: "despesa" | "receita";
+      status?: "previsto" | "realizado";
+      data?: string;
+      diaVencimento?: number | null;
+      semData?: boolean;
+      recorrente?: boolean;
+      categoria?: OrcamentoCategoria["categoria"];
+      metodo?: "Conta / Pix" | "Cartão de Crédito";
+      contaNome?: string;
+    }[];
     compromissos?: {
       titulo: string;
       hora: string;
@@ -799,6 +818,9 @@ export interface LancamentoFinanceiro {
   cartaoId?: number;
   categoria: OrcamentoCategoria["categoria"];
   valor: number;
+  recorrente?: boolean;
+  diaVencimento?: number | null;
+  semData?: boolean;
 }
 
 // ---------- REPOSITÓRIO DE ARQUIVOS & SEGUNDO CÉREBRO ----------

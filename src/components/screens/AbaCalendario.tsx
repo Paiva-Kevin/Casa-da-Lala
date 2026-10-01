@@ -811,12 +811,76 @@ export function AbaCalendario({
 
       const mesKeyStr = `${anoAtivo}-${String(mesAtivo).padStart(2, "0")}`;
       lancamentos
-        .filter((l) => l.mesKey === mesKeyStr && l.status === "previsto")
-        .forEach((l, idx) => {
-          const { dia } = extrairDiaMesTexto(l.data, 20 + (idx % 8));
+        .filter((l) => l.status === "previsto")
+        .forEach((l) => {
+          // NUNCA inventa data para despesas sem data definida!
+          if (l.semData === true) return;
+          const rawData = (l.data || "").trim();
+          if (
+            !rawData ||
+            /^(sem\s*data|n[ãa]o\s*informad|indefinid|a\s*definir|hoje|agora|mensal|recorrente)$/i.test(
+              rawData
+            )
+          ) {
+            if (
+              typeof l.diaVencimento !== "number" ||
+              l.diaVencimento < 1 ||
+              l.diaVencimento > 31
+            ) {
+              return;
+            }
+          }
+
+          let diaExplicito: number | null =
+            typeof l.diaVencimento === "number" &&
+            l.diaVencimento >= 1 &&
+            l.diaVencimento <= 31
+              ? l.diaVencimento
+              : null;
+          let mesExplicito: number | null = null;
+
+          const matchBarra = rawData.match(/\b(\d{1,2})\/(\d{1,2})\b/);
+          if (matchBarra) {
+            const d = parseInt(matchBarra[1], 10);
+            const m = parseInt(matchBarra[2], 10);
+            if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+              diaExplicito = d;
+              mesExplicito = m;
+            }
+          } else if (diaExplicito === null) {
+            const matchDia =
+              rawData.match(
+                /(?:todo\s+dia|dia|venc\.?|vencimento|vence)\s*(\d{1,2})\b/i
+              ) || rawData.match(/^(\d{1,2})$/);
+            if (matchDia) {
+              const d = parseInt(matchDia[1], 10);
+              if (d >= 1 && d <= 31) {
+                diaExplicito = d;
+              }
+            }
+          }
+
+          // Se a usuária não informou um dia válido (1..31), NÃO coloca em dia aleatório do calendário!
+          if (diaExplicito === null) return;
+
+          const ehRecorrenteMensal =
+            Boolean(l.recorrente) || /todo\s+dia/i.test(rawData);
+
+          if (!ehRecorrenteMensal) {
+            if (mesExplicito !== null && mesExplicito !== mesAtivo) return;
+            if (mesExplicito === null && l.mesKey !== mesKeyStr && l.id <= 10) {
+              return;
+            }
+          }
+
+          const diaRealNoMes = Math.min(
+            diasNoMesCount,
+            Math.max(1, diaExplicito)
+          );
+
           lista.push({
-            id: `fin-lanc-${l.id}`,
-            diaMes: dia,
+            id: `fin-lanc-${l.id}-${mesAtivo}`,
+            diaMes: diaRealNoMes,
             mes: mesAtivo,
             ano: anoAtivo,
             horario: "12:00",
@@ -825,9 +889,15 @@ export function AbaCalendario({
             titulo: `${l.tipo === "receita" ? "Recebimento" : "Vencimento"}: ${
               l.descricao
             }`,
-            subtitulo: `R$ ${l.valor.toFixed(2)} · ${l.categoria} (${l.metodo})`,
+            subtitulo: `R$ ${l.valor.toFixed(2).replace(".", ",")} · ${
+              ehRecorrenteMensal
+                ? `Todo dia ${String(diaExplicito).padStart(2, "0")}`
+                : rawData
+            } · ${l.categoria} (${l.metodo})`,
             categoria: "financas",
             cor: l.tipo === "receita" ? "primary" : "finance",
+            ehRecorrente: ehRecorrenteMensal,
+            recorrencia: ehRecorrenteMensal ? "mensal" : "nenhuma",
             origem: "modulo",
           });
         });

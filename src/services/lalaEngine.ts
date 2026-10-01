@@ -11,6 +11,7 @@ import {
   ItemAprendizadoLala,
   MatrizDecisaoLala,
   ModoInteracaoLala,
+  OrcamentoCategoria,
   PerfilUsuarioCalibrado,
 } from "../types/lala";
 import { parseGastoNatural } from "../data/initialData";
@@ -692,6 +693,302 @@ export function extrairIngredientesParaListaCompras(textoBase: string): {
   ];
 }
 
+export interface ItemLancamentoExtraido {
+  descricao: string;
+  valor: number;
+  tipo: "despesa" | "receita";
+  status: "previsto" | "realizado";
+  data: string;
+  diaVencimento: number | null;
+  semData: boolean;
+  recorrente: boolean;
+  categoria: OrcamentoCategoria["categoria"];
+  metodo: "Conta / Pix" | "Cartão de Crédito";
+}
+
+function classificarCategoriaDespesa(
+  desc: string
+): OrcamentoCategoria["categoria"] {
+  const s = (desc || "").toLowerCase();
+  if (
+    /\b(pet|pets|nina|tobias|gato|gatos|sach[êe]|ra[çc][ãa]o|areia|vet|veterin|cobasi|petz)\b/.test(
+      s
+    )
+  ) {
+    return "Pets";
+  }
+  if (
+    /\b(uber|99|99pop|metr[ôo]|riocard|passagem|[ôo]nibus|combust[íi]vel|gasolina|transporte|ped[áa]gio|estacionamento)\b/.test(
+      s
+    )
+  ) {
+    return "Transporte";
+  }
+  if (
+    /\b(uerj|xerox|impress[ãa]o|livro|acad[êe]mico|artigo|curso|faculdade|estudo|papelaria)\b/.test(
+      s
+    )
+  ) {
+    return "Estudos & UERJ";
+  }
+  if (
+    /\b(acordo|quita[çc][ãa]o|d[íi]vida|divida|parcela|empr[ée]stimo|fatura|juros|financiamento|serasa|negocia[çc][ãa]o)\b/.test(
+      s
+    )
+  ) {
+    return "Dívida";
+  }
+  if (
+    /\b(aluguel|condom[íi]nio|luz|energia|enel|light|[áa]gua|cedae|g[áa]s|naturgy|internet|wifi|fibra|claro|vivo|tim|oi|celular|plano|moradia|iptu|seguro|taxa|fixo|mensalidade|academia|smartfit|wellhub|gympass|icloud|google one|assinatura|streaming|netflix|spotify|amazon|prime|disney|hbo|max|youtube|apple|chatgpt|canva)\b/.test(
+      s
+    )
+  ) {
+    return "Moradia & Fixos";
+  }
+  if (
+    /\b(mercado|supermercado|padaria|feira|a[çc]ougue|hortifruti| frango|ovo|ovos|leite|p[ãa]o|meal prep|comida|alimenta[çc][ãa]o|compras|farm[áa]cia|rem[ée]dio|droga|higiene|limpeza)\b/.test(
+      s
+    )
+  ) {
+    return "Mercado";
+  }
+  if (
+    /\b(cinema|bar|festa|show|restaurante|ifood|lazer|passeio|viagem|roupa|presente|beleza|sal[ãa]o|unha|cabelo)\b/.test(
+      s
+    )
+  ) {
+    return "Lazer & Outros";
+  }
+  return "Moradia & Fixos";
+}
+
+function parseMoedaBrSegura(raw: string): number {
+  const s = (raw || "").trim();
+  if (!s) return NaN;
+  if (s.includes(".") && s.includes(",")) {
+    return parseFloat(s.replace(/\./g, "").replace(",", "."));
+  }
+  if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+    return parseFloat(s.replace(/\./g, ""));
+  }
+  return parseFloat(s.replace(",", "."));
+}
+
+/**
+ * Extrai com precisão listas de gastos recorrentes, pagamentos previstos ou múltiplos lançamentos,
+ * preservando 100% dos itens enviados e NUNCA inventando ou assumindo datas para itens sem data informada.
+ */
+export function extrairListaLancamentosOuGastosRecorrentes(
+  textoBase: string
+): ItemLancamentoExtraido[] {
+  const texto = (textoBase || "").trim();
+  if (!texto) return [];
+
+  const lowerGlobal = texto.toLowerCase();
+
+  // Verifica se o contexto geral da mensagem é sobre gastos recorrentes / despesas fixas / pagamentos previstos
+  const ehContextoRecorrente =
+    /\b(recorrente|recorrentes|fixo|fixos|fixa|fixas|todo\s+m[êe]s|mensal|mensais|assinatura|assinaturas)\b/i.test(
+      lowerGlobal
+    );
+  const ehContextoPrevisto =
+    ehContextoRecorrente ||
+    /\b(previsto|previstos|prevista|previstas|a\s+pagar|contas\s+do\s+m[êe]s|vencimento|vencimentos|vence|vencem|lista\s+de\s+gastos|lista\s+de\s+despesas|meus\s+gastos|minhas\s+despesas|minhas\s+contas\s+fixas|pagamentos)\b/i.test(
+      lowerGlobal
+    );
+
+  // Quebra em linhas ou itens separados por ponto-e-vírgula / bullets
+  const linhasBrutas = texto
+    .split(/\r?\n|;|•|\u2022/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const segmentos: string[] = [];
+  for (const linha of linhasBrutas) {
+    // Se uma única linha tiver vários pares "Item R$ Valor, Item R$ Valor" separados por vírgula
+    const matchesMoedaNaLinha = linha.match(
+      /(?:r\$\s*\d+(?:[.,]\d+)?|\d+(?:[.,]\d{2})\b)/gi
+    );
+    if (matchesMoedaNaLinha && matchesMoedaNaLinha.length >= 2) {
+      const subPartes = linha
+        .split(/,\s+(?=[A-Za-zÀ-ÿ])/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (subPartes.length >= 2) {
+        segmentos.push(...subPartes);
+        continue;
+      }
+    }
+    segmentos.push(linha);
+  }
+
+  const resultados: ItemLancamentoExtraido[] = [];
+
+  for (const segOrig of segmentos) {
+    let seg = segOrig
+      .replace(/^[-*•–—>\s]+/, "")
+      .replace(/^\d+[.)]\s+/, "")
+      .trim();
+    if (!seg || seg.length < 2) continue;
+
+    const segLower = seg.toLowerCase();
+
+    // Ignora frases que são apenas atualização pura de saldo bancário ("Meu saldo no Nubank é R$ 1000")
+    if (
+      /\b(meu\s+saldo|saldo\s+atual|saldo\s+dispon[íi]vel|saldo\s+no|saldo\s+da\s+conta|tenho\s+na\s+conta)\b/i.test(
+        segLower
+      ) &&
+      !ehContextoPrevisto
+    ) {
+      continue;
+    }
+
+    // 1. Extrai data/dia SOMENTE se a usuária informou explicitamente naquele item!
+    let diaVencimento: number | null = null;
+    let mesExplicito: number | null = null;
+    let semData = true;
+    let trechoDataRemovivel = "";
+
+    // Padrão A: DD/MM (ou DD/MM/AAAA) — cuidado para não confundir "Parcela 5/8" com data!
+    const matchBarra = seg.match(
+      /(?<!parcela\s*)(?<!acordo\s*)\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/i
+    );
+    if (matchBarra) {
+      const antesDaBarra = seg.slice(0, matchBarra.index || 0).toLowerCase();
+      const pareceParcela = /\b(parcela|parc\.?|acordo|vezes)\s*$/i.test(
+        antesDaBarra.trim()
+      );
+      const d = parseInt(matchBarra[1], 10);
+      const m = parseInt(matchBarra[2], 10);
+      if (!pareceParcela && d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+        diaVencimento = d;
+        mesExplicito = m;
+        semData = false;
+        trechoDataRemovivel = matchBarra[0];
+      }
+    }
+
+    // Padrão B: "dia 10", "todo dia 05", "vence dia 15", "vencimento 20", "pagamento dia 10"
+    if (semData) {
+      const matchDia = seg.match(
+        /\b(?:todo\s+dia|vencimento(?:\s+dia|\s+em)?|vence(?:\s+todo\s+dia|\s+dia|\s+em)?|pagar(?:\s+dia|\s+em)?|pagamento(?:\s+dia|\s+em)?|data(?:\s+dia)?|dia)\s*(\d{1,2})\b(?!\s*[.,]\d{2})(?!\s*(?:reais|r\$))/i
+      );
+      if (matchDia) {
+        const d = parseInt(matchDia[1], 10);
+        if (d >= 1 && d <= 31) {
+          diaVencimento = d;
+          semData = false;
+          trechoDataRemovivel = matchDia[0];
+        }
+      }
+    }
+
+    // Remove o trecho da data (se houver) antes de procurar o valor em R$ para nunca confundir dia com valor!
+    let segSemData = trechoDataRemovivel
+      ? seg.replace(trechoDataRemovivel, " ")
+      : seg;
+
+    // Remove marcadores de parcela como "5/8" ou "3x" temporariamente para extrair o valor correto
+    const segParaValor = segSemData
+      .replace(/\b\d{1,2}\/\d{1,2}\b/g, " ")
+      .replace(/\b\d{1,2}x\b/gi, " ");
+
+    // 2. Extrai o valor monetário do item
+    const matchValorComRS = segParaValor.match(
+      /r\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i
+    );
+    const matchValorNumero =
+      matchValorComRS ||
+      segParaValor.match(
+        /(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+,\d{1,2}|\d+\.\d{2}|\b\d{1,5}\b)\s*(?:reais)?/i
+      );
+
+    if (!matchValorNumero) continue;
+    const valor = parseMoedaBrSegura(matchValorNumero[1]);
+    if (isNaN(valor) || valor <= 0) continue;
+
+    // 3. Limpa a descrição do item
+    let descLimpa = segSemData
+      .replace(
+        /r\$\s*(?:\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i,
+        " "
+      )
+      .replace(matchValorNumero[0], " ")
+      .replace(/\b(reais|real)\b/gi, " ")
+      .replace(
+        /\b(sem\s+data(?:\s+definida)?|data\s+indefinida|a\s+definir|todo\s+m[êe]s|mensal|recorrente|previsto|prevista|vence|vencimento|pagamento|no\s+valor\s+de|valor\s+de|valor|gastei|paguei|comprei)\b/gi,
+        " "
+      )
+      .replace(/\(\s*\)/g, " ")
+      .replace(/^[\s\-–—:•.,/()]+|[\s\-–—:•.,/()]+$/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    // Remove preposições soltas no início ou no fim ("de Aluguel por" -> "Aluguel")
+    descLimpa = descLimpa
+      .replace(/^(?:de|do|da|com|no|na|para|em|o|a)\s+/i, "")
+      .replace(/\s+(?:de|do|da|com|no|na|para|em|por|-|–|:)$/i, "")
+      .trim();
+
+    if (!descLimpa || descLimpa.length < 2) {
+      descLimpa = "Despesa";
+    } else {
+      descLimpa = descLimpa.charAt(0).toUpperCase() + descLimpa.slice(1);
+    }
+
+    const ehReceita =
+      /\b(receita|entrada|sal[áa]rio|bolsa|cach[êe]|reembolso|recebimento|recebi|vai\s+cair)\b/i.test(
+        segLower
+      );
+    const ehRecorrenteItem =
+      ehContextoRecorrente ||
+      /\b(recorrente|fixo|fixa|mensal|todo\s+m[êe]s|todo\s+dia|aluguel|condom[íi]nio|internet|luz|[áa]gua|academia|assinatura|streaming|netflix|spotify|celular|plano)\b/i.test(
+        segLower
+      );
+    const falouJaPago =
+      /\b(gastei|paguei\s+hoje|comprei\s+hoje|j[áa]\s+paguei|pago\s+hoje)\b/i.test(
+        segLower
+      ) && !ehContextoPrevisto;
+
+    const statusItem: "previsto" | "realizado" =
+      ehContextoPrevisto || ehRecorrenteItem || !falouJaPago
+        ? "previsto"
+        : "realizado";
+
+    const dataFormatada = !semData && diaVencimento
+      ? mesExplicito
+        ? `${String(diaVencimento).padStart(2, "0")}/${String(
+            mesExplicito
+          ).padStart(2, "0")}`
+        : ehRecorrenteItem
+        ? `Todo dia ${String(diaVencimento).padStart(2, "0")}`
+        : `Dia ${String(diaVencimento).padStart(2, "0")}`
+      : statusItem === "realizado"
+      ? "Hoje"
+      : "Sem data";
+
+    const metodoItem: "Conta / Pix" | "Cartão de Crédito" =
+      /\b(cart[ãa]o|cr[ée]dito)\b/i.test(segLower)
+        ? "Cartão de Crédito"
+        : "Conta / Pix";
+
+    resultados.push({
+      descricao: descLimpa,
+      valor,
+      tipo: ehReceita ? "receita" : "despesa",
+      status: statusItem,
+      data: dataFormatada,
+      diaVencimento: semData ? null : diaVencimento,
+      semData,
+      recorrente: ehRecorrenteItem,
+      categoria: classificarCategoriaDespesa(descLimpa),
+      metodo: metodoItem,
+    });
+  }
+
+  return resultados;
+}
+
 export function detectarIntencaoNatural(
   texto: string,
   anexo?: AnexoLala
@@ -732,10 +1029,17 @@ export function detectarIntencaoNatural(
     return "desabafo";
   }
 
-  // 2. Comando de Dieta, Grade UERJ, Saldo, Gasto, Pets, sRPE ou Anexo
+  // 2. Comando de Dieta, Grade UERJ, Saldo, Gasto, Gastos Recorrentes, Pets, sRPE ou Anexo
   const parsedGasto = parseGastoNatural(texto);
+  const listaLancs = extrairListaLancamentosOuGastosRecorrentes(texto);
   if (
     anexo ||
+    listaLancs.length >= 2 ||
+    lower.includes("gastos recorrentes") ||
+    lower.includes("despesas recorrentes") ||
+    lower.includes("despesas fixas") ||
+    lower.includes("gastos fixos") ||
+    lower.includes("pagamentos previstos") ||
     lower.includes("dieta") ||
     lower.includes("cardápio") ||
     lower.includes("cardapio") ||
@@ -1339,14 +1643,36 @@ export function processarMensagemLocalLala(
     return ctx.contasBancarias?.[0]?.nome || "Nubank (Conta / Pix)";
   };
 
+  const listaLancamentosExtraidos =
+    extrairListaLancamentosOuGastosRecorrentes(textoCombinado);
+  const temListaGastosOuRecorrentes =
+    listaLancamentosExtraidos.length >= 2 ||
+    (listaLancamentosExtraidos.length === 1 &&
+      (listaLancamentosExtraidos[0].recorrente ||
+        listaLancamentosExtraidos[0].status === "previsto" ||
+        !listaLancamentosExtraidos[0].semData ||
+        /\b(recorrente|recorrentes|fixo|fixos|fixa|fixas|previsto|previstos|prevista|previstas|vencimento|vence|a pagar)\b/i.test(
+          lower
+        )));
+
   const falouDeSaldoOuConta =
-    /\b(saldo|saldos|minha conta|minhas contas|atualizar saldo|atualiza meu saldo|atualize meu saldo|atualizar meu saldo|atualiza o saldo|meu saldo|tenho na conta|tenho no banco|tenho no nubank|tenho no ita[uú]|crie a conta|criar conta|ajustar saldo|mudar saldo|finan[çc]as|nubank|picpay|banco inter|caixinha|extrato)\b/i.test(
+    (!temListaGastosOuRecorrentes ||
+      /\b(meu saldo|saldo atual|saldo dispon[íi]vel|atualizar saldo|atualiza meu saldo|tenho na conta)\b/i.test(
+        lower
+      )) &&
+    (/\b(saldo|saldos|minha conta|minhas contas|atualizar saldo|atualiza meu saldo|atualize meu saldo|atualizar meu saldo|atualiza o saldo|meu saldo|tenho na conta|tenho no banco|tenho no nubank|tenho no ita[uú]|crie a conta|criar conta|ajustar saldo|mudar saldo)\b/i.test(
       lower
     ) ||
-    (anexo?.intencao === "financas" &&
-      !lower.includes("gastei") &&
-      !lower.includes("comprei") &&
-      !lower.includes("paguei"));
+      (!temListaGastosOuRecorrentes &&
+        /\b(nubank|picpay|banco inter|caixinha)\b/i.test(lower) &&
+        !/\b(fatura|cart[ãa]o|parcela|acordo|vencimento|vence|pagar|gasto|despesa|recorrente)\b/i.test(
+          lower
+        )) ||
+      (anexo?.intencao === "financas" &&
+        !temListaGastosOuRecorrentes &&
+        !lower.includes("gastei") &&
+        !lower.includes("comprei") &&
+        !lower.includes("paguei")));
 
   const contasExtraidas: { nome: string; saldoAtual: number }[] = [];
 
@@ -1460,34 +1786,109 @@ export function processarMensagemLocalLala(
     });
   }
 
-  // Verifica se há gasto embutido na fala (somente se NÃO for atualização de saldo bancário)
-  const gasto = !falouDeSaldoOuConta ? parseGastoNatural(texto) : null;
-  if (
-    gasto &&
-    (lower.includes("gastei") ||
-      lower.includes("comprei") ||
-      lower.includes("paguei") ||
-      lower.includes("pix") ||
-      lower.includes("reais") ||
-      lower.includes("r$") ||
-      lower.includes("padaria") ||
-      lower.includes("mercado") ||
-      lower.includes("sachê") ||
-      anexo?.intencao === "financas" ||
-      /^\d+([.,]\d+)?\s+/.test(lower))
-  ) {
+  // Verifica se há lista de gastos recorrentes / pagamentos previstos ou gasto avulso
+  if (temListaGastosOuRecorrentes && listaLancamentosExtraidos.length > 0) {
+    const totalLista = listaLancamentosExtraidos.reduce(
+      (acc, item) => acc + (Number(item.valor) || 0),
+      0
+    );
+    const qtdRecorrentes = listaLancamentosExtraidos.filter((i) => i.recorrente).length;
+    const qtdPrevistos = listaLancamentosExtraidos.filter(
+      (i) => i.status === "previsto"
+    ).length;
+    const primeiro = listaLancamentosExtraidos[0];
+
     acoes.push({
-      id: `act-${Date.now()}-gasto`,
+      id: `act-${Date.now()}-gasto-lista`,
       tipo: "REGISTRAR_GASTO",
-      titulo: `Lançar R$ ${gasto.valor.toFixed(2).replace(".", ",")} (${gasto.categoria})`,
-      detalhe: `${gasto.descricao} · ${gasto.metodoSugerido}`,
+      titulo:
+        listaLancamentosExtraidos.length === 1
+          ? `${primeiro.status === "previsto" ? "Agendar pagamento previsto" : "Lançar despesa"}: ${primeiro.descricao} (R$ ${primeiro.valor
+              .toFixed(2)
+              .replace(".", ",")})${
+              primeiro.semData ? " · Sem data definida" : ` · ${primeiro.data}`
+            }`
+          : `Registrar todas as ${listaLancamentosExtraidos.length} despesas (${
+              qtdRecorrentes > 0
+                ? "Gastos Recorrentes & Previstos"
+                : qtdPrevistos > 0
+                ? "Pagamentos Previstos"
+                : "Lançamentos"
+            } · Total R$ ${totalLista.toFixed(2).replace(".", ",")})`,
+      detalhe:
+        listaLancamentosExtraidos.length === 1
+          ? `${primeiro.categoria} · ${primeiro.metodo} · ${
+              primeiro.semData
+                ? "Sem data informada (não inventada)"
+                : `Data: ${primeiro.data}`
+            }`
+          : `Inclui todas as ${listaLancamentosExtraidos.length} despesas enviadas nos dias exatos informados e mantém "Sem data" onde você não informou dia`,
       executada: false,
       payload: {
-        valor: gasto.valor,
-        categoriaGasto: gasto.categoria,
-        texto: gasto.descricao,
+        valor: primeiro.valor,
+        categoriaGasto: primeiro.categoria,
+        texto: primeiro.descricao,
+        data: primeiro.data,
+        diaVencimento: primeiro.diaVencimento,
+        semData: primeiro.semData,
+        statusGasto: primeiro.status,
+        recorrente: primeiro.recorrente,
+        lancamentosAjuste: listaLancamentosExtraidos,
       },
     });
+  } else {
+    const gasto = !falouDeSaldoOuConta ? parseGastoNatural(texto) : null;
+    if (
+      gasto &&
+      (lower.includes("gastei") ||
+        lower.includes("comprei") ||
+        lower.includes("paguei") ||
+        lower.includes("pix") ||
+        lower.includes("reais") ||
+        lower.includes("r$") ||
+        lower.includes("padaria") ||
+        lower.includes("mercado") ||
+        lower.includes("sachê") ||
+        anexo?.intencao === "financas" ||
+        /^\d+([.,]\d+)?\s+/.test(lower))
+    ) {
+      const itemExtraido = listaLancamentosExtraidos[0];
+      acoes.push({
+        id: `act-${Date.now()}-gasto`,
+        tipo: "REGISTRAR_GASTO",
+        titulo: `Lançar R$ ${gasto.valor.toFixed(2).replace(".", ",")} (${gasto.categoria})`,
+        detalhe: `${gasto.descricao} · ${gasto.metodoSugerido}${
+          itemExtraido && !itemExtraido.semData ? ` · ${itemExtraido.data}` : ""
+        }`,
+        executada: false,
+        payload: {
+          valor: gasto.valor,
+          categoriaGasto: gasto.categoria,
+          texto: gasto.descricao,
+          data: itemExtraido ? itemExtraido.data : "Hoje",
+          diaVencimento: itemExtraido ? itemExtraido.diaVencimento : null,
+          semData: itemExtraido ? itemExtraido.semData : true,
+          statusGasto: itemExtraido ? itemExtraido.status : "realizado",
+          recorrente: itemExtraido ? itemExtraido.recorrente : false,
+          lancamentosAjuste: itemExtraido
+            ? [itemExtraido]
+            : [
+                {
+                  descricao: gasto.descricao,
+                  valor: gasto.valor,
+                  tipo: "despesa",
+                  status: "realizado",
+                  data: "Hoje",
+                  diaVencimento: null,
+                  semData: true,
+                  recorrente: false,
+                  metodo: gasto.metodoSugerido,
+                  categoria: gasto.categoria,
+                },
+              ],
+        },
+      });
+    }
   }
 
   // Verifica se falou de alimentar Nina/Tobias
@@ -1509,8 +1910,10 @@ export function processarMensagemLocalLala(
     });
   }
 
-  // Verifica se falou de agendar compromisso / evento no calendário
-  const matchHoraComp = texto.match(/(\d{1,2})[:h](\d{2})?/i);
+  // Verifica se falou de agendar compromisso / evento no calendário (somente se NÃO for lista de despesas financeiras)
+  const matchHoraComp = !temListaGastosOuRecorrentes
+    ? texto.match(/(\d{1,2})[:h](\d{2})?/i)
+    : null;
   if (
     matchHoraComp &&
     (lower.includes("agendar") ||
@@ -1837,7 +2240,32 @@ export function processarMensagemLocalLala(
     });
   }
 
-  const respostaContextualizadaComando = falouDeSaldoOuConta
+  const resumoConfirmacaoListaGastos =
+    temListaGastosOuRecorrentes && listaLancamentosExtraidos.length > 0
+      ? `Recebi sua lista e identifiquei **todas as ${
+          listaLancamentosExtraidos.length
+        } despesas** (Total: **R$ ${listaLancamentosExtraidos
+          .reduce((s, i) => s + i.valor, 0)
+          .toFixed(2)
+          .replace(".", ",")}**), sem omitir nenhuma e **sem inventar datas** para os itens em que você não informou dia:\n\n` +
+        listaLancamentosExtraidos
+          .map(
+            (item, idx) =>
+              `${idx + 1}. **${item.descricao}** — R$ ${item.valor
+                .toFixed(2)
+                .replace(".", ",")} · *${
+                item.semData
+                  ? "Sem data definida (não assumi dia)"
+                  : item.data
+              }* (${item.categoria})`
+          )
+          .join("\n") +
+        `\n\nDeixei o card completo logo abaixo com todos os ${listaLancamentosExtraidos.length} itens para você revisar, editar qualquer data/valor se quiser ou confirmar de uma só vez!`
+      : null;
+
+  const respostaContextualizadaComando = resumoConfirmacaoListaGastos
+    ? resumoConfirmacaoListaGastos
+    : falouDeSaldoOuConta
     ? contasExtraidas.length > 0
       ? `Prontinho! Identifiquei a atualização de saldo para **${contasExtraidas
           .map(
@@ -1867,12 +2295,16 @@ export function processarMensagemLocalLala(
     modo: "comando",
     nomeAnexo: anexo?.nome,
     anexo,
-    tituloCard: falouDeSaldoOuConta
+    tituloCard: resumoConfirmacaoListaGastos
+      ? `Confirmação Completa (${listaLancamentosExtraidos.length} Despesas)`
+      : falouDeSaldoOuConta
       ? "Atualização de Saldo Bancário"
       : anexo
       ? `Arquivo processado: ${anexo.nome}`
       : `Ação preparada pela Lala`,
-    tags: falouDeSaldoOuConta
+    tags: resumoConfirmacaoListaGastos
+      ? ["Finanças", "Gastos Recorrentes", `${listaLancamentosExtraidos.length} Itens`]
+      : falouDeSaldoOuConta
       ? ["Finanças", "Saldo Bancário", "Dinheiro Livre"]
       : anexo
       ? ["Arquivo", "Ação Rápida"]
@@ -2092,14 +2524,18 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E LEITURA DE PRINTS (CRÍTICO):
    - Identifique o nome exato de CADA banco/instituição que aparece nas imagens (ex: "PicPay", "Nubank", "Reserva / Caixinha", "Banco Inter", "Bradesco", "Santander", "C6 Bank", "Mercado Pago", etc.) e o valor numérico exato do saldo disponível ("saldoAtual") ou fatura ("faturaAtual", "limiteTotal").
    - CONSOLIDAÇÃO OBRIGATÓRIA: Se houver 2, 3 ou mais prints de bancos diferentes, inclua TODOS os bancos identificados juntos no mesmo array "contasAjuste" dentro de uma única ação "ATUALIZAR_CONTAS_FINANCAS". Não deixe nenhum banco dos prints de fora!
    - PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE as contas que aparecem visualmente nos prints enviados pela usuária ou que foram citadas por ela na mensagem! NUNCA inclua "Itaú" nem qualquer outra conta que não esteja nos prints enviados!
-   - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela para atualizar as finanças, garantindo que apenas as contas reais dos prints fiquem no aplicativo!
+    - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela para atualizar as finanças, garantindo que apenas as contas reais dos prints fiquem no aplicativo!
+3. LISTAS DE GASTOS RECORRENTES, CONTAS FIXAS E PAGAMENTOS PREVISTOS (REGRA DE OURO):
+   - Quando a usuária enviar uma lista de gastos recorrentes, despesas fixas, boletos, assinaturas ou pagamentos previstos (seja por texto, áudio ou imagem), você DEVE confirmar e incluir **100% de todas as despesas enviadas sem omitir NENHUMA**, tanto no texto de "respostaLala" (listando uma por uma com valor e data/sem data) quanto no array "lancamentosAjuste" dentro da ação "REGISTRAR_GASTO".
+   - PROIBIDO INVENTAR OU ASSUMIR DATAS: Se a usuária informou o dia de vencimento (ex: "dia 10", "vence dia 15", "05/05"), preencha "diaVencimento": 10, "data": "Todo dia 10" (ou "10/05"), "semData": false. Se a usuária NÃO informou data/dia para uma despesa (ex: "Netflix R$ 55,90" ou "Condomínio R$ 620"), preencha OBRIGATORIAMENTE "semData": true, "diaVencimento": null e "data": "Sem data". NUNCA invente dias nem use a data de hoje para gastos previstos/recorrentes sem data!
+   - Não use "AGENDAR_COMPROMISSO" para despesas financeiras/boletos; use "REGISTRAR_GASTO" com "lancamentosAjuste" contendo todos os itens!
 
 IMPORTANTE: Retorne SEMPRE um ÚNICO objeto JSON {...} na raiz (NUNCA retorne uma lista/array [...] na raiz, mesmo quando houver várias imagens!).
 Formato exato do objeto JSON:
 {
   "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
   "transcricaoAudioUsuario": "string opcional",
-  "respostaLala": "Sua resposta detalhada citando cada banco e valor real lido dos prints",
+  "respostaLala": "Sua resposta detalhada citando cada banco/item e valor real lido sem omitir nenhum",
   "tituloCard": "Resumo em até 5 palavras",
   "tags": ["Tag1", "Tag2"],
   "novaRegraAprendida": "string opcional",
@@ -2111,7 +2547,8 @@ Formato exato do objeto JSON:
       "detalhe": "Explicação curta do impacto no app",
       "substituirExistentes": true,
       "contasAjuste": [{ "nome": "Nome exato do Banco lido", "saldoAtual": 0 }],
-      "cartoesAjuste": []
+      "cartoesAjuste": [],
+      "lancamentosAjuste": [{ "descricao": "Nome da despesa", "valor": 0, "tipo": "despesa", "status": "previsto", "data": "Todo dia 10 ou Sem data", "diaVencimento": 10, "semData": false, "recorrente": true, "metodo": "Conta / Pix", "categoria": "Moradia & Fixos" }]
     }
   ]
 }`;
@@ -2427,6 +2864,58 @@ Formato exato do objeto JSON:
                     texto
                   )));
 
+            const rawLancamentos =
+              a.lancamentosAjuste ||
+              a.payload?.lancamentosAjuste ||
+              a.lancamentos ||
+              [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const lancamentosNormalizados = Array.isArray(rawLancamentos)
+              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                rawLancamentos
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  .map((l: any) => {
+                    const desc = String(
+                      l.descricao || l.nome || l.titulo || "Despesa"
+                    ).trim();
+                    const val = normalizarNumeroMoeda(l.valor, 0);
+                    const rawDataStr = String(l.data || "").trim();
+                    const ehSemData =
+                      l.semData === true ||
+                      !rawDataStr ||
+                      /^(sem\s*data|n[ãa]o\s*informad|indefinid)/i.test(
+                        rawDataStr
+                      );
+                    const diaVenc =
+                      !ehSemData &&
+                      typeof l.diaVencimento === "number" &&
+                      l.diaVencimento >= 1 &&
+                      l.diaVencimento <= 31
+                        ? l.diaVencimento
+                        : null;
+                    return {
+                      descricao: desc,
+                      valor: val,
+                      tipo: (l.tipo === "receita" ? "receita" : "despesa") as
+                        | "despesa"
+                        | "receita",
+                      status: (l.status === "realizado"
+                        ? "realizado"
+                        : "previsto") as "previsto" | "realizado",
+                      data: ehSemData ? "Sem data" : rawDataStr,
+                      diaVencimento: diaVenc,
+                      semData: ehSemData,
+                      recorrente: Boolean(l.recorrente),
+                      metodo: (l.metodo === "Cartão de Crédito"
+                        ? "Cartão de Crédito"
+                        : "Conta / Pix") as "Conta / Pix" | "Cartão de Crédito",
+                      categoria: (l.categoria ||
+                        inferirCategoriaDeTexto(desc)) as OrcamentoCategoria["categoria"],
+                    };
+                  })
+                  .filter((l) => l.valor > 0)
+              : [];
+
             return {
               id: `ai-act-${Date.now()}-${idx}`,
               tipo: a.tipo || "CRIAR_TAREFA",
@@ -2435,8 +2924,21 @@ Formato exato do objeto JSON:
               executada: false,
               payload: {
                 texto: a.texto || a.payload?.texto || a.titulo,
-                valor: a.valor ?? a.payload?.valor,
+                valor:
+                  a.valor !== undefined || a.payload?.valor !== undefined
+                    ? normalizarNumeroMoeda(a.valor ?? a.payload?.valor, 0)
+                    : undefined,
                 categoriaGasto: a.categoriaGasto || a.payload?.categoriaGasto,
+                data: a.data || a.payload?.data,
+                diaVencimento:
+                  a.diaVencimento ?? a.payload?.diaVencimento ?? null,
+                semData: a.semData ?? a.payload?.semData,
+                statusGasto: a.statusGasto || a.payload?.statusGasto,
+                recorrente: a.recorrente ?? a.payload?.recorrente,
+                lancamentosAjuste:
+                  lancamentosNormalizados.length > 0
+                    ? lancamentosNormalizados
+                    : undefined,
                 srpe: a.srpe ?? a.payload?.srpe,
                 areaNota:
                   a.areaNota ||
@@ -2464,6 +2966,207 @@ Formato exato do objeto JSON:
             };
           })
         : [];
+
+      // Reconciliação determinística de Listas de Gastos Recorrentes / Despesas Fixas / Pagamentos Previstos:
+      // 1) Garante que TODAS as despesas enviadas pela usuária estejam incluídas (nenhuma omitida).
+      // 2) Garante que NENHUMA data seja inventada ou assumida quando a usuária não informou o dia daquele item!
+      const textoParaExtracaoGastos = `${texto} ${primeiroAnexo?.textoExtraido || ""}`;
+      const lancamentosExtraidosTexto = extrairListaLancamentosOuGastosRecorrentes(
+        textoParaExtracaoGastos
+      );
+      const lowerTextoGastos = textoParaExtracaoGastos.toLowerCase();
+      const ehMensagemListaOuRecorrentes =
+        lancamentosExtraidosTexto.length >= 2 ||
+        (lancamentosExtraidosTexto.length === 1 &&
+          (lancamentosExtraidosTexto[0].recorrente ||
+            lancamentosExtraidosTexto[0].status === "previsto" ||
+            !lancamentosExtraidosTexto[0].semData ||
+            /\b(recorrente|recorrentes|fixo|fixos|fixa|fixas|previsto|previstos|prevista|previstas|vencimento|vence|a pagar)\b/i.test(
+              lowerTextoGastos
+            )));
+
+      if (
+        ehMensagemListaOuRecorrentes &&
+        lancamentosExtraidosTexto.length > 0 &&
+        !acoesMapeadas.some(
+          (ac) =>
+            ac.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+            /\b(meu saldo|saldo atual|atualizar saldo|tenho na conta)\b/i.test(
+              lowerTextoGastos
+            )
+        )
+      ) {
+        // Todos os itens extraídos diretamente do texto da usuária são a fonte da verdade absoluta para valores e datas (ou ausência de data)
+        const listaFinalLancamentos: ItemLancamentoExtraido[] = [
+          ...lancamentosExtraidosTexto,
+        ];
+
+        // Se o Gemini extraiu algum item extra (ex: lido de imagem anexada) que não estava no texto puro, preserva respeitando semData se não houver dia explícito
+        for (const ac of acoesMapeadas) {
+          if (
+            ac.tipo === "REGISTRAR_GASTO" &&
+            Array.isArray(ac.payload?.lancamentosAjuste)
+          ) {
+            for (const lg of ac.payload.lancamentosAjuste) {
+              const normLg = lg.descricao
+                .toLowerCase()
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "");
+              const jaTem = listaFinalLancamentos.some((loc) => {
+                const normLoc = loc.descricao
+                  .toLowerCase()
+                  .normalize("NFD")
+                  .replace(/[\u0300-\u036f]/g, "");
+                return (
+                  Math.abs(loc.valor - lg.valor) < 0.05 &&
+                  (normLoc.includes(normLg.slice(0, 4)) ||
+                    normLg.includes(normLoc.slice(0, 4)))
+                );
+              });
+              if (!jaTem && listaAnexos.length > 0) {
+                listaFinalLancamentos.push({
+                  descricao: lg.descricao,
+                  valor: lg.valor,
+                  tipo: lg.tipo || "despesa",
+                  status: lg.status || "previsto",
+                  data: lg.semData ? "Sem data" : lg.data || "Sem data",
+                  diaVencimento: lg.semData ? null : lg.diaVencimento ?? null,
+                  semData: lg.semData ?? !lg.diaVencimento,
+                  recorrente: Boolean(lg.recorrente),
+                  metodo: lg.metodo || "Conta / Pix",
+                  categoria:
+                    lg.categoria || inferirCategoriaDeTexto(lg.descricao),
+                });
+              }
+            }
+          }
+        }
+
+        const somaTotalDespesas = listaFinalLancamentos.reduce(
+          (s, item) => s + (Number(item.valor) || 0),
+          0
+        );
+        const primeiroLanc = listaFinalLancamentos[0];
+        const qtdRec = listaFinalLancamentos.filter((i) => i.recorrente).length;
+
+        const acaoLancamentosCompleta: AcaoGovernanta = {
+          id: `ai-act-${Date.now()}-lancamentos-completos`,
+          tipo: "REGISTRAR_GASTO",
+          titulo:
+            listaFinalLancamentos.length === 1
+              ? `${
+                  primeiroLanc.status === "previsto"
+                    ? "Agendar pagamento previsto"
+                    : "Registrar despesa"
+                }: ${primeiroLanc.descricao} (R$ ${primeiroLanc.valor
+                  .toFixed(2)
+                  .replace(".", ",")})${
+                  primeiroLanc.semData
+                    ? " · Sem data definida"
+                    : ` · ${primeiroLanc.data}`
+                }`
+              : `Registrar todas as ${listaFinalLancamentos.length} despesas (${
+                  qtdRec > 0 ? "Recorrentes & Previstos" : "Pagamentos Previstos"
+                } · Total R$ ${somaTotalDespesas.toFixed(2).replace(".", ",")})`,
+          detalhe:
+            listaFinalLancamentos.length === 1
+              ? `${primeiroLanc.categoria} · ${
+                  primeiroLanc.semData
+                    ? "Sem data informada (não inventada)"
+                    : `Data: ${primeiroLanc.data}`
+                }`
+              : `Inclui todas as ${listaFinalLancamentos.length} despesas enviadas nos dias exatos informados e mantém "Sem data" onde você não informou dia`,
+          executada: false,
+          payload: {
+            texto: primeiroLanc.descricao,
+            valor: primeiroLanc.valor,
+            categoriaGasto: primeiroLanc.categoria,
+            data: primeiroLanc.data,
+            diaVencimento: primeiroLanc.diaVencimento,
+            semData: primeiroLanc.semData,
+            statusGasto: primeiroLanc.status,
+            recorrente: primeiroLanc.recorrente,
+            lancamentosAjuste: listaFinalLancamentos,
+          },
+        };
+
+        // Remove REGISTRAR_GASTO parciais e remove compromissos de calendário que o modelo tenha criado por engano para despesas
+        const demaisAcoesLimpas = acoesMapeadas.filter((ac) => {
+          if (ac.tipo === "REGISTRAR_GASTO") return false;
+          if (
+            ac.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+            !/\b(meu saldo|saldo atual|atualizar saldo|tenho na conta)\b/i.test(
+              lowerTextoGastos
+            )
+          ) {
+            return false;
+          }
+          if (
+            ac.tipo === "AGENDAR_COMPROMISSO" &&
+            Array.isArray(ac.payload?.compromissos)
+          ) {
+            const compsReais = ac.payload.compromissos.filter((c) => {
+              const tComp = String(c.titulo || "").toLowerCase();
+              const bateComDespesa = listaFinalLancamentos.some((lf) =>
+                tComp.includes(lf.descricao.toLowerCase().slice(0, 5))
+              );
+              return (
+                !bateComDespesa &&
+                !/\b(r\$|boleto|fatura|parcela|condom[íi]nio|aluguel|internet|luz|energia|[áa]gua|academia|netflix|spotify)\b/i.test(
+                  tComp
+                )
+              );
+            });
+            if (compsReais.length === 0) return false;
+            ac.payload.compromissos = compsReais;
+          }
+          return true;
+        });
+
+        acoesMapeadas.length = 0;
+        acoesMapeadas.push(acaoLancamentosCompleta, ...demaisAcoesLimpas);
+
+        // Garante que a resposta textual da Lala confirme TODAS as despesas enviadas sem omitir nenhuma!
+        if (listaFinalLancamentos.length >= 2) {
+          const respAtualLower = String(data.respostaLala || "").toLowerCase();
+          const omitiuAlgumaDespesa = listaFinalLancamentos.some((item) => {
+            const primeiraPalavra = item.descricao
+              .toLowerCase()
+              .split(/\s+/)[0]
+              ?.replace(/[^a-zà-ÿ0-9]/gi, "");
+            return (
+              primeiraPalavra &&
+              primeiraPalavra.length >= 3 &&
+              !respAtualLower.includes(primeiraPalavra)
+            );
+          });
+
+          const listagemFormatadaCompleta =
+            `\n\n📋 **Confirmação completa de todas as ${
+              listaFinalLancamentos.length
+            } despesas enviadas (Total: R$ ${somaTotalDespesas
+              .toFixed(2)
+              .replace(".", ",")}):**\n` +
+            listaFinalLancamentos
+              .map(
+                (item, idx) =>
+                  `${idx + 1}. **${item.descricao}** — R$ ${item.valor
+                    .toFixed(2)
+                    .replace(".", ",")} · *${
+                    item.semData
+                      ? "Sem data definida (não assumi dia)"
+                      : item.data
+                  }* (${item.categoria})`
+              )
+              .join("\n");
+
+          if (omitiuAlgumaDespesa || !respAtualLower.includes("1.")) {
+            data.respostaLala = `${String(
+              data.respostaLala || ""
+            ).trim()}${listagemFormatadaCompleta}`;
+          }
+        }
+      }
 
       // Se o modelo retornou múltiplas ações ATUALIZAR_CONTAS_FINANCAS (ex: uma para cada print enviado),
       // consolida TODAS em uma única ação ATUALIZAR_CONTAS_FINANCAS para não sobrescrever uma conta com a outra!
