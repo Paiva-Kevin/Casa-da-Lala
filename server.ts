@@ -99,6 +99,120 @@ const TTS_MODELS = [
 ];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizarObjetoJsonLala(rawParsed: any): any {
+  if (!rawParsed || typeof rawParsed !== "object") return null;
+
+  // Se o modelo retornou um Array JSON (comum quando há 2 ou 3 prints anexados),
+  // unifica todos os itens do array em um único objeto de resposta da Lala!
+  if (Array.isArray(rawParsed)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const objs = rawParsed.filter((x: any) => x && typeof x === "object" && !Array.isArray(x));
+    if (objs.length === 0) return null;
+    if (objs.length === 1) {
+      return normalizarObjetoJsonLala(objs[0]);
+    }
+    const textos: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const acoesCombinadas: any[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const aprendizadosCombinados: any[] = [];
+    const tagsCombinadas = new Set<string>();
+    let modoDetectado = "comando";
+    let tituloCard = "";
+    let novaRegraAprendida = "";
+
+    for (const item of objs) {
+      const norm = normalizarObjetoJsonLala(item) || item;
+      const txt =
+        norm.respostaLala ||
+        norm.resposta ||
+        norm.mensagem ||
+        norm.texto ||
+        norm.analise;
+      if (typeof txt === "string" && txt.trim() && !textos.includes(txt.trim())) {
+        textos.push(txt.trim());
+      }
+      if (norm.modoDetectado && modoDetectado === "comando") {
+        modoDetectado = norm.modoDetectado;
+      }
+      if (norm.tituloCard && !tituloCard) {
+        tituloCard = norm.tituloCard;
+      }
+      if (norm.novaRegraAprendida && !novaRegraAprendida) {
+        novaRegraAprendida = norm.novaRegraAprendida;
+      }
+      if (Array.isArray(norm.tags)) {
+        norm.tags.forEach((tg: unknown) => {
+          if (typeof tg === "string") tagsCombinadas.add(tg);
+        });
+      }
+      if (Array.isArray(norm.acoesPropostas)) {
+        acoesCombinadas.push(...norm.acoesPropostas);
+      } else if (norm.tipo && (norm.contasAjuste || norm.titulo)) {
+        acoesCombinadas.push(norm);
+      }
+      if (Array.isArray(norm.aprendizadosExtraidos)) {
+        aprendizadosCombinados.push(...norm.aprendizadosExtraidos);
+      }
+    }
+
+    return {
+      modoDetectado,
+      respostaLala:
+        textos.join("\n\n") ||
+        "Analisei todas as imagens enviadas e deixei as ações prontas abaixo para você confirmar!",
+      tituloCard: tituloCard || "Análise da Lala",
+      tags: Array.from(tagsCombinadas),
+      novaRegraAprendida: novaRegraAprendida || undefined,
+      aprendizadosExtraidos: aprendizadosCombinados,
+      acoesPropostas: acoesCombinadas,
+    };
+  }
+
+  let obj = rawParsed;
+  if (obj.resultado && typeof obj.resultado === "object" && !obj.respostaLala) {
+    obj = obj.resultado;
+  } else if (obj.data && typeof obj.data === "object" && !obj.respostaLala) {
+    obj = obj.data;
+  }
+
+  // Se o modelo colocou contasAjuste ou cartoesAjuste direto na raiz do JSON
+  if (
+    (Array.isArray(obj.contasAjuste) || Array.isArray(obj.cartoesAjuste)) &&
+    (!Array.isArray(obj.acoesPropostas) || obj.acoesPropostas.length === 0)
+  ) {
+    obj.acoesPropostas = [
+      {
+        tipo: "ATUALIZAR_CONTAS_FINANCAS",
+        titulo: obj.tituloCard || "Atualizar Contas e Saldos",
+        detalhe: "Saldos extraídos dos prints enviados",
+        substituirExistentes: true,
+        contasAjuste: obj.contasAjuste,
+        cartoesAjuste: obj.cartoesAjuste,
+      },
+    ];
+  }
+
+  if (typeof obj.respostaLala !== "string" || !obj.respostaLala.trim()) {
+    const fallbackTxt =
+      obj.resposta ||
+      obj.mensagem ||
+      obj.texto ||
+      obj.analise ||
+      obj.resumo ||
+      obj.message;
+    if (typeof fallbackTxt === "string" && fallbackTxt.trim()) {
+      obj.respostaLala = fallbackTxt.trim();
+    } else if (Array.isArray(obj.acoesPropostas) && obj.acoesPropostas.length > 0) {
+      obj.respostaLala =
+        "Prontinho! Analisei as informações enviadas e deixei as atualizações prontas logo abaixo para você confirmar.";
+    }
+  }
+
+  return obj;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function extrairJsonSeguro(raw: string): any {
   const limpo = (raw || "")
     .replace(/^```json\s*/i, "")
@@ -106,12 +220,21 @@ function extrairJsonSeguro(raw: string): any {
     .replace(/```\s*$/i, "")
     .trim();
   try {
-    return JSON.parse(limpo);
+    return normalizarObjetoJsonLala(JSON.parse(limpo));
   } catch {
-    const ini = limpo.indexOf("{");
-    const fim = limpo.lastIndexOf("}");
-    if (ini >= 0 && fim > ini) {
-      return JSON.parse(limpo.slice(ini, fim + 1));
+    const iniObj = limpo.indexOf("{");
+    const fimObj = limpo.lastIndexOf("}");
+    const iniArr = limpo.indexOf("[");
+    const fimArr = limpo.lastIndexOf("]");
+    if (iniArr >= 0 && (iniObj < 0 || iniArr < iniObj) && fimArr > iniArr) {
+      try {
+        return normalizarObjetoJsonLala(JSON.parse(limpo.slice(iniArr, fimArr + 1)));
+      } catch {
+        // fallback to object slice
+      }
+    }
+    if (iniObj >= 0 && fimObj > iniObj) {
+      return normalizarObjetoJsonLala(JSON.parse(limpo.slice(iniObj, fimObj + 1)));
     }
     throw new Error("JSON inválido retornado pelo modelo");
   }

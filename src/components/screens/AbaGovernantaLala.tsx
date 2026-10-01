@@ -606,16 +606,16 @@ export function AbaGovernantaLala({
     });
 
     // Se a usuária fez uma pergunta de acompanhamento sobre prints/contas enviados na mensagem anterior sem reanexar,
-    // recupera automaticamente os anexos da última interação para a Lala enxergar as imagens!
+    // recupera automaticamente os anexos das interações recentes para a Lala enxergar as imagens!
     let anexosParaAnalise = listaAnexos;
     if (
       listaAnexos.length === 0 &&
-      /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura)\b/i.test(
+      /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|tente|tenta|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura|finan[çc]as)\b/i.test(
         msgEnviada
       )
     ) {
       const interacaoComAnexo = interacoes
-        .slice(0, 2)
+        .slice(0, 10)
         .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
       if (interacaoComAnexo) {
         anexosParaAnalise =
@@ -805,8 +805,16 @@ export function AbaGovernantaLala({
         dataHora: agoraHora,
         mensagemUsuario: msgEnviada,
         ...resultado,
-        anexo: listaAnexos[0] || undefined,
-        anexos: listaAnexos.length > 0 ? listaAnexos : undefined,
+        anexo:
+          listaAnexos.length > 0
+            ? resultado.anexo || listaAnexos[0]
+            : undefined,
+        anexos:
+          listaAnexos.length > 0
+            ? resultado.anexos && resultado.anexos.length > 0
+              ? resultado.anexos
+              : listaAnexos
+            : undefined,
         acoesPropostas: acoesProcessadas,
       };
 
@@ -1521,20 +1529,47 @@ export function AbaGovernantaLala({
                   Você tem {acoesPendentesConfirmacao.length} ação(ões) da Lala aguardando sua revisão ou confirmação
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSubAba("historico");
-                  setFiltroHistorico("pendentes");
-                }}
-                className="px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 cursor-pointer"
-                style={{
-                  backgroundColor: t.alert,
-                  color: "#fff",
-                }}
-              >
-                Ver Pendentes
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInteracoes((prev) =>
+                      prev.map((it) => ({
+                        ...it,
+                        acoesPropostas: (it.acoesPropostas || []).map((ac) =>
+                          !ac.executada && !ac.recusada && !ac.desfeita
+                            ? { ...ac, recusada: true }
+                            : ac
+                        ),
+                      }))
+                    );
+                    showToast("Ações pendentes antigas dispensadas.");
+                  }}
+                  className="px-2 py-1 rounded-lg text-[11px] font-bold border cursor-pointer"
+                  style={{
+                    backgroundColor: t.card,
+                    color: t.textSoft,
+                    borderColor: t.border,
+                  }}
+                  title="Dispensar todas as ações pendentes antigas"
+                >
+                  Limpar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSubAba("historico");
+                    setFiltroHistorico("pendentes");
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer"
+                  style={{
+                    backgroundColor: t.alert,
+                    color: "#fff",
+                  }}
+                >
+                  Ver Pendentes
+                </button>
+              </div>
             </div>
           )}
 
@@ -1740,6 +1775,10 @@ export function AbaGovernantaLala({
                                       : it.anexo
                                       ? [it.anexo]
                                       : [];
+                                  // Remove a interação antiga com falha antes de reanalisar para substituir de forma limpa
+                                  setInteracoes((prev) =>
+                                    prev.filter((item) => item.id !== it.id)
+                                  );
                                   enviarMensagemParaLala(
                                     it.mensagemUsuario,
                                     anexosParaReenviar

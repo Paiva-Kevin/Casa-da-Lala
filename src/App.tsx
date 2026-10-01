@@ -761,39 +761,52 @@ export default function App() {
     try {
       showToast("Verificando atualizações e sincronizando dados...");
       // 1. Sync snapshot with server (Preview <-> Web <-> Mobile)
-      const snapRes = await syncSnapshotWithServer(false);
-      if (snapRes.action === "pulled") {
-        const refreshed = await getSyncMetadata();
-        setSyncMeta(refreshed);
+      try {
+        const snapRes = await syncSnapshotWithServer(false);
+        if (snapRes.action === "pulled") {
+          const refreshed = await getSyncMetadata();
+          setSyncMeta(refreshed);
+        }
+      } catch {
+        // ignore network error on static hosts
       }
       // 2. Sync with Google Drive if connected
       if (navigator.onLine && googleUser && !needsAuth) {
-        await handleSyncCheckWithDrive(true);
-      }
-      // 3. Clear any legacy Service Worker caches and check for SW update
-      if ("caches" in window) {
-        const names = await caches.keys();
-        for (const name of names) {
-          if (
-            name !== "casa-da-lala-offline-v17" &&
-            name !== "casa-da-lala-fonts-v4"
-          ) {
-            await caches.delete(name);
-          }
+        try {
+          await handleSyncCheckWithDrive(true);
+        } catch {
+          // ignore
         }
       }
+      // 3. Unregister all Service Workers and purge all caches so the browser/PWA downloads the latest build from network
       if ("serviceWorker" in navigator) {
-        const reg = await navigator.serviceWorker.getRegistration();
-        if (reg) {
-          await reg.update();
-          if (reg.waiting) {
-            reg.waiting.postMessage({ type: "SKIP_WAITING" });
-          }
+        try {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        } catch {
+          // ignore
         }
       }
-      showToast("App e dados atualizados para a versão mais recente!");
+      if ("caches" in window) {
+        try {
+          const names = await caches.keys();
+          await Promise.all(names.map((name) => caches.delete(name)));
+        } catch {
+          // ignore
+        }
+      }
+      try {
+        localStorage.removeItem("casa_lala_sw_version");
+      } catch {
+        // ignore
+      }
+      showToast("App atualizado! Recarregando a versão mais recente...");
+      window.setTimeout(() => {
+        const cleanPath = window.location.pathname || "/";
+        window.location.replace(`${cleanPath}?_v=${Date.now()}`);
+      }, 350);
     } catch {
-      showToast("Dados locais atualizados!");
+      window.location.reload();
     }
   }, [googleUser, needsAuth, handleSyncCheckWithDrive, showToast]);
 
@@ -1131,6 +1144,16 @@ export default function App() {
 
   // Remove automaticamente qualquer conta de exemplo legada ("Itaú (Bolsa UERJ & CDT)" ou "Reserva / Caixinha Quitação" zerada)
   useEffect(() => {
+    const temLegada = contas.some(
+      (c) =>
+        c.nome === "Itaú (Bolsa UERJ & CDT)" ||
+        (demoLimpo &&
+          c.saldoAtual === 0 &&
+          (c.nome === "Reserva / Caixinha Quitação" ||
+            c.nome === "Nubank (Conta / Pix)") &&
+          contas.length === 3)
+    );
+    if (!temLegada) return;
     setContas((prev) => {
       const filtradas = prev.filter((c) => {
         if (c.nome === "Itaú (Bolsa UERJ & CDT)") return false;
@@ -1147,7 +1170,7 @@ export default function App() {
       });
       return filtradas.length !== prev.length ? filtradas : prev;
     });
-  }, [demoLimpo, setContas]);
+  }, [contas, demoLimpo, setContas]);
 
   const prioridades = useMemo(() => {
     const candidatasHoje = tarefas.filter(

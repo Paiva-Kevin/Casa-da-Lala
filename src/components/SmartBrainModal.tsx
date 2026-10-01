@@ -386,12 +386,12 @@ export function SmartBrainModal({
       let anexosParaAnalise = listaParaEnviar;
       if (
         listaParaEnviar.length === 0 &&
-        /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura)\b/i.test(
+        /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|tente|tenta|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura|finan[çc]as)\b/i.test(
           msgEfetiva
         )
       ) {
         const interacaoComAnexo = interacoesLala
-          .slice(0, 2)
+          .slice(0, 10)
           .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
         if (interacaoComAnexo) {
           anexosParaAnalise =
@@ -479,8 +479,16 @@ export function SmartBrainModal({
             ? "🎤 Mensagem de áudio enviada"
             : msgEfetiva),
         ...resultado,
-        anexo: listaParaEnviar[0] || undefined,
-        anexos: listaParaEnviar.length > 0 ? listaParaEnviar : undefined,
+        anexo:
+          listaParaEnviar.length > 0
+            ? resultado.anexo || listaParaEnviar[0]
+            : undefined,
+        anexos:
+          listaParaEnviar.length > 0
+            ? resultado.anexos && resultado.anexos.length > 0
+              ? resultado.anexos
+              : listaParaEnviar
+            : undefined,
         acoesPropostas: acoesMarcadas,
       };
 

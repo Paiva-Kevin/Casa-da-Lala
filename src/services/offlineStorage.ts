@@ -377,8 +377,30 @@ export async function importFullBackupPayload(
     regrasAprendidasLala?: string[];
   }>('perfil_calibrado');
 
+  const localDemoLimpo = await idbGetRecord<boolean>('demo_limpo');
+
   for (const [key, value] of Object.entries(payload.records)) {
-    if (
+    if (key === 'demo_limpo' && localDemoLimpo === true) {
+      await idbSetRecord(key, true, false);
+    } else if (key === 'contas' && Array.isArray(value)) {
+      const contasLimpas = (value as { nome?: string; saldoAtual?: number }[]).filter(
+        (c) => {
+          const nomeStr = String(c?.nome || '');
+          if (nomeStr === 'Itaú (Bolsa UERJ & CDT)') return false;
+          if (
+            (localDemoLimpo === true || payload.records.demo_limpo === true) &&
+            Number(c?.saldoAtual) === 0 &&
+            (nomeStr === 'Reserva / Caixinha Quitação' ||
+              nomeStr === 'Nubank (Conta / Pix)') &&
+            value.length === 3
+          ) {
+            return false;
+          }
+          return true;
+        }
+      );
+      await idbSetRecord(key, contasLimpas, false);
+    } else if (
       key === 'perfil_calibrado' &&
       value &&
       typeof value === 'object' &&
