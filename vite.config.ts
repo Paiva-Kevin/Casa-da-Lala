@@ -19,6 +19,7 @@ export default defineConfig(({mode}) => {
     ],
     define: {
       __LALA_GEMINI_KEY__: JSON.stringify(geminiKey),
+      'process.env.GEMINI_API_KEY': JSON.stringify(geminiKey),
     },
     resolve: {
       alias: {

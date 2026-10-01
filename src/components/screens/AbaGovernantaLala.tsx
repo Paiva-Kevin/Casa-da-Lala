@@ -50,6 +50,7 @@ import {
   TomGovernanta,
 } from "../../types/lala";
 import {
+  consolidarMemoriaAntesDeLimparChat,
   consultarLalaUnificada,
   falarTextoComVozDaLala,
   formatarTamanhoBytes,
@@ -218,6 +219,11 @@ export function AbaGovernantaLala({
   const [mensagem, setMensagem] = useState("");
   const [gravando, setGravando] = useState(false);
   const [processando, setProcessando] = useState(false);
+  const [envioEmAndamento, setEnvioEmAndamento] = useState<{
+    texto: string;
+    anexos: AnexoLala[];
+    hora: string;
+  } | null>(null);
   const [anexosAtuais, setAnexosAtuais] = useState<AnexoLala[]>([]);
   const [painelPerfilAberto, setPainelPerfilAberto] = useState(false);
 
@@ -585,9 +591,41 @@ export function AbaGovernantaLala({
         ? `Analise a imagem/arquivo "${listaAnexos[0].nome}" e atualize o que for necessário no aplicativo.`
         : `Analise estas ${listaAnexos.length} imagens/arquivos e atualize os dados no aplicativo.`);
 
+    const horaEnvio = new Date().toLocaleTimeString("pt-BR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
     setMensagem("");
     setAnexosAtuais([]);
     setProcessando(true);
+    setEnvioEmAndamento({
+      texto: msgEnviada,
+      anexos: listaAnexos,
+      hora: horaEnvio,
+    });
+
+    // Se a usuária fez uma pergunta de acompanhamento sobre prints/contas enviados na mensagem anterior sem reanexar,
+    // recupera automaticamente os anexos da última interação para a Lala enxergar as imagens!
+    let anexosParaAnalise = listaAnexos;
+    if (
+      listaAnexos.length === 0 &&
+      /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura)\b/i.test(
+        msgEnviada
+      )
+    ) {
+      const interacaoComAnexo = interacoes
+        .slice(0, 2)
+        .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
+      if (interacaoComAnexo) {
+        anexosParaAnalise =
+          interacaoComAnexo.anexos && interacaoComAnexo.anexos.length > 0
+            ? interacaoComAnexo.anexos
+            : interacaoComAnexo.anexo
+            ? [interacaoComAnexo.anexo]
+            : [];
+      }
+    }
 
     try {
       const novaInteracaoId = Date.now();
@@ -638,13 +676,16 @@ export function AbaGovernantaLala({
             perfilCalibrado?.instrucoesPersonalizadasLala,
           horarioAcordar: perfilCalibrado?.horarioAcordar,
           horarioDormir: perfilCalibrado?.horarioDormir,
-          historicoConversa: interacoes.slice(0, 10).map((it) => ({
-            usuario: it.mensagemUsuario,
-            lala: it.respostaLala,
-            dataHora: it.dataHora,
-          })),
+          historicoConversa: interacoes
+            .slice(0, 10)
+            .reverse()
+            .map((it) => ({
+              usuario: it.mensagemUsuario,
+              lala: it.respostaLala,
+              dataHora: it.dataHora,
+            })),
         },
-        listaAnexos
+        anexosParaAnalise
       );
 
       const agoraHora = new Date().toLocaleTimeString("pt-BR", {
@@ -764,6 +805,8 @@ export function AbaGovernantaLala({
         dataHora: agoraHora,
         mensagemUsuario: msgEnviada,
         ...resultado,
+        anexo: listaAnexos[0] || undefined,
+        anexos: listaAnexos.length > 0 ? listaAnexos : undefined,
         acoesPropostas: acoesProcessadas,
       };
 
@@ -774,6 +817,7 @@ export function AbaGovernantaLala({
       }
     } finally {
       setProcessando(false);
+      setEnvioEmAndamento(null);
     }
   };
 
@@ -1071,24 +1115,62 @@ export function AbaGovernantaLala({
               </button>
             )}
 
-            {interacoes.length > 1 && subAba === "chat" && (
-              <button
-                type="button"
-                onClick={() => {
-                  setInteracoes((prev) => prev.slice(0, 1));
-                  showToast("Histórico de conversa limpo.");
-                }}
-                className="p-1.5 rounded-xl border cursor-pointer hover:opacity-80"
-                style={{
-                  backgroundColor: t.card,
-                  color: t.textSoft,
-                  borderColor: t.border,
-                }}
-                title="Limpar histórico de mensagens"
-              >
-                <Trash2 size={14} />
-              </button>
-            )}
+            {(interacoes.length > 1 ||
+              (interacoes.length === 1 && interacoes[0]?.id !== 1)) &&
+              subAba === "chat" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // 1. Antes de limpar o chat, extrai e salva todas as informações, aprendizados, regras e saldos na Memória Viva!
+                    const consolidado = consolidarMemoriaAntesDeLimparChat(
+                      interacoes,
+                      perfilCalibrado
+                    );
+                    if (setPerfilCalibrado) {
+                      setPerfilCalibrado((prev) => ({
+                        ...prev,
+                        itensMemoriaViva:
+                          consolidado.itensMemoriaVivaAtualizados,
+                        regrasAprendidasLala:
+                          consolidado.regrasAprendidasAtualizadas,
+                      }));
+                    }
+
+                    // 2. Limpa apenas os balões antigos da tela de chat, mantendo um card inicial limpo e confirmando que a memória continua guardada
+                    const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                    setInteracoes([
+                      {
+                        id: 1,
+                        dataHora: agoraHora,
+                        modo: "informacao",
+                        tituloCard: "Bate-Papo com a Lala",
+                        tags: ["Memória Preservada", "Governanta"],
+                        mensagemUsuario: "Oi Lala!",
+                        respostaLala:
+                          "Limpei o histórico visual do nosso bate-papo para deixar a tela organizada, mas fique tranquila: todas as suas informações importantes, preferências, regras e aprendizados continuam 100% guardados na minha Memória Viva! Como posso te ajudar agora?",
+                        guardadoNoCofre: true,
+                        acoesPropostas: [],
+                      },
+                    ]);
+                    showToast(
+                      "Chat limpo! As memórias e informações importantes da Lala foram preservadas."
+                    );
+                  }}
+                  className="px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer hover:opacity-80"
+                  style={{
+                    backgroundColor: t.card,
+                    color: t.textSoft,
+                    borderColor: t.border,
+                  }}
+                  title="Limpar mensagens do chat mantendo todas as memórias e informações aprendidas pela Lala"
+                >
+                  <Trash2 size={13} />
+                  <span className="hidden sm:inline">Limpar Chat</span>
+                </button>
+              )}
           </div>
         </div>
 
@@ -1786,25 +1868,81 @@ export function AbaGovernantaLala({
             })}
 
             {processando && (
-              <div className="flex items-start gap-2.5">
-                <div
-                  className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white"
-                  style={{
-                    background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
-                  }}
-                >
-                  <Sparkles size={14} className="animate-spin" />
-                </div>
-                <div
-                  className="rounded-3xl rounded-tl-md px-4 py-3 border text-xs font-medium flex items-center gap-2"
-                  style={{
-                    backgroundColor: t.card,
-                    borderColor: t.border,
-                    color: t.textSoft,
-                  }}
-                >
-                  <MessageSquare size={13} style={{ color: t.primary }} />
-                  <span>Lala está preparando as ações para você revisar...</span>
+              <div className="space-y-3">
+                {envioEmAndamento && (
+                  <div className="flex justify-end">
+                    <div
+                      className="max-w-[85%] sm:max-w-[72%] rounded-3xl rounded-tr-md px-4 py-3 text-white shadow-xs space-y-2.5 opacity-95"
+                      style={{
+                        background: `linear-gradient(135deg, ${t.primary} 0%, ${t.primary}E6 100%)`,
+                      }}
+                    >
+                      {envioEmAndamento.anexos.length > 0 && (
+                        <div
+                          className={`grid gap-2 ${
+                            envioEmAndamento.anexos.length > 1
+                              ? "grid-cols-2"
+                              : "grid-cols-1"
+                          }`}
+                        >
+                          {envioEmAndamento.anexos.map((anx, idx) =>
+                            anx.mimeType.startsWith("image/") && anx.base64 ? (
+                              <img
+                                key={idx}
+                                src={
+                                  anx.base64.startsWith("data:")
+                                    ? anx.base64
+                                    : `data:${anx.mimeType};base64,${anx.base64}`
+                                }
+                                alt={anx.nome}
+                                className="max-h-52 w-full rounded-2xl object-cover border border-white/20"
+                              />
+                            ) : (
+                              <div
+                                key={idx}
+                                className="px-3 py-2 rounded-xl bg-black/20 text-[11px] flex items-center gap-2 truncate"
+                              >
+                                <FileText size={13} />
+                                <span className="truncate">{anx.nome}</span>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      )}
+                      <p className="text-xs sm:text-sm leading-relaxed whitespace-pre-wrap">
+                        {envioEmAndamento.texto}
+                      </p>
+                      <span className="block text-[10px] text-white/75 text-right font-mono-num">
+                        {envioEmAndamento.hora}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-start gap-2.5">
+                  <div
+                    className="w-8 h-8 rounded-2xl flex items-center justify-center shrink-0 text-white"
+                    style={{
+                      background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
+                    }}
+                  >
+                    <Sparkles size={14} className="animate-spin" />
+                  </div>
+                  <div
+                    className="rounded-3xl rounded-tl-md px-4 py-3 border text-xs font-medium flex items-center gap-2"
+                    style={{
+                      backgroundColor: t.card,
+                      borderColor: t.border,
+                      color: t.textSoft,
+                    }}
+                  >
+                    <MessageSquare size={13} style={{ color: t.primary }} />
+                    <span>
+                      {envioEmAndamento && envioEmAndamento.anexos.length > 0
+                        ? `Lala está lendo seus ${envioEmAndamento.anexos.length} arquivo(s)/print(s) e preparando as ações...`
+                        : "Lala está preparando as ações para você revisar..."}
+                    </span>
+                  </div>
                 </div>
               </div>
             )}

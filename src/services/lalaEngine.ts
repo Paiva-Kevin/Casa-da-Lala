@@ -1,7 +1,7 @@
 // Unified Local & Cloud Multimodal Intelligence Engine for Lala
 // Automatically understands commands, uploaded files/images (diet, UERJ schedule, workouts, receipts, or vault storage), expenses, tasks, pet care, vents, daydreams, and questions.
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 import {
   AcaoGovernanta,
   AnexoLala,
@@ -11,6 +11,7 @@ import {
   ItemAprendizadoLala,
   MatrizDecisaoLala,
   ModoInteracaoLala,
+  PerfilUsuarioCalibrado,
 } from "../types/lala";
 import { parseGastoNatural } from "../data/initialData";
 
@@ -25,6 +26,13 @@ function obterChaveGeminiCliente(): string {
     // ignore
   }
   try {
+    if (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) {
+      return process.env.GEMINI_API_KEY;
+    }
+  } catch {
+    // ignore
+  }
+  try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const metaEnv = (import.meta as any)?.env;
     if (metaEnv?.VITE_GEMINI_API_KEY) return metaEnv.VITE_GEMINI_API_KEY;
@@ -33,6 +41,164 @@ function obterChaveGeminiCliente(): string {
     // ignore
   }
   return "";
+}
+
+/**
+ * Extrai e preserva automaticamente todas as informações importantes, aprendizados,
+ * regras, preferências, bancos e decisões contidas nas interações do chat antes
+ * de limpar o histórico de mensagens, garantindo que a Lala nunca perca memória.
+ */
+export function consolidarMemoriaAntesDeLimparChat(
+  interacoes: InteracaoGovernanta[],
+  perfilAtual?: PerfilUsuarioCalibrado
+): {
+  itensMemoriaVivaAtualizados: ItemAprendizadoLala[];
+  regrasAprendidasAtualizadas: string[];
+  novosAprendizadosCount: number;
+} {
+  const memoriaExistente: ItemAprendizadoLala[] = [
+    ...(perfilAtual?.itensMemoriaViva || []),
+  ];
+  const regrasExistentes: string[] = [
+    ...(perfilAtual?.regrasAprendidasLala || []),
+  ];
+  let novosAprendizadosCount = 0;
+
+  const dataHoje = new Date().toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+
+  const adicionarMemoriaUnica = (
+    categoria: CategoriaAprendizadoLala,
+    textoRaw: string,
+    origem: "conversa" | "confirmacao_acao" | "edicao_acao" | "manual" = "conversa"
+  ) => {
+    const texto = (textoRaw || "").trim();
+    if (!texto || texto.length < 4) return;
+    const jaExiste = memoriaExistente.some(
+      (m) => m.texto.toLowerCase().trim() === texto.toLowerCase()
+    );
+    if (!jaExiste) {
+      memoriaExistente.unshift({
+        id: `mem-preserve-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        categoria,
+        texto,
+        dataHora: dataHoje,
+        origem,
+      });
+      novosAprendizadosCount++;
+    }
+  };
+
+  const adicionarRegraUnica = (regraRaw: string) => {
+    const regra = (regraRaw || "").trim();
+    if (!regra || regra.length < 4) return;
+    const jaExiste = regrasExistentes.some(
+      (r) => r.toLowerCase().trim() === regra.toLowerCase()
+    );
+    if (!jaExiste) {
+      regrasExistentes.push(regra);
+      novosAprendizadosCount++;
+    }
+  };
+
+  // Percorre das interações mais antigas para as mais recentes (ignorando o card de boas-vindas id === 1)
+  const interacoesReais = (interacoes || [])
+    .filter((it) => it.id !== 1)
+    .slice()
+    .reverse();
+
+  for (const it of interacoesReais) {
+    // 1. Preserva aprendizadosExtraidos e novaRegraAprendida já detectados na interação
+    if (it.novaRegraAprendida) {
+      adicionarRegraUnica(it.novaRegraAprendida);
+      adicionarMemoriaUnica("forma_de_uso", it.novaRegraAprendida, "conversa");
+    }
+    if (Array.isArray(it.aprendizadosExtraidos)) {
+      for (const ap of it.aprendizadosExtraidos) {
+        if (ap?.texto) {
+          adicionarMemoriaUnica(ap.categoria || "contexto", ap.texto, "conversa");
+        }
+      }
+    }
+
+    // 2. Preserva dados de ações propostas/confirmadas (ex: contas bancárias, saldos, hábitos, compromissos, dieta, etc.)
+    if (Array.isArray(it.acoesPropostas)) {
+      for (const ac of it.acoesPropostas) {
+        if (ac.recusada || ac.desfeita) continue;
+        if (
+          ac.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+          ac.payload?.contasAjuste &&
+          ac.payload.contasAjuste.length > 0
+        ) {
+          const resumoContas = ac.payload.contasAjuste
+            .map(
+              (c) =>
+                `${c.nome} (R$ ${Number(c.saldoAtual || 0)
+                  .toFixed(2)
+                  .replace(".", ",")})`
+            )
+            .join(", ");
+          adicionarMemoriaUnica(
+            "contexto",
+            `Contas bancárias informadas pela usuária: ${resumoContas}`,
+            ac.executada ? "confirmacao_acao" : "conversa"
+          );
+        } else if (
+          ac.executada &&
+          ac.titulo &&
+          ac.tipo !== "LIMPAR_DADOS_EXEMPLO"
+        ) {
+          adicionarMemoriaUnica(
+            "acao_usuario",
+            `Ação realizada no app: ${ac.titulo}`,
+            "confirmacao_acao"
+          );
+        }
+      }
+    }
+
+    // 3. Analisa a mensagem da usuária para capturar instruções, preferências, rotina ou fatos importantes não salvos
+    const msg = (it.mensagemUsuario || "").trim();
+    const msgLower = msg.toLowerCase();
+    if (
+      msg.length >= 10 &&
+      !msgLower.startsWith("analise a imagem") &&
+      !msgLower.startsWith("analise estas")
+    ) {
+      if (
+        /\b(sempre|nunca|prefiro|gosto que|não gosto|nao gosto|quero que voc[êe]|lembre que|lembra que|guarde que|guarda que|minha regra|não use|nao use)\b/i.test(
+          msgLower
+        )
+      ) {
+        adicionarRegraUnica(msg.slice(0, 180));
+        adicionarMemoriaUnica("forma_de_uso", msg.slice(0, 180), "conversa");
+      } else if (
+        /\b(acordo|durmo|treino|minha aula|trabalho|uerj|cdt|rcr|todo dia|toda segunda|toda ter[çc]a|toda quarta|toda quinta|toda sexta|rotina)\b/i.test(
+          msgLower
+        )
+      ) {
+        adicionarMemoriaUnica("rotina", msg.slice(0, 180), "conversa");
+      } else if (
+        /\b(minha conta|minhas contas|uso o banco|tenho conta|picpay|nubank|inter|bradesco|santander|c6|mercado pago|meu saldo|recebo|minha bolsa|meu sal[áa]rio|nina|tobias)\b/i.test(
+          msgLower
+        )
+      ) {
+        adicionarMemoriaUnica("contexto", msg.slice(0, 180), "conversa");
+      } else if (
+        /\b(decidi|escolhi|vou priorizar|minha meta|meu foco)\b/i.test(msgLower)
+      ) {
+        adicionarMemoriaUnica("decisao", msg.slice(0, 180), "conversa");
+      }
+    }
+  }
+
+  return {
+    itensMemoriaVivaAtualizados: memoriaExistente.slice(0, 100),
+    regrasAprendidasAtualizadas: regrasExistentes.slice(-50),
+    novosAprendizadosCount,
+  };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -966,10 +1132,9 @@ export function processarMensagemLocalLala(
   };
 
   const BANCOS_CONHECIDOS: { chaves: string[]; nomePadrao: string }[] = [
-    { chaves: ["nubank", "nu ", "roxinho"], nomePadrao: "Nubank (Conta / Pix)" },
-    { chaves: ["itaú", "itau"], nomePadrao: "Itaú (Bolsa UERJ & CDT)" },
-    { chaves: ["inter", "banco inter"], nomePadrao: "Banco Inter" },
+    { chaves: ["nubank", "nu ", "roxinho"], nomePadrao: "Nubank" },
     { chaves: ["picpay", "pic pay"], nomePadrao: "PicPay" },
+    { chaves: ["inter", "banco inter"], nomePadrao: "Banco Inter" },
     { chaves: ["mercado pago", "mercadopago"], nomePadrao: "Mercado Pago" },
     { chaves: ["santander"], nomePadrao: "Santander" },
     { chaves: ["bradesco"], nomePadrao: "Bradesco" },
@@ -977,9 +1142,10 @@ export function processarMensagemLocalLala(
     { chaves: ["c6", "c6 bank"], nomePadrao: "C6 Bank" },
     { chaves: ["xp", "banco xp"], nomePadrao: "XP" },
     { chaves: ["btg"], nomePadrao: "BTG Pactual" },
+    { chaves: ["itaú", "itau"], nomePadrao: "Itaú" },
     {
       chaves: ["reserva", "caixinha", "poupança", "poupanca", "quitação", "quitacao"],
-      nomePadrao: "Reserva / Caixinha Quitação",
+      nomePadrao: "Reserva / Caixinha",
     },
   ];
 
@@ -1697,9 +1863,23 @@ export async function consultarLalaUnificada(
   }
   const primeiroAnexo = listaAnexos[0];
 
+  // Sanitiza contas de exemplo antigas (Itaú / Reserva padrão) do contexto para nunca poluir a análise
+  const contasLimparCtx = (ctx.contasBancarias || []).filter(
+    (c) =>
+      !c.nome.includes("Itaú (Bolsa UERJ & CDT)") &&
+      !(
+        c.nome.includes("Reserva / Caixinha Quitação") &&
+        (c.saldoAtual === 2450 || c.saldoAtual === 0)
+      )
+  );
+  const ctxSanitizado: LalaContextSnapshot = {
+    ...ctx,
+    contasBancarias: contasLimparCtx,
+  };
+
   // Se o usuário pediu explicitamente "só guardar" um arquivo, executa direto
   if (primeiroAnexo?.intencao === "guardar") {
-    return processarMensagemLocalLala(texto, ctx, primeiroAnexo);
+    return processarMensagemLocalLala(texto, ctxSanitizado, primeiroAnexo);
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1708,64 +1888,51 @@ export async function consultarLalaUnificada(
   if (typeof navigator !== "undefined" && navigator.onLine) {
     const payloadBody = JSON.stringify({
       mensagem: texto,
-      contextoApp: ctx,
-      historicoConversa: ctx.historicoConversa,
+      contextoApp: ctxSanitizado,
+      historicoConversa: ctxSanitizado.historicoConversa,
       anexo: primeiroAnexo,
       anexos: listaAnexos,
     });
 
-    // 1. Tenta via rota de backend local (/api/lala/interact) e URLs Cloud Run (caso hospedado em Firebase Hosting estático)
-    const apiEndpoints = [
-      "/api/lala/interact",
-      "https://ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
-      "https://ais-dev-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
-    ];
+    const isStaticFirebaseHost =
+      typeof window !== "undefined" &&
+      (window.location.hostname.includes(".web.app") ||
+        window.location.hostname.includes(".firebaseapp.com"));
 
-    for (const endpoint of apiEndpoints) {
-      if (data) break;
+    // 1. Tenta via rota de backend local (/api/lala/interact) quando não está em host puramente estático
+    const apiEndpoints = isStaticFirebaseHost
+      ? [
+          "https://ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
+        ]
+      : [
+          "/api/lala/interact",
+          "https://ais-pre-v53ngxewgn6gdcqwqsl7t4-260327000459.us-east5.run.app/api/lala/interact",
+        ];
+
+    // Se estiver em host estático e tiver chave Gemini no cliente, usa chamada direta multimodal rápida primeiro
+    const clientKey = obterChaveGeminiCliente();
+
+    const tentarChamadaDiretaGemini = async () => {
+      if (!clientKey) return null;
       try {
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payloadBody,
-        });
+        const ai = new GoogleGenAI({ apiKey: clientKey });
+        const historicoFormatado =
+          Array.isArray(ctxSanitizado.historicoConversa) &&
+          ctxSanitizado.historicoConversa.length > 0
+            ? ctxSanitizado.historicoConversa
+                .slice(-10)
+                .map(
+                  (h) =>
+                    `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+                )
+                .join("\n---\n")
+            : "Início da conversa.";
 
-        const contentType = res.headers.get("content-type") || "";
-        if (res.ok && contentType.includes("application/json")) {
-          const parsed = await res.json();
-          if (parsed && parsed.respostaLala) {
-            data = parsed;
-            break;
-          }
-        }
-      } catch {
-        // Tenta o próximo endpoint ou chamada direta Gemini SDK
-      }
-    }
-
-    // 2. Fallback Multimodal Direto via @google/genai (garante que a Lala leia prints mesmo em PWA iOS / Hosting estático / payloads grandes)
-    if (!data) {
-      const clientKey = obterChaveGeminiCliente();
-      if (clientKey) {
-        try {
-          const ai = new GoogleGenAI({ apiKey: clientKey });
-          const historicoFormatado =
-            Array.isArray(ctx.historicoConversa) &&
-            ctx.historicoConversa.length > 0
-              ? ctx.historicoConversa
-                  .slice(-10)
-                  .map(
-                    (h) =>
-                      `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
-                  )
-                  .join("\n---\n")
-              : "Início da conversa.";
-
-          const systemInstruction = `Você é a Lala, a governanta pessoal, parceira de decisões e assistente de vida inteligente do aplicativo "Casa da Lala".
+        const systemInstruction = `Você é a Lala, a governanta pessoal, parceira de decisões e assistente de vida inteligente do aplicativo "Casa da Lala".
 Você conversa em formato de BATE-PAPO humano, acolhedor, perspicaz, proativo e altamente contextualizado.
 
 Contexto completo e Memória Viva da usuária:
-${JSON.stringify(ctx || {})}
+${JSON.stringify(ctxSanitizado || {})}
 
 Histórico recente da conversa:
 ${historicoFormatado}
@@ -1774,87 +1941,131 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E LEITURA DE PRINTS (CRÍTICO):
 1. APRENDIZADO EM 5 DIMENSÕES:
    Preencha "aprendizadosExtraidos" com aprendizados concretos nas categorias: "contexto", "acao_usuario", "decisao", "rotina", "forma_de_uso".
 2. LEITURA DE PRINTS BANCÁRIOS, SALDOS E ARQUIVOS:
-   - Analise CADA IMAGEM anexada com máxima atenção!
-   - Identifique o nome exato de cada banco/instituição que aparece nas imagens (ex: "PicPay", "Nubank", "Reserva / Caixinha Nubank", "Inter", "Bradesco", "Santander", "C6 Bank", "Mercado Pago", "Itaú", etc.) e o saldo exato ("saldoAtual") ou fatura ("faturaAtual", "limiteTotal").
-   - PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE as contas que aparecem nos prints enviados pela usuária ou que foram citadas por ela na mensagem! NUNCA inclua contas do contextoApp (como "Itaú" ou "Reserva") se elas NÃO estiverem nos prints enviados!
-   - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela dizendo "esses são os prints das minhas contas" ou "atualize a parte de finanças com isso", para que apenas as contas reais dos prints fiquem no aplicativo!
+   - Analise CADA IMAGEM anexada individualmente com máxima atenção!
+   - Identifique o nome exato de CADA banco/instituição que aparece nas imagens (ex: "PicPay", "Nubank", "Reserva / Caixinha", "Banco Inter", "Bradesco", "Santander", "C6 Bank", "Mercado Pago", etc.) e o valor numérico exato do saldo disponível ("saldoAtual") ou fatura ("faturaAtual", "limiteTotal").
+   - CONSOLIDAÇÃO OBRIGATÓRIA: Se houver 2, 3 ou mais prints de bancos diferentes, inclua TODOS os bancos identificados juntos no mesmo array "contasAjuste" dentro de uma única ação "ATUALIZAR_CONTAS_FINANCAS". Não deixe nenhum banco dos prints de fora!
+   - PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE as contas que aparecem visualmente nos prints enviados pela usuária ou que foram citadas por ela na mensagem! NUNCA inclua "Itaú" nem qualquer outra conta que não esteja nos prints enviados!
+   - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela para atualizar as finanças, garantindo que apenas as contas reais dos prints fiquem no aplicativo!
 
 Retorne SEMPRE um JSON válido com:
 {
   "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
   "transcricaoAudioUsuario": "string opcional",
-  "respostaLala": "Sua resposta detalhada citando cada banco e valor lido dos prints",
+  "respostaLala": "Sua resposta detalhada citando cada banco e valor real lido dos prints",
   "tituloCard": "Resumo em até 5 palavras",
-  "tags": ["Finanças", "Saldos"],
+  "tags": ["Tag1", "Tag2"],
+  "novaRegraAprendida": "string opcional",
   "aprendizadosExtraidos": [{ "categoria": "contexto", "texto": "..." }],
   "acoesPropostas": [
     {
-      "tipo": "ATUALIZAR_CONTAS_FINANCAS",
-      "titulo": "Atualizar Contas e Saldos",
-      "detalhe": "Saldos extraídos dos prints bancários",
+      "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
+      "titulo": "Título claro da ação descrevendo os bancos/itens reais lidos",
+      "detalhe": "Explicação curta do impacto no app",
       "substituirExistentes": true,
-      "contasAjuste": [{ "nome": "PicPay", "saldoAtual": 0 }, { "nome": "Nubank", "saldoAtual": 0 }],
+      "contasAjuste": [{ "nome": "Nome exato do Banco lido", "saldoAtual": 0 }],
       "cartoesAjuste": []
     }
   ]
 }`;
 
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const parts: any[] = [];
-          for (const itemAnexo of listaAnexos) {
-            if (itemAnexo?.base64 && itemAnexo.mimeType) {
-              const cleanBase64 = itemAnexo.base64.includes(",")
-                ? itemAnexo.base64.split(",")[1]
-                : itemAnexo.base64;
-              if (
-                itemAnexo.mimeType.startsWith("image/") ||
-                itemAnexo.mimeType.startsWith("audio/") ||
-                itemAnexo.mimeType === "application/pdf"
-              ) {
-                parts.push({
-                  inlineData: {
-                    mimeType: itemAnexo.mimeType.split(";")[0],
-                    data: cleanBase64,
-                  },
-                });
-              }
-            }
-          }
-          parts.push({
-            text:
-              texto ||
-              "Analise detalhadamente todas as imagens anexadas, extraia cada banco e saldo exato visível nos prints e gere a ação ATUALIZAR_CONTAS_FINANCAS apenas com os bancos presentes nos prints.",
-          });
-
-          const clientModels = [
-            "gemini-3-flash-preview",
-            "gemini-3.1-flash-lite-preview",
-          ];
-          for (const mName of clientModels) {
-            try {
-              const response = await ai.models.generateContent({
-                model: mName,
-                contents: parts,
-                config: {
-                  systemInstruction,
-                  responseMimeType: "application/json",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const parts: any[] = [];
+        for (const itemAnexo of listaAnexos) {
+          if (itemAnexo?.base64 && itemAnexo.mimeType) {
+            const cleanBase64 = itemAnexo.base64.includes(",")
+              ? itemAnexo.base64.split(",")[1]
+              : itemAnexo.base64;
+            if (
+              itemAnexo.mimeType.startsWith("image/") ||
+              itemAnexo.mimeType.startsWith("audio/") ||
+              itemAnexo.mimeType === "application/pdf"
+            ) {
+              parts.push({
+                inlineData: {
+                  mimeType: itemAnexo.mimeType.split(";")[0],
+                  data: cleanBase64,
                 },
               });
-              if (response?.text) {
-                const candidate = extrairJsonSeguroCliente(response.text);
-                if (candidate && typeof candidate.respostaLala === "string") {
-                  data = candidate;
-                  break;
-                }
-              }
-            } catch {
-              // Tenta próximo modelo
             }
           }
-        } catch (err) {
-          console.warn("Aviso no fallback direto Gemini:", err);
+        }
+        const anexosNaoAudio = listaAnexos.filter(
+          (a) => !a.mimeType?.startsWith("audio/")
+        );
+        let promptTexto =
+          texto ||
+          "Analise detalhadamente todas as imagens anexadas, extraia cada banco e saldo exato visível nos prints e gere a ação ATUALIZAR_CONTAS_FINANCAS com todos os bancos presentes nos prints.";
+        if (anexosNaoAudio.length > 0) {
+          promptTexto += `\n\n[ATENÇÃO: Foram anexadas ${anexosNaoAudio.length} imagem(ns): ${anexosNaoAudio
+            .map((a, idx) => `#${idx + 1} "${a.nome}"`)
+            .join(", ")}. Extraia os dados de TODAS as imagens sem omitir nenhum banco!]`;
+        }
+        parts.push({ text: promptTexto });
+
+        const clientModels = [
+          "gemini-3-flash-preview",
+          "gemini-3.1-flash-lite-preview",
+        ];
+        for (const mName of clientModels) {
+          try {
+            const response = await ai.models.generateContent({
+              model: mName,
+              contents: parts,
+              config: {
+                systemInstruction,
+                responseMimeType: "application/json",
+                thinkingConfig: {
+                  thinkingLevel: ThinkingLevel.LOW,
+                },
+              },
+            });
+            if (response?.text) {
+              const candidate = extrairJsonSeguroCliente(response.text);
+              if (candidate && typeof candidate.respostaLala === "string") {
+                return candidate;
+              }
+            }
+          } catch {
+            // Tenta próximo modelo
+          }
+        }
+      } catch (err) {
+        console.warn("Aviso no fallback direto Gemini:", err);
+      }
+      return null;
+    };
+
+    if (isStaticFirebaseHost && clientKey) {
+      data = await tentarChamadaDiretaGemini();
+    }
+
+    if (!data) {
+      for (const endpoint of apiEndpoints) {
+        if (data) break;
+        try {
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadBody,
+          });
+
+          const contentType = res.headers.get("content-type") || "";
+          if (res.ok && contentType.includes("application/json")) {
+            const parsed = await res.json();
+            if (parsed && parsed.respostaLala) {
+              data = parsed;
+              break;
+            }
+          }
+        } catch {
+          // Tenta o próximo endpoint ou chamada direta Gemini SDK
         }
       }
+    }
+
+    // 2. Fallback Multimodal Direto via @google/genai caso os endpoints HTTP falhem
+    if (!data && clientKey) {
+      data = await tentarChamadaDiretaGemini();
     }
 
     if (data && data.respostaLala) {
@@ -1973,15 +2184,15 @@ Retorne SEMPRE um JSON válido com:
             const citouItauNoTexto = /\b(ita[uú]|iti)\b/i.test(texto);
 
             // Se a usuária não citou Itaú, remove qualquer conta de exemplo do Itaú ou Caixinha Quitação zerada
-            if (!citouItauNoTexto && contasNormalizadas.length > 1) {
+            if (!citouItauNoTexto) {
               contasNormalizadas = contasNormalizadas.filter(
                 (c) =>
                   !c.nome.includes("Bolsa UERJ") &&
+                  !c.nome.toLowerCase().includes("itaú") &&
+                  !c.nome.toLowerCase().includes("itau") &&
                   !(
-                    c.saldoAtual === 0 &&
-                    (c.nome.toLowerCase().includes("itaú") ||
-                      c.nome.toLowerCase().includes("itau") ||
-                      c.nome.includes("Caixinha Quitação"))
+                    (c.saldoAtual === 0 || c.saldoAtual === 2450) &&
+                    c.nome.includes("Caixinha Quitação")
                   )
               );
             }
@@ -2033,6 +2244,86 @@ Retorne SEMPRE um JSON válido com:
             };
           })
         : [];
+
+      // Se o modelo retornou múltiplas ações ATUALIZAR_CONTAS_FINANCAS (ex: uma para cada print enviado),
+      // consolida TODAS em uma única ação ATUALIZAR_CONTAS_FINANCAS para não sobrescrever uma conta com a outra!
+      const acoesContas = acoesMapeadas.filter(
+        (ac) => ac.tipo === "ATUALIZAR_CONTAS_FINANCAS"
+      );
+      if (acoesContas.length > 1) {
+        const contasUnificadas: { nome: string; saldoAtual: number }[] = [];
+        const cartoesUnificados: {
+          nome: string;
+          faturaAtual: number;
+          limiteTotal?: number;
+          vencimentoDia?: number;
+        }[] = [];
+        let substituirUnificado = false;
+
+        for (const ac of acoesContas) {
+          if (ac.payload?.substituirExistentes) substituirUnificado = true;
+          for (const c of ac.payload?.contasAjuste || []) {
+            const idxExist = contasUnificadas.findIndex(
+              (cu) => cu.nome.toLowerCase().trim() === c.nome.toLowerCase().trim()
+            );
+            if (idxExist >= 0) {
+              contasUnificadas[idxExist] = c;
+            } else {
+              contasUnificadas.push(c);
+            }
+          }
+          for (const cc of ac.payload?.cartoesAjuste || []) {
+            const idxExist = cartoesUnificados.findIndex(
+              (ccu) =>
+                ccu.nome.toLowerCase().trim() === cc.nome.toLowerCase().trim()
+            );
+            if (idxExist >= 0) {
+              cartoesUnificados[idxExist] = cc;
+            } else {
+              cartoesUnificados.push(cc);
+            }
+          }
+        }
+
+        const resumoContasTit = contasUnificadas
+          .map(
+            (c) =>
+              `${c.nome}: R$ ${Number(c.saldoAtual || 0)
+                .toFixed(2)
+                .replace(".", ",")}`
+          )
+          .join(" · ");
+
+        const acaoContaConsolidada: AcaoGovernanta = {
+          ...acoesContas[0],
+          titulo: resumoContasTit
+            ? `Atualizar Contas (${resumoContasTit})`
+            : acoesContas[0].titulo,
+          payload: {
+            ...acoesContas[0].payload,
+            substituirExistentes: substituirUnificado,
+            contasAjuste:
+              contasUnificadas.length > 0 ? contasUnificadas : undefined,
+            cartoesAjuste:
+              cartoesUnificados.length > 0 ? cartoesUnificados : undefined,
+          },
+        };
+
+        let jaInseriuConsolidada = false;
+        const novasAcoesMapeadas: AcaoGovernanta[] = [];
+        for (const ac of acoesMapeadas) {
+          if (ac.tipo === "ATUALIZAR_CONTAS_FINANCAS") {
+            if (!jaInseriuConsolidada) {
+              novasAcoesMapeadas.push(acaoContaConsolidada);
+              jaInseriuConsolidada = true;
+            }
+          } else {
+            novasAcoesMapeadas.push(ac);
+          }
+        }
+        acoesMapeadas.length = 0;
+        acoesMapeadas.push(...novasAcoesMapeadas);
+      }
 
       // Se a usuária pediu explicitamente para atualizar o saldo/conta e o modelo não incluiu ATUALIZAR_CONTAS_FINANCAS, garante o card interativo!
       const pediuSaldoExplicito =

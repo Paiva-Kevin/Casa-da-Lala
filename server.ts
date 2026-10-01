@@ -3,15 +3,27 @@ import express from "express";
 import fs from "fs";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, ThinkingLevel } from "@google/genai";
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_BUILD_VERSION = "v16.0";
+const APP_BUILD_VERSION = "v17.0";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const SNAPSHOT_FILE = path.join(DATA_DIR, "cloud_snapshot.json");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let cachedServerSnapshot: any = null;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function isDemoAccountsOnly(contas: any[]): boolean {
+  if (!Array.isArray(contas) || contas.length === 0) return true;
+  const demoIds = new Set(["conta-1", "conta-2", "conta-3"]);
+  const demoBalances = new Set([620, 210, 0, 2450, 385.5, 240, 420]);
+  return contas.every(
+    (c) =>
+      demoIds.has(String(c?.id || "")) &&
+      demoBalances.has(Number(c?.saldoAtual ?? 0))
+  );
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function hasServerCustomizations(records: any): boolean {
@@ -42,13 +54,8 @@ function hasServerCustomizations(records: any): boolean {
   ) {
     return true;
   }
-  if (Array.isArray(records.contas)) {
-    const isDefaultDemo =
-      records.contas.length === 3 &&
-      Number(records.contas[0]?.saldoAtual) === 385.5 &&
-      Number(records.contas[1]?.saldoAtual) === 240 &&
-      Number(records.contas[2]?.saldoAtual) === 420;
-    if (!isDefaultDemo && records.contas.length > 0) return true;
+  if (Array.isArray(records.contas) && !isDemoAccountsOnly(records.contas)) {
+    return true;
   }
   return false;
 }
@@ -301,11 +308,24 @@ async function startServer() {
               .join("\n---\n")
           : "Início da conversa.";
 
+      const contextoSanitizado = { ...(contextoApp || {}) };
+      if (Array.isArray(contextoSanitizado.contasBancarias)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        contextoSanitizado.contasBancarias = (contextoSanitizado.contasBancarias as any[]).filter(
+          (c) =>
+            !String(c?.nome || "").includes("Itaú (Bolsa UERJ & CDT)") &&
+            !(
+              String(c?.nome || "").includes("Reserva / Caixinha Quitação") &&
+              (Number(c?.saldoAtual) === 2450 || Number(c?.saldoAtual) === 0)
+            )
+        );
+      }
+
       const systemInstruction = `Você é a Lala, a governanta pessoal, parceira de decisões e assistente de vida inteligente do aplicativo "Casa da Lala".
 Você conversa em formato de BATE-PAPO humano, acolhedor, perspicaz, proativo e altamente contextualizado.
 
 Contexto completo e Memória Viva da usuária (inclui contas, cartões, rotina, histórico de ações, regrasAprendidasLala e itensMemoriaViva):
-${JSON.stringify(contextoApp || {})}
+${JSON.stringify(contextoSanitizado)}
 
 Histórico recente da conversa:
 ${historicoFormatado}
@@ -323,10 +343,11 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
 3. LEITURA DE PRINTS BANCÁRIOS, SALDOS, FATURAS E ARQUIVOS (CRÍTICO):
    - NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de bancos, contas, saldos, Pix, faturas, horários, dietas ou treinos!
    - Só gere "GUARDAR_SEGUNDO_CEREBRO" se ela pedir EXPLICITAMENTE para arquivar no Segundo Cérebro.
-   - Se ela enviar PRINT(S) DE CONTA BANCÁRIA / SALDO / EXTRATO / CARTÃO (ex: Nubank, PicPay, Inter, Bradesco, Santander, C6, Mercado Pago, Itaú, Caixa, BB, XP, BTG, etc.) ou pedir para atualizar as finanças/saldos:
-     a) Analise CADA IMAGEM em anexo com máxima atenção e extraia o nome exato do banco/instituição (ex: "PicPay", "Nubank", "Reserva / Caixinha Nubank", etc.) e o valor exato do saldo disponível ("saldoAtual") e/ou fatura de cartão ("faturaAtual", "limiteTotal").
-     b) PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE os bancos/contas que aparecem nos prints enviados agora ou que foram citados na mensagem da usuária! NUNCA inclua contas do contextoApp (como "Itaú" ou "Reserva") se elas NÃO estiverem nos prints enviados pela usuária!
-     c) Quando a usuária enviar os prints das contas dela dizendo "esses são os prints das minhas contas", "atualize a parte de finanças com isso" ou similar, defina "substituirExistentes": true na ação "ATUALIZAR_CONTAS_FINANCAS", para que o aplicativo substitua quaisquer contas antigas/exemplo (como Itaú) e mantenha/crie EXATAMENTE as contas reais dos prints (como Nubank e PicPay)!
+   - Se ela enviar PRINT(S) DE CONTA BANCÁRIA / SALDO / EXTRATO / CARTÃO (como PicPay, Nubank, Inter, Bradesco, Santander, C6, Mercado Pago, Caixa, BB, XP, BTG, etc.) ou pedir para atualizar as finanças/saldos:
+     a) Analise CADA IMAGEM em anexo individualmente e extraia o nome exato de CADA banco/instituição visível nos prints e o valor numérico exato do saldo disponível ("saldoAtual") e/ou fatura de cartão ("faturaAtual", "limiteTotal").
+     b) CONSOLIDAÇÃO OBRIGATÓRIA: Se houver 2, 3 ou mais prints de bancos diferentes (por exemplo, um print do Nubank e outro do PicPay), coloque TODOS os bancos identificados dentro do MESMO array "contasAjuste" na ação "ATUALIZAR_CONTAS_FINANCAS". Não deixe nenhum banco dos prints de fora!
+     c) PROIBIÇÃO DE CONTAS FANTASMAS E VALORES INVENTADOS: Em "contasAjuste", inclua SOMENTE os bancos/contas que aparecem visualmente nos prints enviados ou que foram citados pela usuária! NUNCA invente bancos (como "Itaú") nem invente valores que não estejam escritos nas imagens ou no texto!
+     d) Defina "substituirExistentes": true na ação "ATUALIZAR_CONTAS_FINANCAS" sempre que a usuária enviar prints das contas dela para calibrar/atualizar as finanças, garantindo que contas antigas de exemplo sejam removidas e as novas (como PicPay, Nubank, etc.) sejam criadas/atualizadas.
    - Se ela pedir "atualize meu saldo" por texto sem anexar prints e sem informar valor numérico, gere a ação "ATUALIZAR_CONTAS_FINANCAS" para edição rápida no card.
 4. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
    - Se a usuária pedir para automatizar um tipo de ação (ex: "automatize atualizações de saldo", "pode fazer gastos direto"), preencha "automatizarTipos". Se pedir para voltar a confirmar, preencha "pedirConfirmacaoTipos".
@@ -355,15 +376,15 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
   "acoesPropostas": [
     {
       "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
-      "titulo": "Título claro da ação (ex: Atualizar saldo Nubank para R$ 1.450,00)",
+      "titulo": "Título claro da ação descrevendo os bancos/itens reais lidos",
       "detalhe": "Explicação curta do impacto no app",
       "substituirExistentes": false,
       "texto": "string opcional (para CRIAR_TAREFA, REGISTRAR_GASTO, REGISTRAR_RECEITA)",
       "valor": 0,
       "categoriaGasto": "Mercado" | "Pets" | "Transporte" | "Estudos & UERJ" | "Lazer & Outros" | "Moradia & Fixos" | "Dívida",
       "srpe": 0,
-      "contasAjuste": [{ "nome": "Nome do Banco/Conta", "saldoAtual": 1234.56 }],
-      "cartoesAjuste": [{ "nome": "Nome do Cartão", "faturaAtual": 500.00, "limiteTotal": 3000.00, "vencimentoDia": 10 }],
+      "contasAjuste": [{ "nome": "Nome exato do Banco lido", "saldoAtual": 0 }],
+      "cartoesAjuste": [{ "nome": "Nome exato do Cartão lido", "faturaAtual": 0, "limiteTotal": 0, "vencimentoDia": 10 }],
       "compromissos": [{ "titulo": "Nome do evento", "hora": "14:00", "duracaoMin": 60, "diaMes": 30, "mes": 9, "ano": 2026, "local": "", "categoria": "pessoal", "sincronizarGoogle": true }],
       "refeicoes": [{ "horario": "08:00", "nome": "Café da Manhã", "descricao": "Itens", "proteinaG": 30, "kcal": 400 }],
       "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],
@@ -408,15 +429,15 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
         mensagem ||
         (temAudio
           ? "Ouça com atenção esta mensagem de voz da usuária, transcreva o que ela disse em 'transcricaoAudioUsuario', responda em 'respostaLala' e gere todas as ações correspondentes."
-          : "Analise detalhadamente a(s) imagem(ns) / arquivo(s) em anexo, extraia todos os valores, saldos, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
+          : "Analise detalhadamente CADA UMA das imagens/arquivos em anexo, extraia todos os bancos (ex: Nubank, PicPay, Inter, etc.), valores exatos de saldos, faturas, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
 
       const anexosNaoAudio = listaAnexos.filter(
         (a) => !a.mimeType?.startsWith("audio/")
       );
       if (anexosNaoAudio.length > 0) {
-        promptFinal += `\n\n[${anexosNaoAudio.length} arquivo(s)/imagem(ns) anexado(s): ${anexosNaoAudio
-          .map((a) => `"${a.nome}" (${a.mimeType})`)
-          .join(", ")}]`;
+        promptFinal += `\n\n[ATENÇÃO: A usuária anexou ${anexosNaoAudio.length} imagem(ns)/arquivo(s): ${anexosNaoAudio
+          .map((a, idx) => `#${idx + 1} "${a.nome}" (${a.mimeType})`)
+          .join(", ")}. Leia os dados visuais de TODAS as ${anexosNaoAudio.length} imagens sem omitir nenhuma conta ou banco!]`;
         for (const a of anexosNaoAudio) {
           if (a.textoExtraido) {
             promptFinal += `\nConteúdo de "${a.nome}":\n${a.textoExtraido.slice(0, 10000)}`;
@@ -436,6 +457,9 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
             config: {
               systemInstruction,
               responseMimeType: "application/json",
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.LOW,
+              },
             },
           });
           if (response?.text) {

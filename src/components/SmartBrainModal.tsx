@@ -14,12 +14,15 @@ import {
   MessageCircle,
   Volume2,
   Square,
+  Trash2,
 } from "lucide-react";
 import {
   AcaoGovernanta,
   AnexoLala,
   ArquivoRepositorio,
+  CartaoCredito,
   CheckinProntidao,
+  ContaBancaria,
   Disciplina,
   IntencaoImportacaoArquivo,
   InteracaoGovernanta,
@@ -35,6 +38,7 @@ import {
 } from "../types/lala";
 import { parseGastoNatural } from "../data/initialData";
 import {
+  consolidarMemoriaAntesDeLimparChat,
   consultarLalaUnificada,
   falarTextoComVozDaLala,
   formatarTamanhoBytes,
@@ -68,7 +72,10 @@ interface SmartBrainModalProps {
   checkin: CheckinProntidao;
   disciplinas: Disciplina[];
   projetos: ProjetoTrabalho[];
+  contas?: ContaBancaria[];
+  cartoes?: CartaoCredito[];
   perfilCalibrado?: PerfilUsuarioCalibrado;
+  setPerfilCalibrado?: React.Dispatch<React.SetStateAction<PerfilUsuarioCalibrado>>;
   themeMode: ThemeMode;
   setThemeMode: (m: ThemeMode) => void;
   irParaLalaCompleta: () => void;
@@ -106,7 +113,10 @@ export function SmartBrainModal({
   checkin,
   disciplinas,
   projetos,
+  contas = [],
+  cartoes = [],
   perfilCalibrado,
+  setPerfilCalibrado,
   irParaLalaCompleta,
   executarAcaoDaLala,
   onDesfazerAcao,
@@ -339,6 +349,16 @@ export function SmartBrainModal({
       prioridade1: tarefaP1?.texto || "Nenhuma pendente",
       disciplinasUERJ: disciplinas.map((d) => d.nome),
       projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
+      contasBancarias: contas.map((c) => ({
+        nome: c.nome,
+        saldoAtual: c.saldoAtual,
+      })),
+      cartoesCredito: cartoes.map((cc) => ({
+        nome: cc.nome,
+        faturaAtual: cc.faturaAtual,
+        limiteTotal: cc.limiteTotal,
+        vencimentoDia: cc.vencimentoDia,
+      })),
       tomLala: perfilCalibrado?.tomLala,
       autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
       tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
@@ -362,10 +382,31 @@ export function SmartBrainModal({
                 : `estas ${listaParaEnviar.length} imagens/arquivos`
             } e atualize o aplicativo para mim.`
           : "");
+
+      let anexosParaAnalise = listaParaEnviar;
+      if (
+        listaParaEnviar.length === 0 &&
+        /\b(print|prints|foto|fotos|imagem|imagens|anexo|anexos|leu|ler|leia|faltou|esqueceu|errado|errou|novamente|de novo|conta|contas|saldo|saldos|banco|picpay|nubank|inter|ita[uú]|cart[aã]o|fatura)\b/i.test(
+          msgEfetiva
+        )
+      ) {
+        const interacaoComAnexo = interacoesLala
+          .slice(0, 2)
+          .find((it) => (it.anexos && it.anexos.length > 0) || it.anexo);
+        if (interacaoComAnexo) {
+          anexosParaAnalise =
+            interacaoComAnexo.anexos && interacaoComAnexo.anexos.length > 0
+              ? interacaoComAnexo.anexos
+              : interacaoComAnexo.anexo
+              ? [interacaoComAnexo.anexo]
+              : [];
+        }
+      }
+
       const resultado = await consultarLalaUnificada(
         msgEfetiva,
         ctx,
-        listaParaEnviar
+        anexosParaAnalise
       );
 
       // Respeita o modo de confirmação por padrão e as automações progressivas por tipo
@@ -375,6 +416,49 @@ export function SmartBrainModal({
         hour: "2-digit",
         minute: "2-digit",
       });
+
+      if (setPerfilCalibrado) {
+        if (
+          resultado.aprendizadosExtraidos &&
+          resultado.aprendizadosExtraidos.length > 0
+        ) {
+          setPerfilCalibrado((prev) => {
+            const atuais = [...(prev.itensMemoriaViva || [])];
+            for (const ap of resultado.aprendizadosExtraidos || []) {
+              const limpo = (ap.texto || "").trim();
+              if (
+                limpo &&
+                !atuais.some(
+                  (m) => m.texto.toLowerCase() === limpo.toLowerCase()
+                )
+              ) {
+                atuais.unshift({
+                  id: `mem-modal-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                  categoria: ap.categoria,
+                  texto: limpo,
+                  origem: "conversa",
+                  dataHora: agoraHora,
+                });
+              }
+            }
+            return {
+              ...prev,
+              itensMemoriaViva: atuais.slice(0, 80),
+            };
+          });
+        }
+        if (resultado.novaRegraAprendida) {
+          const regra = resultado.novaRegraAprendida.trim();
+          setPerfilCalibrado((prev) => {
+            const atuais = prev.regrasAprendidasLala || [];
+            if (atuais.includes(regra)) return prev;
+            return {
+              ...prev,
+              regrasAprendidasLala: [regra, ...atuais],
+            };
+          });
+        }
+      }
 
       const acoesMarcadas = (resultado.acoesPropostas || []).map((a) => {
         const deveAutoExecutar =
@@ -395,6 +479,8 @@ export function SmartBrainModal({
             ? "🎤 Mensagem de áudio enviada"
             : msgEfetiva),
         ...resultado,
+        anexo: listaParaEnviar[0] || undefined,
+        anexos: listaParaEnviar.length > 0 ? listaParaEnviar : undefined,
         acoesPropostas: acoesMarcadas,
       };
 
@@ -534,6 +620,52 @@ export function SmartBrainModal({
             </div>
           </div>
           <div className="flex items-center gap-1.5">
+            {(interacoesLala.length > 1 ||
+              (interacoesLala.length === 1 && interacoesLala[0]?.id !== 1)) && (
+              <button
+                onClick={() => {
+                  const consolidado = consolidarMemoriaAntesDeLimparChat(
+                    interacoesLala,
+                    perfilCalibrado
+                  );
+                  if (setPerfilCalibrado) {
+                    setPerfilCalibrado((prev) => ({
+                      ...prev,
+                      itensMemoriaViva:
+                        consolidado.itensMemoriaVivaAtualizados,
+                      regrasAprendidasLala:
+                        consolidado.regrasAprendidasAtualizadas,
+                    }));
+                  }
+                  const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  setInteracoesLala([
+                    {
+                      id: 1,
+                      dataHora: agoraHora,
+                      modo: "informacao",
+                      tituloCard: "Bate-Papo com a Lala",
+                      tags: ["Memória Preservada", "Governanta"],
+                      mensagemUsuario: "Oi Lala!",
+                      respostaLala:
+                        "Limpei o histórico visual do nosso bate-papo, mas fique tranquila: todas as suas informações importantes, preferências, regras e aprendizados continuam 100% guardados na minha Memória Viva!",
+                      guardadoNoCofre: true,
+                      acoesPropostas: [],
+                    },
+                  ]);
+                  showToast(
+                    "Chat limpo! As memórias e informações importantes da Lala foram preservadas."
+                  );
+                }}
+                style={{ background: t.cardSubtle, color: t.textSoft }}
+                className="p-2 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                title="Limpar conversa preservando todas as memórias da Lala"
+              >
+                <Trash2 size={13} />
+              </button>
+            )}
             <button
               onClick={() => {
                 onClose();
@@ -591,7 +723,14 @@ export function SmartBrainModal({
               style={{ backgroundColor: t.bg, borderColor: t.border }}
               className="p-3 rounded-2xl border space-y-3 max-h-[270px] overflow-y-auto"
             >
-              {ultimasMensagensChat.map((item) => (
+              {ultimasMensagensChat.map((item) => {
+                const anexosItem =
+                  item.anexos && item.anexos.length > 0
+                    ? item.anexos
+                    : item.anexo
+                    ? [item.anexo]
+                    : [];
+                return (
                 <div key={item.id} className="space-y-2">
                   {/* Balão Usuária */}
                   <div className="flex justify-end">
@@ -600,8 +739,32 @@ export function SmartBrainModal({
                         background: `linear-gradient(135deg, ${t.primary}, ${t.action})`,
                         color: "#fff",
                       }}
-                      className="max-w-[85%] rounded-2xl rounded-tr-xs px-3 py-2 text-xs leading-relaxed shadow-2xs"
+                      className="max-w-[85%] rounded-2xl rounded-tr-xs px-3 py-2 text-xs leading-relaxed shadow-2xs space-y-1.5"
                     >
+                      {anexosItem.length > 0 && (
+                        <div
+                          className={`grid gap-1.5 ${
+                            anexosItem.length > 1
+                              ? "grid-cols-2"
+                              : "grid-cols-1"
+                          }`}
+                        >
+                          {anexosItem.map((anx, idx) =>
+                            anx.mimeType.startsWith("image/") && anx.base64 ? (
+                              <img
+                                key={idx}
+                                src={
+                                  anx.base64.startsWith("data:")
+                                    ? anx.base64
+                                    : `data:${anx.mimeType};base64,${anx.base64}`
+                                }
+                                alt={anx.nome}
+                                className="max-h-32 w-full rounded-xl object-cover border border-white/20"
+                              />
+                            ) : null
+                          )}
+                        </div>
+                      )}
                       <p>{item.mensagemUsuario}</p>
                       <span className="block text-right text-[9px] font-mono opacity-80 mt-0.5">
                         {item.dataHora}
@@ -738,7 +901,8 @@ export function SmartBrainModal({
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               {processando && (
                 <div className="flex items-center gap-2 text-xs animate-pulse px-2 py-1">

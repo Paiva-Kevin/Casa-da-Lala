@@ -563,10 +563,16 @@ export default function App() {
         const remoteHasCustom = remotePayload
           ? hasRealUserCustomizations(remotePayload.records)
           : false;
+        const localDemoLimpo = localPayload.records?.demo_limpo === true;
+        const remoteDemoLimpo = remotePayload?.records?.demo_limpo === true;
+
+        // Protect cleaned local state (demo_limpo === true) from ever being overwritten by an uncleaned demo Drive backup!
+        const remoteIsStaleDemo = localDemoLimpo && remotePayload && !remoteDemoLimpo;
 
         // Automatic background synchronization without interrupting the user:
         // 1. If remote Drive backup is newer than local (or local only has untouched defaults while remote has real user data) -> pull & apply
         if (
+          !remoteIsStaleDemo &&
           remotePayload &&
           remotePayload.records &&
           ((remoteHasCustom && !localHasCustom) ||
@@ -584,20 +590,28 @@ export default function App() {
           }
         } else if (
           localHasCustom &&
-          (!remotePayload ||
+          (remoteIsStaleDemo ||
+            !remotePayload ||
             !remoteHasCustom ||
             localTime > remoteTime + 1500 ||
             !silentIfNoChanges)
         ) {
           // 2. Local data has real user customizations and was modified more recently than remote -> push to Drive
           if (
+            remoteIsStaleDemo ||
             !remotePayload ||
             !remoteHasCustom ||
             Math.abs(localTime - remoteTime) > 1500 ||
             !silentIfNoChanges
           ) {
+            const payloadToUpload = remoteIsStaleDemo
+              ? {
+                  ...localPayload,
+                  updatedAt: Math.max(localTime, remoteTime + 2000, Date.now()),
+                }
+              : localPayload;
             const uploaded = await uploadDriveBackupContent(
-              localPayload,
+              payloadToUpload,
               remoteFile.id,
               useAppDataFolder
             );
@@ -761,7 +775,7 @@ export default function App() {
         const names = await caches.keys();
         for (const name of names) {
           if (
-            name !== "casa-da-lala-offline-v16" &&
+            name !== "casa-da-lala-offline-v17" &&
             name !== "casa-da-lala-fonts-v4"
           ) {
             await caches.delete(name);
@@ -2059,19 +2073,21 @@ export default function App() {
               (aj) => detectarBancoIdPorNome(aj.nome) === "itau"
             );
 
-            // Remove qualquer conta de exemplo legada do Itaú antes de mesclar
+            // Remove qualquer conta de exemplo legada do Itaú ou Reserva padrão antes de mesclar
             const copia = prev.filter((c) => {
+              const idStr = String(c.id || "");
               if (
                 !citouItauExplicito &&
-                (c.nome.includes("Itaú (Bolsa UERJ & CDT)") ||
-                  (detectarBancoIdPorNome(c.nome) === "itau" &&
-                    c.saldoAtual === 0))
+                (idStr === "conta-2" ||
+                  c.nome.includes("Itaú (Bolsa UERJ & CDT)") ||
+                  detectarBancoIdPorNome(c.nome, c.bancoId) === "itau")
               ) {
                 return false;
               }
               if (
-                c.nome === "Reserva / Caixinha Quitação" &&
-                c.saldoAtual === 0
+                (idStr === "conta-3" ||
+                  c.nome === "Reserva / Caixinha Quitação") &&
+                (c.saldoAtual === 0 || c.saldoAtual === 2450)
               ) {
                 return false;
               }
@@ -3725,7 +3741,10 @@ export default function App() {
         checkin={checkin}
         disciplinas={disciplinas}
         projetos={projetos}
+        contas={contas}
+        cartoes={cartoes}
         perfilCalibrado={perfilCalibrado}
+        setPerfilCalibrado={setPerfilCalibrado}
         themeMode={themeMode}
         setThemeMode={setThemeMode}
         irParaLalaCompleta={() => setActiveTab("governanta_lala")}

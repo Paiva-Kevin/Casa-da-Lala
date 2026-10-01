@@ -315,15 +315,19 @@ export function hasRealUserCustomizations(
     return true;
   }
   const contas = records.contas as
-    | { nome?: string; saldoAtual?: number }[]
+    | { id?: string; nome?: string; saldoAtual?: number }[]
     | undefined;
   if (Array.isArray(contas)) {
+    const demoIds = new Set(['conta-1', 'conta-2', 'conta-3']);
+    const demoBalances = new Set([620, 210, 0, 2450, 385.5, 240, 420]);
     const isDefaultDemoContas =
-      contas.length === 3 &&
-      Number(contas[0]?.saldoAtual) === 385.5 &&
-      Number(contas[1]?.saldoAtual) === 240 &&
-      Number(contas[2]?.saldoAtual) === 420;
-    if (!isDefaultDemoContas && contas.length > 0) {
+      contas.length === 0 ||
+      contas.every(
+        (c) =>
+          demoIds.has(String(c?.id || '')) &&
+          demoBalances.has(Number(c?.saldoAtual ?? 0))
+      );
+    if (!isDefaultDemoContas) {
       return true;
     }
   }
@@ -349,7 +353,7 @@ export async function exportFullBackupPayload(): Promise<AppBackupPayload> {
   }
 
   const hasCustom = hasRealUserCustomizations(records);
-  const updatedAt = hasCustom ? meta.updatedAt || Date.now() : 0;
+  const updatedAt = hasCustom ? meta.updatedAt || 0 : 0;
 
   return {
     appName: 'Casa da Lala',
@@ -367,8 +371,68 @@ export async function importFullBackupPayload(
 ): Promise<void> {
   if (!payload || !payload.records) return;
 
+  // Preserve Lala's learned memory & rules if local has items that remote doesn't have yet
+  const localPerfil = await idbGetRecord<{
+    itensMemoriaViva?: { id: string; texto: string; categoria: string; dataHora?: string }[];
+    regrasAprendidasLala?: string[];
+  }>('perfil_calibrado');
+
   for (const [key, value] of Object.entries(payload.records)) {
-    await idbSetRecord(key, value, false);
+    if (
+      key === 'perfil_calibrado' &&
+      value &&
+      typeof value === 'object' &&
+      localPerfil
+    ) {
+      const incomingPerfil = value as Record<string, unknown>;
+      const remoteMem = Array.isArray(incomingPerfil.itensMemoriaViva)
+        ? (incomingPerfil.itensMemoriaViva as { id: string; texto: string; categoria: string; dataHora?: string }[])
+        : [];
+      const localMem = Array.isArray(localPerfil.itensMemoriaViva)
+        ? localPerfil.itensMemoriaViva
+        : [];
+      const mergedMem = [...remoteMem];
+      for (const item of localMem) {
+        if (
+          item?.texto &&
+          !mergedMem.some(
+            (m) => m.texto?.toLowerCase().trim() === item.texto.toLowerCase().trim()
+          )
+        ) {
+          mergedMem.push(item);
+        }
+      }
+
+      const remoteRules = Array.isArray(incomingPerfil.regrasAprendidasLala)
+        ? (incomingPerfil.regrasAprendidasLala as string[])
+        : [];
+      const localRules = Array.isArray(localPerfil.regrasAprendidasLala)
+        ? localPerfil.regrasAprendidasLala
+        : [];
+      const mergedRules = [...remoteRules];
+      for (const r of localRules) {
+        if (
+          r &&
+          !mergedRules.some(
+            (mr) => mr.toLowerCase().trim() === r.toLowerCase().trim()
+          )
+        ) {
+          mergedRules.push(r);
+        }
+      }
+
+      await idbSetRecord(
+        key,
+        {
+          ...incomingPerfil,
+          itensMemoriaViva: mergedMem,
+          regrasAprendidasLala: mergedRules,
+        },
+        false
+      );
+    } else {
+      await idbSetRecord(key, value, false);
+    }
   }
 
   const now = Date.now();
@@ -399,21 +463,30 @@ export async function syncSnapshotWithServer(
   try {
     const localPayload = await exportFullBackupPayload();
     const localHasCustom = hasRealUserCustomizations(localPayload.records);
-    const localTime = localHasCustom ? localPayload.updatedAt || Date.now() : 0;
+    const localDemoLimpo = localPayload.records.demo_limpo === true;
+    const localTime = localHasCustom
+      ? localPayload.updatedAt || (forcePush ? Date.now() : 0)
+      : 0;
 
     if (forcePush && localHasCustom) {
+      const pushTime = localTime || Date.now();
       const pushPayload = {
         ...localPayload,
-        updatedAt: localTime,
+        updatedAt: pushTime,
       };
       const res = await fetch('/api/sync/snapshot?force=1', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(pushPayload),
       });
-      if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (res.ok && ct.includes('application/json')) {
         const data = await res.json();
-        if (data?.updated === false && data?.snapshot?.records) {
+        if (
+          data?.updated === false &&
+          data?.snapshot?.records &&
+          !(localDemoLimpo && data.snapshot.records.demo_limpo !== true)
+        ) {
           await importFullBackupPayload(data.snapshot);
           if (typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('lala-backup-restored'));
@@ -429,14 +502,32 @@ export async function syncSnapshotWithServer(
       method: 'GET',
       cache: 'no-store',
     });
-    if (!getRes.ok) return { action: 'noop' };
+    const getCt = getRes.headers.get('content-type') || '';
+    if (!getRes.ok || !getCt.includes('application/json')) {
+      return { action: 'noop' };
+    }
 
     const data = await getRes.json();
     const remoteSnap = data?.snapshot as AppBackupPayload | null;
     const remoteHasCustom = remoteSnap
       ? hasRealUserCustomizations(remoteSnap.records)
       : false;
+    const remoteDemoLimpo = remoteSnap?.records?.demo_limpo === true;
     const remoteTime = remoteHasCustom ? Number(remoteSnap?.updatedAt) || 0 : 0;
+
+    // Protect cleaned local state (demo_limpo === true) from ever being overwritten by an uncleaned demo snapshot!
+    if (localDemoLimpo && remoteSnap && !remoteDemoLimpo) {
+      const pushTime = localTime || Date.now();
+      await fetch('/api/sync/snapshot?force=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...localPayload,
+          updatedAt: pushTime,
+        }),
+      });
+      return { action: 'pushed', buildVersion: data?.buildVersion };
+    }
 
     // 1. If server has a newer customized snapshot (or local is just untouched default data while server has real user data), pull it!
     if (
@@ -455,6 +546,7 @@ export async function syncSnapshotWithServer(
     // 2. Only push to server if local ACTUALLY has real user customizations and is newer than server!
     if (
       localHasCustom &&
+      localTime > 0 &&
       (!remoteSnap || !remoteHasCustom || localTime > remoteTime + 1000)
     ) {
       const pushPayload = {
