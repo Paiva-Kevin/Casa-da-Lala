@@ -134,6 +134,10 @@ import {
   PendingConfirmationState,
 } from "./components/CloudSyncModal";
 import { criarEventoGoogleCalendar } from "./services/googleCalendarSync";
+import {
+  detectarBancoIdPorNome,
+  getIdentidadeBanco,
+} from "./utils/bankIdentities";
 
 const STORAGE_PREFIX = "casa_lala_v5_";
 
@@ -566,7 +570,7 @@ export default function App() {
           remotePayload &&
           remotePayload.records &&
           ((remoteHasCustom && !localHasCustom) ||
-            remoteTime > localTime + 1500)
+            (remoteHasCustom && remoteTime > localTime + 1500))
         ) {
           await importFullBackupPayload(remotePayload);
           const refreshed = await getSyncMetadata();
@@ -579,13 +583,16 @@ export default function App() {
             showToast("Dados atualizados a partir do Google Drive!");
           }
         } else if (
-          !remotePayload ||
-          localTime > remoteTime + 1500 ||
-          !silentIfNoChanges
+          localHasCustom &&
+          (!remotePayload ||
+            !remoteHasCustom ||
+            localTime > remoteTime + 1500 ||
+            !silentIfNoChanges)
         ) {
-          // 2. Local data was modified more recently than remote (or user clicked manual sync with up-to-date local data) -> push to Drive
+          // 2. Local data has real user customizations and was modified more recently than remote -> push to Drive
           if (
             !remotePayload ||
+            !remoteHasCustom ||
             Math.abs(localTime - remoteTime) > 1500 ||
             !silentIfNoChanges
           ) {
@@ -754,7 +761,7 @@ export default function App() {
         const names = await caches.keys();
         for (const name of names) {
           if (
-            name !== "casa-da-lala-offline-v14" &&
+            name !== "casa-da-lala-offline-v16" &&
             name !== "casa-da-lala-fonts-v4"
           ) {
             await caches.delete(name);
@@ -981,8 +988,8 @@ export default function App() {
       setListaCompras([]);
       setLancamentos([]);
       setRepositorio([]);
-      setContas((prev) => prev.map((c) => ({ ...c, saldoAtual: 0 })));
-      setCartoes((prev) => prev.map((ct) => ({ ...ct, faturaAtual: 0 })));
+      setContas([]);
+      setCartoes([]);
       setPetsPerfil((prev) =>
         prev.map((p) => ({
           ...p,
@@ -1107,6 +1114,26 @@ export default function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // Remove automaticamente qualquer conta de exemplo legada ("Itaú (Bolsa UERJ & CDT)" ou "Reserva / Caixinha Quitação" zerada)
+  useEffect(() => {
+    setContas((prev) => {
+      const filtradas = prev.filter((c) => {
+        if (c.nome === "Itaú (Bolsa UERJ & CDT)") return false;
+        if (
+          demoLimpo &&
+          c.saldoAtual === 0 &&
+          (c.nome === "Reserva / Caixinha Quitação" ||
+            c.nome === "Nubank (Conta / Pix)") &&
+          prev.length === 3
+        ) {
+          return false;
+        }
+        return true;
+      });
+      return filtradas.length !== prev.length ? filtradas : prev;
+    });
+  }, [demoLimpo, setContas]);
 
   const prioridades = useMemo(() => {
     const candidatasHoje = tarefas.filter(
@@ -2003,43 +2030,94 @@ export default function App() {
 
         if (listaAjusteContas.length > 0) {
           setContas((prev) => {
-            if (acao.payload?.substituirExistentes) {
-              return listaAjusteContas.map((aj, idx) => ({
-                id: Date.now() + idx,
-                nome: aj.nome,
-                tipo: "Corrente / Pix" as const,
+            const criarContaFormatada = (
+              aj: { nome: string; saldoAtual: number },
+              idxOffset: number
+            ): ContaBancaria => {
+              const bancoId = detectarBancoIdPorNome(aj.nome);
+              const ident = getIdentidadeBanco(aj.nome, bancoId);
+              const ehReserva =
+                /\b(reserva|caixinha|poupan[çc]a)\b/i.test(aj.nome) &&
+                !aj.nome.toLowerCase().includes("conta");
+              return {
+                id: Date.now() + idxOffset + Math.floor(Math.random() * 1000),
+                nome: aj.nome || ident.nomeBanco,
+                bancoId,
+                tipo: ehReserva ? "Reserva" : "Corrente / Pix",
                 saldoAtual: Number(aj.saldoAtual || 0),
-                cor: idx === 0 ? ("primary" as const) : ("finance" as const),
-              }));
+                cor: ident.corPrimaria,
+              };
+            };
+
+            if (acao.payload?.substituirExistentes) {
+              return listaAjusteContas.map((aj, idx) =>
+                criarContaFormatada(aj, idx)
+              );
             }
-            const copia = [...prev];
-            for (const aj of listaAjusteContas) {
+
+            const citouItauExplicito = listaAjusteContas.some(
+              (aj) => detectarBancoIdPorNome(aj.nome) === "itau"
+            );
+
+            // Remove qualquer conta de exemplo legada do Itaú antes de mesclar
+            const copia = prev.filter((c) => {
+              if (
+                !citouItauExplicito &&
+                (c.nome.includes("Itaú (Bolsa UERJ & CDT)") ||
+                  (detectarBancoIdPorNome(c.nome) === "itau" &&
+                    c.saldoAtual === 0))
+              ) {
+                return false;
+              }
+              if (
+                c.nome === "Reserva / Caixinha Quitação" &&
+                c.saldoAtual === 0
+              ) {
+                return false;
+              }
+              return true;
+            });
+
+            for (let i = 0; i < listaAjusteContas.length; i++) {
+              const aj = listaAjusteContas[i];
+              const bancoAlvo = detectarBancoIdPorNome(aj.nome);
               const tokensAlvo = extrairTokensBanco(aj.nome);
               let idx = -1;
 
-              if (tokensAlvo.length > 0) {
+              if (bancoAlvo !== "outro") {
+                const ehReservaAlvo = /\b(reserva|caixinha)\b/i.test(aj.nome);
+                idx = copia.findIndex((c) => {
+                  const bancoExist = detectarBancoIdPorNome(c.nome, c.bancoId);
+                  const ehReservaExist =
+                    c.tipo === "Reserva" ||
+                    /\b(reserva|caixinha)\b/i.test(c.nome);
+                  return (
+                    bancoExist === bancoAlvo &&
+                    ehReservaExist === ehReservaAlvo
+                  );
+                });
+              }
+
+              if (idx < 0 && tokensAlvo.length > 0 && bancoAlvo === "outro") {
                 idx = copia.findIndex((c) => {
                   const normExist = normalizarTextoBanco(c.nome);
-                  return tokensAlvo.some((tk) => normExist.includes(tk));
+                  return tokensAlvo.some(
+                    (tk) => tk.length >= 3 && normExist.includes(tk)
+                  );
                 });
-              } else if (copia.length > 0) {
-                // Se o nome for genérico ("Conta Principal", "Meu Saldo"), atualiza a conta principal (índice 0)
-                idx = 0;
               }
 
               if (idx >= 0) {
+                const ident = getIdentidadeBanco(aj.nome, bancoAlvo);
                 copia[idx] = {
                   ...copia[idx],
+                  nome: aj.nome || copia[idx].nome,
+                  bancoId: bancoAlvo !== "outro" ? bancoAlvo : copia[idx].bancoId,
+                  cor: ident.corPrimaria || copia[idx].cor,
                   saldoAtual: Number(aj.saldoAtual || 0),
                 };
               } else {
-                copia.push({
-                  id: Date.now() + Math.floor(Math.random() * 1000),
-                  nome: aj.nome || "Nova Conta",
-                  tipo: "Corrente / Pix",
-                  saldoAtual: Number(aj.saldoAtual || 0),
-                  cor: "primary",
-                });
+                copia.push(criarContaFormatada(aj, i));
               }
             }
             return copia;

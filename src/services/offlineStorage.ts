@@ -10,7 +10,7 @@ const STORAGE_PREFIX = 'casa_lala_v5_';
 export type SyncStatus = 'synced' | 'pending' | 'syncing' | 'error';
 
 export interface SyncMetadata {
-  id: 'meta';
+  id: 'meta' | 'meta_v3';
   updatedAt: number; // Epoch ms of last local modification
   updatedAtISO: string;
   lastSyncedAt: number | null;
@@ -110,10 +110,10 @@ export async function idbSetRecord<T>(
 
       if (markPendingSync) {
         const metaStore = tx.objectStore(STORE_META);
-        const getReq = metaStore.get('meta');
+        const getReq = metaStore.get('meta_v3');
         getReq.onsuccess = () => {
           const existing: SyncMetadata = getReq.result || {
-            id: 'meta',
+            id: 'meta_v3',
             updatedAt: now,
             updatedAtISO: new Date(now).toISOString(),
             lastSyncedAt: null,
@@ -122,6 +122,7 @@ export async function idbSetRecord<T>(
           };
           const updatedMeta: SyncMetadata = {
             ...existing,
+            id: 'meta_v3',
             updatedAt: now,
             updatedAtISO: new Date(now).toISOString(),
             syncStatus: 'pending',
@@ -130,7 +131,7 @@ export async function idbSetRecord<T>(
           metaStore.put(updatedMeta);
           try {
             localStorage.setItem(
-              STORAGE_PREFIX + '__sync_meta',
+              STORAGE_PREFIX + '__sync_meta_v3',
               JSON.stringify(updatedMeta)
             );
           } catch {
@@ -169,13 +170,13 @@ export async function getSyncMetadata(): Promise<SyncMetadata> {
 
   const fallbackMeta = (): SyncMetadata => {
     try {
-      const raw = localStorage.getItem(STORAGE_PREFIX + '__sync_meta');
+      const raw = localStorage.getItem(STORAGE_PREFIX + '__sync_meta_v3');
       if (raw) return sanitizeMeta(JSON.parse(raw) as SyncMetadata);
     } catch {
       // ignore
     }
     return {
-      id: 'meta',
+      id: 'meta_v3',
       updatedAt: 0,
       updatedAtISO: '',
       lastSyncedAt: null,
@@ -189,7 +190,7 @@ export async function getSyncMetadata(): Promise<SyncMetadata> {
     return await new Promise<SyncMetadata>((resolve) => {
       const tx = db.transaction(STORE_META, 'readonly');
       const store = tx.objectStore(STORE_META);
-      const req = store.get('meta');
+      const req = store.get('meta_v3');
       req.onsuccess = () => {
         if (req.result) {
           resolve(sanitizeMeta(req.result as SyncMetadata));
@@ -211,11 +212,14 @@ export async function updateSyncMetadata(
   const next: SyncMetadata = {
     ...current,
     ...partial,
-    id: 'meta',
+    id: 'meta_v3',
   };
 
   try {
-    localStorage.setItem(STORAGE_PREFIX + '__sync_meta', JSON.stringify(next));
+    localStorage.setItem(
+      STORAGE_PREFIX + '__sync_meta_v3',
+      JSON.stringify(next)
+    );
   } catch {
     // ignore
   }
@@ -310,6 +314,19 @@ export function hasRealUserCustomizations(
   ) {
     return true;
   }
+  const contas = records.contas as
+    | { nome?: string; saldoAtual?: number }[]
+    | undefined;
+  if (Array.isArray(contas)) {
+    const isDefaultDemoContas =
+      contas.length === 3 &&
+      Number(contas[0]?.saldoAtual) === 385.5 &&
+      Number(contas[1]?.saldoAtual) === 240 &&
+      Number(contas[2]?.saldoAtual) === 420;
+    if (!isDefaultDemoContas && contas.length > 0) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -332,7 +349,7 @@ export async function exportFullBackupPayload(): Promise<AppBackupPayload> {
   }
 
   const hasCustom = hasRealUserCustomizations(records);
-  const updatedAt = hasCustom ? meta.updatedAt || Date.now() : meta.updatedAt || 0;
+  const updatedAt = hasCustom ? meta.updatedAt || Date.now() : 0;
 
   return {
     appName: 'Casa da Lala',
@@ -382,12 +399,12 @@ export async function syncSnapshotWithServer(
   try {
     const localPayload = await exportFullBackupPayload();
     const localHasCustom = hasRealUserCustomizations(localPayload.records);
-    const localTime = localPayload.updatedAt || 0;
+    const localTime = localHasCustom ? localPayload.updatedAt || Date.now() : 0;
 
-    if (forcePush && (localHasCustom || localTime > 0)) {
+    if (forcePush && localHasCustom) {
       const pushPayload = {
         ...localPayload,
-        updatedAt: localTime || Date.now(),
+        updatedAt: localTime,
       };
       const res = await fetch('/api/sync/snapshot?force=1', {
         method: 'POST',
@@ -396,6 +413,13 @@ export async function syncSnapshotWithServer(
       });
       if (res.ok) {
         const data = await res.json();
+        if (data?.updated === false && data?.snapshot?.records) {
+          await importFullBackupPayload(data.snapshot);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('lala-backup-restored'));
+          }
+          return { action: 'pulled', buildVersion: data.buildVersion };
+        }
         return { action: 'pushed', buildVersion: data.buildVersion };
       }
       return { action: 'noop' };
@@ -409,17 +433,17 @@ export async function syncSnapshotWithServer(
 
     const data = await getRes.json();
     const remoteSnap = data?.snapshot as AppBackupPayload | null;
-    const remoteTime = Number(remoteSnap?.updatedAt) || 0;
     const remoteHasCustom = remoteSnap
       ? hasRealUserCustomizations(remoteSnap.records)
       : false;
+    const remoteTime = remoteHasCustom ? Number(remoteSnap?.updatedAt) || 0 : 0;
 
-    // 1. If server has a newer snapshot (or local is just untouched default data while server has real user data), pull it!
+    // 1. If server has a newer customized snapshot (or local is just untouched default data while server has real user data), pull it!
     if (
       remoteSnap &&
       remoteSnap.records &&
-      ((remoteHasCustom && !localHasCustom) ||
-        (remoteTime > localTime + 1000 && (remoteHasCustom || localTime === 0)))
+      remoteHasCustom &&
+      (!localHasCustom || remoteTime > localTime + 1000)
     ) {
       await importFullBackupPayload(remoteSnap);
       if (typeof window !== 'undefined') {
@@ -428,16 +452,14 @@ export async function syncSnapshotWithServer(
       return { action: 'pulled', buildVersion: data?.buildVersion };
     }
 
-    // 2. If local has real user activity and is newer than server (or server has no snapshot yet), push to server!
+    // 2. Only push to server if local ACTUALLY has real user customizations and is newer than server!
     if (
-      (localHasCustom || localTime > 0) &&
-      (!remoteSnap ||
-        (!remoteHasCustom && localHasCustom) ||
-        localTime > remoteTime + 1000)
+      localHasCustom &&
+      (!remoteSnap || !remoteHasCustom || localTime > remoteTime + 1000)
     ) {
       const pushPayload = {
         ...localPayload,
-        updatedAt: localTime || Date.now(),
+        updatedAt: localTime,
       };
       await fetch('/api/sync/snapshot', {
         method: 'POST',

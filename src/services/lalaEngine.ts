@@ -1,6 +1,7 @@
 // Unified Local & Cloud Multimodal Intelligence Engine for Lala
 // Automatically understands commands, uploaded files/images (diet, UERJ schedule, workouts, receipts, or vault storage), expenses, tasks, pet care, vents, daydreams, and questions.
 
+import { GoogleGenAI } from "@google/genai";
 import {
   AcaoGovernanta,
   AnexoLala,
@@ -12,6 +13,46 @@ import {
   ModoInteracaoLala,
 } from "../types/lala";
 import { parseGastoNatural } from "../data/initialData";
+
+declare const __LALA_GEMINI_KEY__: string;
+
+function obterChaveGeminiCliente(): string {
+  try {
+    if (typeof __LALA_GEMINI_KEY__ !== "undefined" && __LALA_GEMINI_KEY__) {
+      return __LALA_GEMINI_KEY__;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const metaEnv = (import.meta as any)?.env;
+    if (metaEnv?.VITE_GEMINI_API_KEY) return metaEnv.VITE_GEMINI_API_KEY;
+    if (metaEnv?.GEMINI_API_KEY) return metaEnv.GEMINI_API_KEY;
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extrairJsonSeguroCliente(raw: string): any {
+  const limpo = (raw || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  try {
+    return JSON.parse(limpo);
+  } catch {
+    const ini = limpo.indexOf("{");
+    const fim = limpo.lastIndexOf("}");
+    if (ini >= 0 && fim > ini) {
+      return JSON.parse(limpo.slice(ini, fim + 1));
+    }
+    throw new Error("JSON inválido");
+  }
+}
 
 export interface LalaContextSnapshot {
   nomeUsuario?: string;
@@ -46,23 +87,25 @@ export interface LalaContextSnapshot {
   }[];
 }
 
-async function comprimirImagemParaDataUrl(file: File): Promise<{
+function isArquivoDeImagem(file: File): boolean {
+  if (file.type && file.type.startsWith("image/")) return true;
+  return /\.(png|jpe?g|webp|gif|heic|heif|bmp)$/i.test(file.name || "");
+}
+
+async function comprimirDataUrlDeImagem(
+  rawDataUrl: string,
+  fallbackMime = "image/jpeg",
+  fallbackSize = 0
+): Promise<{
   base64: string;
   mimeType: string;
   tamanhoBytes: number;
 }> {
-  const rawDataUrl = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
-  if (typeof document === "undefined" || !file.type.startsWith("image/")) {
+  if (typeof document === "undefined" || !rawDataUrl) {
     return {
       base64: rawDataUrl,
-      mimeType: file.type || "application/octet-stream",
-      tamanhoBytes: file.size,
+      mimeType: fallbackMime,
+      tamanhoBytes: fallbackSize,
     };
   }
 
@@ -70,7 +113,7 @@ async function comprimirImagemParaDataUrl(file: File): Promise<{
     const img = new Image();
     img.onload = () => {
       try {
-        const MAX_DIM = 1440;
+        const MAX_DIM = 1200;
         let { width, height } = img;
         if (width > MAX_DIM || height > MAX_DIM) {
           if (width >= height) {
@@ -88,15 +131,17 @@ async function comprimirImagemParaDataUrl(file: File): Promise<{
         if (!ctx) {
           resolve({
             base64: rawDataUrl,
-            mimeType: file.type,
-            tamanhoBytes: file.size,
+            mimeType: fallbackMime || "image/jpeg",
+            tamanhoBytes: fallbackSize,
           });
           return;
         }
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        const compressed = canvas.toDataURL("image/jpeg", 0.85);
+        const compressed = canvas.toDataURL("image/jpeg", 0.82);
+        canvas.width = 0;
+        canvas.height = 0;
         const approxBytes = Math.round((compressed.length * 3) / 4);
         resolve({
           base64: compressed,
@@ -106,19 +151,46 @@ async function comprimirImagemParaDataUrl(file: File): Promise<{
       } catch {
         resolve({
           base64: rawDataUrl,
-          mimeType: file.type,
-          tamanhoBytes: file.size,
+          mimeType: fallbackMime || "image/jpeg",
+          tamanhoBytes: fallbackSize,
         });
       }
     };
     img.onerror = () =>
       resolve({
         base64: rawDataUrl,
-        mimeType: file.type,
-        tamanhoBytes: file.size,
+        mimeType: fallbackMime || "image/jpeg",
+        tamanhoBytes: fallbackSize,
       });
     img.src = rawDataUrl;
   });
+}
+
+async function comprimirImagemParaDataUrl(file: File): Promise<{
+  base64: string;
+  mimeType: string;
+  tamanhoBytes: number;
+}> {
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+
+  if (!isArquivoDeImagem(file)) {
+    return {
+      base64: rawDataUrl,
+      mimeType: file.type || "application/octet-stream",
+      tamanhoBytes: file.size,
+    };
+  }
+
+  return comprimirDataUrlDeImagem(
+    rawDataUrl,
+    file.type || "image/jpeg",
+    file.size
+  );
 }
 
 export async function lerArquivoParaAnexo(
@@ -126,7 +198,7 @@ export async function lerArquivoParaAnexo(
   intencao: AnexoLala["intencao"] = "auto",
   areaRepositorio: ArquivoRepositorio["area"] = "Pessoal"
 ): Promise<AnexoLala> {
-  const { base64, mimeType, tamanhoBytes } = file.type.startsWith("image/")
+  const { base64, mimeType, tamanhoBytes } = isArquivoDeImagem(file)
     ? await comprimirImagemParaDataUrl(file)
     : {
         base64: await new Promise<string>((resolve, reject) => {
@@ -913,7 +985,16 @@ export function processarMensagemLocalLala(
 
   const resolverNomeConta = (trecho: string): string => {
     const tLower = trecho.toLowerCase();
-    // 1. Tenta casar com uma conta que a usuária já tem no app
+    // 1. Primeiro verifica bancos específicos citados (PicPay, Nubank, Inter, etc.) para sempre criar/usar o banco exato!
+    for (const b of BANCOS_CONHECIDOS) {
+      if (b.chaves.some((ch) => tLower.includes(ch))) {
+        const contaExistenteMesmoBanco = (ctx.contasBancarias || []).find((c) =>
+          b.chaves.some((ch) => c.nome.toLowerCase().includes(ch))
+        );
+        return contaExistenteMesmoBanco ? contaExistenteMesmoBanco.nome : b.nomePadrao;
+      }
+    }
+    // 2. Tenta casar com uma conta personalizada que a usuária já tem no app
     if (ctx.contasBancarias && ctx.contasBancarias.length > 0) {
       for (const c of ctx.contasBancarias) {
         const palavraChave = c.nome
@@ -923,20 +1004,14 @@ export function processarMensagemLocalLala(
           .find(
             (w) =>
               w.length >= 3 &&
-              !["conta", "banco", "pix", "corrente", "bolsa"].includes(w)
+              !["conta", "banco", "pix", "corrente", "bolsa", "uerj", "cdt"].includes(w)
           );
         if (palavraChave && tLower.includes(palavraChave)) {
           return c.nome;
         }
       }
     }
-    // 2. Tenta casar com catálogo de bancos conhecidos
-    for (const b of BANCOS_CONHECIDOS) {
-      if (b.chaves.some((ch) => tLower.includes(ch))) {
-        return b.nomePadrao;
-      }
-    }
-    // 3. Fallback para primeira conta da usuária ou Nubank
+    // 3. Fallback para primeira conta real da usuária ou Nubank
     return ctx.contasBancarias?.[0]?.nome || "Nubank (Conta / Pix)";
   };
 
@@ -1010,18 +1085,30 @@ export function processarMensagemLocalLala(
         },
       });
     } else {
+      const contasReais = (ctx.contasBancarias || []).filter(
+        (c) =>
+          !(
+            c.saldoAtual === 0 &&
+            (c.nome.includes("Itaú (Bolsa UERJ & CDT)") ||
+              c.nome.includes("Reserva / Caixinha Quitação"))
+          )
+      );
       const contasBase =
-        ctx.contasBancarias && ctx.contasBancarias.length > 0
-          ? ctx.contasBancarias
-          : [{ nome: "Nubank (Conta / Pix)", saldoAtual: 0 }];
+        contasReais.length > 0
+          ? contasReais
+          : [
+              { nome: "Nubank", saldoAtual: 0 },
+              { nome: "PicPay", saldoAtual: 0 },
+            ];
       acoes.push({
         id: `act-${Date.now()}-saldo-ajuste`,
         tipo: "ATUALIZAR_CONTAS_FINANCAS",
         titulo: "Atualizar Saldo Bancário",
         detalhe:
-          "Toque em 'Editar' no card abaixo para digitar o valor exato ou me responda o valor aqui no chat (ex: 'Meu saldo no Nubank é 1.450,00')",
+          "Toque em 'Editar' no card abaixo para ajustar os bancos e valores ou me envie os valores no chat",
         executada: false,
         payload: {
+          substituirExistentes: true,
           contasAjuste: contasBase.map((c) => ({
             nome: c.nome,
             saldoAtual: c.saldoAtual,
@@ -1404,8 +1491,17 @@ export function processarMensagemLocalLala(
     });
   }
 
+  // Evita transformar mensagens de conversa/reclamação/repetição ("Tente de novo", "Não leu") em tarefas!
+  const ehMensagemConversaOuRetry =
+    /^(tente de novo|tenta de novo|refa[çc]a|repete|repita|n[ãa]o leu|voc[êe] n[ãa]o leu|leia os prints|l[êe] os prints|errou|est[áa] errado|n[ãa]o funcionou|cade o picpay|cad[êe] o picpay|faltou o picpay|n[ãa]o tenho ita[uú]|tire o ita[uú]|tira o ita[uú])$/i.test(
+      lower.trim()
+    ) ||
+    /\b(tente de novo|tenta de novo|voc[êe] n[ãa]o leu|n[ãa]o leu os prints|faltou criar|n[ãa]o tinha ita[uú])\b/i.test(
+      lower
+    );
+
   // Modo "comando"
-  if (acoes.length === 0) {
+  if (acoes.length === 0 && !ehMensagemConversaOuRetry) {
     acoes.push({
       id: `act-${Date.now()}-task-cmd`,
       tipo: "CRIAR_TAREFA",
@@ -1528,7 +1624,21 @@ export async function consultarLalaUnificada(
     projetosAtivos: Array.isArray(rawCtx.projetosAtivos)
       ? rawCtx.projetosAtivos
       : [],
-    contasBancarias: rawCtx.contasBancarias,
+    contasBancarias: Array.isArray(rawCtx.contasBancarias)
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rawCtx.contasBancarias.filter((c: any) => {
+          const nomeStr = String(c?.nome || "");
+          // Remove a antiga conta de exemplo "Itaú (Bolsa UERJ & CDT)" do contexto para nunca poluir propostas
+          if (nomeStr.includes("Itaú (Bolsa UERJ & CDT)")) return false;
+          if (
+            nomeStr.includes("Reserva / Caixinha Quitação") &&
+            Number(c?.saldoAtual) === 0
+          ) {
+            return false;
+          }
+          return true;
+        })
+      : undefined,
     cartoesCredito: rawCtx.cartoesCredito,
     tomLala:
       rawCtx.tomLala ||
@@ -1558,7 +1668,33 @@ export async function consultarLalaUnificada(
       ? [anexoOuAnexos]
       : [];
 
-  const listaAnexos: AnexoLala[] = rawAnexos.filter(Boolean);
+  const listaAnexosBruta: AnexoLala[] = rawAnexos.filter(Boolean);
+  const listaAnexos: AnexoLala[] = [];
+  for (const anx of listaAnexosBruta) {
+    const pareceImg =
+      anx.mimeType?.startsWith("image/") ||
+      /\.(png|jpe?g|webp|gif|heic|heif|bmp)$/i.test(anx.nome || "");
+    if (pareceImg && anx.base64 && anx.base64.length > 350000) {
+      const otimizado = await comprimirDataUrlDeImagem(
+        anx.base64,
+        "image/jpeg",
+        anx.tamanhoBytes
+      );
+      listaAnexos.push({
+        ...anx,
+        base64: otimizado.base64,
+        mimeType: otimizado.mimeType,
+        tamanhoBytes: otimizado.tamanhoBytes,
+      });
+    } else if (pareceImg && (!anx.mimeType || !anx.mimeType.startsWith("image/"))) {
+      listaAnexos.push({
+        ...anx,
+        mimeType: "image/jpeg",
+      });
+    } else {
+      listaAnexos.push(anx);
+    }
+  }
   const primeiroAnexo = listaAnexos[0];
 
   // Se o usuário pediu explicitamente "só guardar" um arquivo, executa direto
@@ -1603,13 +1739,148 @@ export async function consultarLalaUnificada(
           }
         }
       } catch {
-        // Tenta o próximo endpoint ou o motor local
+        // Tenta o próximo endpoint ou chamada direta Gemini SDK
+      }
+    }
+
+    // 2. Fallback Multimodal Direto via @google/genai (garante que a Lala leia prints mesmo em PWA iOS / Hosting estático / payloads grandes)
+    if (!data) {
+      const clientKey = obterChaveGeminiCliente();
+      if (clientKey) {
+        try {
+          const ai = new GoogleGenAI({ apiKey: clientKey });
+          const historicoFormatado =
+            Array.isArray(ctx.historicoConversa) &&
+            ctx.historicoConversa.length > 0
+              ? ctx.historicoConversa
+                  .slice(-10)
+                  .map(
+                    (h) =>
+                      `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
+                  )
+                  .join("\n---\n")
+              : "Início da conversa.";
+
+          const systemInstruction = `Você é a Lala, a governanta pessoal, parceira de decisões e assistente de vida inteligente do aplicativo "Casa da Lala".
+Você conversa em formato de BATE-PAPO humano, acolhedor, perspicaz, proativo e altamente contextualizado.
+
+Contexto completo e Memória Viva da usuária:
+${JSON.stringify(ctx || {})}
+
+Histórico recente da conversa:
+${historicoFormatado}
+
+DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E LEITURA DE PRINTS (CRÍTICO):
+1. APRENDIZADO EM 5 DIMENSÕES:
+   Preencha "aprendizadosExtraidos" com aprendizados concretos nas categorias: "contexto", "acao_usuario", "decisao", "rotina", "forma_de_uso".
+2. LEITURA DE PRINTS BANCÁRIOS, SALDOS E ARQUIVOS:
+   - Analise CADA IMAGEM anexada com máxima atenção!
+   - Identifique o nome exato de cada banco/instituição que aparece nas imagens (ex: "PicPay", "Nubank", "Reserva / Caixinha Nubank", "Inter", "Bradesco", "Santander", "C6 Bank", "Mercado Pago", "Itaú", etc.) e o saldo exato ("saldoAtual") ou fatura ("faturaAtual", "limiteTotal").
+   - PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE as contas que aparecem nos prints enviados pela usuária ou que foram citadas por ela na mensagem! NUNCA inclua contas do contextoApp (como "Itaú" ou "Reserva") se elas NÃO estiverem nos prints enviados!
+   - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela dizendo "esses são os prints das minhas contas" ou "atualize a parte de finanças com isso", para que apenas as contas reais dos prints fiquem no aplicativo!
+
+Retorne SEMPRE um JSON válido com:
+{
+  "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
+  "transcricaoAudioUsuario": "string opcional",
+  "respostaLala": "Sua resposta detalhada citando cada banco e valor lido dos prints",
+  "tituloCard": "Resumo em até 5 palavras",
+  "tags": ["Finanças", "Saldos"],
+  "aprendizadosExtraidos": [{ "categoria": "contexto", "texto": "..." }],
+  "acoesPropostas": [
+    {
+      "tipo": "ATUALIZAR_CONTAS_FINANCAS",
+      "titulo": "Atualizar Contas e Saldos",
+      "detalhe": "Saldos extraídos dos prints bancários",
+      "substituirExistentes": true,
+      "contasAjuste": [{ "nome": "PicPay", "saldoAtual": 0 }, { "nome": "Nubank", "saldoAtual": 0 }],
+      "cartoesAjuste": []
+    }
+  ]
+}`;
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parts: any[] = [];
+          for (const itemAnexo of listaAnexos) {
+            if (itemAnexo?.base64 && itemAnexo.mimeType) {
+              const cleanBase64 = itemAnexo.base64.includes(",")
+                ? itemAnexo.base64.split(",")[1]
+                : itemAnexo.base64;
+              if (
+                itemAnexo.mimeType.startsWith("image/") ||
+                itemAnexo.mimeType.startsWith("audio/") ||
+                itemAnexo.mimeType === "application/pdf"
+              ) {
+                parts.push({
+                  inlineData: {
+                    mimeType: itemAnexo.mimeType.split(";")[0],
+                    data: cleanBase64,
+                  },
+                });
+              }
+            }
+          }
+          parts.push({
+            text:
+              texto ||
+              "Analise detalhadamente todas as imagens anexadas, extraia cada banco e saldo exato visível nos prints e gere a ação ATUALIZAR_CONTAS_FINANCAS apenas com os bancos presentes nos prints.",
+          });
+
+          const clientModels = [
+            "gemini-3-flash-preview",
+            "gemini-3.1-flash-lite-preview",
+          ];
+          for (const mName of clientModels) {
+            try {
+              const response = await ai.models.generateContent({
+                model: mName,
+                contents: parts,
+                config: {
+                  systemInstruction,
+                  responseMimeType: "application/json",
+                },
+              });
+              if (response?.text) {
+                const candidate = extrairJsonSeguroCliente(response.text);
+                if (candidate && typeof candidate.respostaLala === "string") {
+                  data = candidate;
+                  break;
+                }
+              }
+            } catch {
+              // Tenta próximo modelo
+            }
+          }
+        } catch (err) {
+          console.warn("Aviso no fallback direto Gemini:", err);
+        }
       }
     }
 
     if (data && data.respostaLala) {
       const modoDetectado: ModoInteracaoLala =
         data.modoDetectado || detectarIntencaoNatural(texto, primeiroAnexo);
+
+      const normalizarNumeroMoeda = (val: unknown, fallback = 0): number => {
+        if (typeof val === "number" && !isNaN(val)) return val;
+        if (typeof val === "string" && val.trim()) {
+          const limpo = val
+            .replace(/r\$\s*/gi, "")
+            .replace(/\s+/g, "")
+            .trim();
+          if (limpo.includes(",") && limpo.includes(".")) {
+            const n = Number(limpo.replace(/\./g, "").replace(",", "."));
+            if (!isNaN(n)) return n;
+          } else if (limpo.includes(",")) {
+            const n = Number(limpo.replace(",", "."));
+            if (!isNaN(n)) return n;
+          } else {
+            const n = Number(limpo);
+            if (!isNaN(n)) return n;
+          }
+        }
+        return fallback;
+      };
 
       // Normaliza as ações propostas pelo Gemini garantindo que ATUALIZAR_CONTAS_FINANCAS sempre tenha contasAjuste válido
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1627,10 +1898,11 @@ export async function consultarLalaUnificada(
                       c.banco ||
                       c.conta ||
                       ctx.contasBancarias?.[0]?.nome ||
-                      "Nubank (Conta / Pix)"
+                      "Nubank"
                   ),
-                  saldoAtual: Number(
-                    c.saldoAtual ?? c.saldo ?? c.valor ?? a.valor ?? 0
+                  saldoAtual: normalizarNumeroMoeda(
+                    c.saldoAtual ?? c.saldo ?? c.valor ?? a.valor,
+                    0
                   ),
                 }))
               : [];
@@ -1642,10 +1914,13 @@ export async function consultarLalaUnificada(
               ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 rawCartoes.map((cc: any) => ({
                   nome: String(cc.nome || cc.cartao || "Cartão de Crédito"),
-                  faturaAtual: Number(cc.faturaAtual ?? cc.fatura ?? cc.valor ?? 0),
+                  faturaAtual: normalizarNumeroMoeda(
+                    cc.faturaAtual ?? cc.fatura ?? cc.valor,
+                    0
+                  ),
                   limiteTotal:
                     cc.limiteTotal !== undefined
-                      ? Number(cc.limiteTotal)
+                      ? normalizarNumeroMoeda(cc.limiteTotal, 3000)
                       : undefined,
                   vencimentoDia:
                     cc.vencimentoDia !== undefined
@@ -1674,7 +1949,7 @@ export async function consultarLalaUnificada(
                 contasNormalizadas = [
                   {
                     nome:
-                      ctx.contasBancarias?.[0]?.nome || "Nubank (Conta / Pix)",
+                      ctx.contasBancarias?.[0]?.nome || "Nubank",
                     saldoAtual: a.valor,
                   },
                 ];
@@ -1685,9 +1960,41 @@ export async function consultarLalaUnificada(
                         nome: c.nome,
                         saldoAtual: c.saldoAtual,
                       }))
-                    : [{ nome: "Nubank (Conta / Pix)", saldoAtual: 0 }];
+                    : [
+                        { nome: "Nubank", saldoAtual: 0 },
+                        { nome: "PicPay", saldoAtual: 0 },
+                      ];
               }
             }
+
+            const enviouPrintsImagem = listaAnexos.some((anx) =>
+              anx.mimeType?.startsWith("image/")
+            );
+            const citouItauNoTexto = /\b(ita[uú]|iti)\b/i.test(texto);
+
+            // Se a usuária não citou Itaú, remove qualquer conta de exemplo do Itaú ou Caixinha Quitação zerada
+            if (!citouItauNoTexto && contasNormalizadas.length > 1) {
+              contasNormalizadas = contasNormalizadas.filter(
+                (c) =>
+                  !c.nome.includes("Bolsa UERJ") &&
+                  !(
+                    c.saldoAtual === 0 &&
+                    (c.nome.toLowerCase().includes("itaú") ||
+                      c.nome.toLowerCase().includes("itau") ||
+                      c.nome.includes("Caixinha Quitação"))
+                  )
+              );
+            }
+
+            const deveSubstituirContas =
+              Boolean(
+                a.substituirExistentes ?? a.payload?.substituirExistentes
+              ) ||
+              (a.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+                (enviouPrintsImagem ||
+                  /\b(minhas contas|prints das minhas contas|atualize a parte de finan[çc]as|essas s[ãa]o minhas contas|todas as minhas contas)\b/i.test(
+                    texto
+                  )));
 
             return {
               id: `ai-act-${Date.now()}-${idx}`,
@@ -1705,8 +2012,7 @@ export async function consultarLalaUnificada(
                   a.payload?.areaNota ||
                   primeiroAnexo?.areaRepositorio,
                 anexo: primeiroAnexo,
-                substituirExistentes:
-                  a.substituirExistentes ?? a.payload?.substituirExistentes,
+                substituirExistentes: deveSubstituirContas,
                 compromissos: a.compromissos || a.payload?.compromissos,
                 refeicoes: a.refeicoes || a.payload?.refeicoes,
                 itensCompras: a.itensCompras || a.payload?.itensCompras,

@@ -351,12 +351,11 @@ export function AbaGovernantaLala({
     if (!fileList || fileList.length === 0) return;
     const files: File[] = Array.from(fileList);
     try {
-      const lidos = await Promise.all(
-        files.map(async (f) => {
-          const lido = await lerArquivoParaAnexo(f);
-          return { ...lido, intencao: "interpretar" as const };
-        })
-      );
+      const lidos: AnexoLala[] = [];
+      for (const f of files) {
+        const lido = await lerArquivoParaAnexo(f);
+        lidos.push({ ...lido, intencao: "interpretar" as const });
+      }
       setAnexosAtuais((prev) => [...prev, ...lidos]);
       showToast(
         lidos.length === 1
@@ -382,12 +381,11 @@ export function AbaGovernantaLala({
     }
     if (imageFiles.length > 0) {
       e.preventDefault();
-      const lidos = await Promise.all(
-        imageFiles.map(async (f) => {
-          const lido = await lerArquivoParaAnexo(f);
-          return { ...lido, intencao: "interpretar" as const };
-        })
-      );
+      const lidos: AnexoLala[] = [];
+      for (const f of imageFiles) {
+        const lido = await lerArquivoParaAnexo(f);
+        lidos.push({ ...lido, intencao: "interpretar" as const });
+      }
       setAnexosAtuais((prev) => [...prev, ...lidos]);
       showToast(`${lidos.length} print(s) colado(s) no chat!`);
     }
@@ -1611,42 +1609,72 @@ export function AbaGovernantaLala({
                           </div>
                         )}
 
-                        {/* Rodapé do balão: Ouvir resposta + Horário */}
-                        <div className="flex items-center justify-between pt-1">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              reproduzirFalaDaLala(it.id, it.respostaLala)
-                            }
-                            className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-                            style={{
-                              backgroundColor:
-                                idFalandoAgora === it.id
-                                  ? t.action
-                                  : carregandoVozId === it.id
-                                  ? `${t.primary}20`
-                                  : t.cardSubtle,
-                              color:
-                                idFalandoAgora === it.id ? "#fff" : t.textSoft,
-                            }}
-                          >
-                            {idFalandoAgora === it.id ? (
-                              <>
-                                <Square size={10} fill="#fff" />
-                                <span>Parar voz</span>
-                              </>
-                            ) : carregandoVozId === it.id ? (
-                              <>
-                                <Volume2 size={12} className="animate-pulse" />
-                                <span>Gerando voz...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 size={12} />
-                                <span>Ouvir</span>
-                              </>
+                        {/* Rodapé do balão: Ouvir resposta + Reanalisar + Horário */}
+                        <div className="flex items-center justify-between pt-1 gap-2 flex-wrap">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                reproduzirFalaDaLala(it.id, it.respostaLala)
+                              }
+                              className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+                              style={{
+                                backgroundColor:
+                                  idFalandoAgora === it.id
+                                    ? t.action
+                                    : carregandoVozId === it.id
+                                    ? `${t.primary}20`
+                                    : t.cardSubtle,
+                                color:
+                                  idFalandoAgora === it.id ? "#fff" : t.textSoft,
+                              }}
+                            >
+                              {idFalandoAgora === it.id ? (
+                                <>
+                                  <Square size={10} fill="#fff" />
+                                  <span>Parar voz</span>
+                                </>
+                              ) : carregandoVozId === it.id ? (
+                                <>
+                                  <Volume2 size={12} className="animate-pulse" />
+                                  <span>Gerando voz...</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Volume2 size={12} />
+                                  <span>Ouvir</span>
+                                </>
+                              )}
+                            </button>
+
+                            {it.id !== 1 && (
+                              <button
+                                type="button"
+                                disabled={processando}
+                                onClick={() => {
+                                  const anexosParaReenviar =
+                                    it.anexos && it.anexos.length > 0
+                                      ? it.anexos
+                                      : it.anexo
+                                      ? [it.anexo]
+                                      : [];
+                                  enviarMensagemParaLala(
+                                    it.mensagemUsuario,
+                                    anexosParaReenviar
+                                  );
+                                }}
+                                className="px-2.5 py-1 rounded-xl text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-all hover:opacity-85"
+                                style={{
+                                  backgroundColor: `${t.primary}15`,
+                                  color: t.primary,
+                                }}
+                                title="Pedir para a Lala ler e analisar novamente esta mensagem e os prints anexados"
+                              >
+                                <RotateCcw size={11} />
+                                <span>Reanalisar</span>
+                              </button>
                             )}
-                          </button>
+                          </div>
 
                           <span
                             className="text-[10px] font-mono-num"

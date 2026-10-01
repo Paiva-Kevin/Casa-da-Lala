@@ -6,12 +6,52 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
 const PORT = Number(process.env.PORT) || 3000;
-const APP_BUILD_VERSION = "v14.2";
+const APP_BUILD_VERSION = "v16.0";
 const DATA_DIR = path.join(process.cwd(), ".data");
 const SNAPSHOT_FILE = path.join(DATA_DIR, "cloud_snapshot.json");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let cachedServerSnapshot: any = null;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function hasServerCustomizations(records: any): boolean {
+  if (!records || typeof records !== "object") return false;
+  if (records.demo_limpo === true) return true;
+  if (
+    Array.isArray(records.historico_acoes_lala) &&
+    records.historico_acoes_lala.length > 0
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(records.interacoes_lala) &&
+    records.interacoes_lala.length > 1
+  ) {
+    return true;
+  }
+  if (records.perfil_calibrado?.calibrado) return true;
+  if (
+    Array.isArray(records.perfil_calibrado?.itensMemoriaViva) &&
+    records.perfil_calibrado.itensMemoriaViva.length > 0
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(records.perfil_calibrado?.regrasAprendidasLala) &&
+    records.perfil_calibrado.regrasAprendidasLala.length > 0
+  ) {
+    return true;
+  }
+  if (Array.isArray(records.contas)) {
+    const isDefaultDemo =
+      records.contas.length === 3 &&
+      Number(records.contas[0]?.saldoAtual) === 385.5 &&
+      Number(records.contas[1]?.saldoAtual) === 240 &&
+      Number(records.contas[2]?.saldoAtual) === 420;
+    if (!isDefaultDemo && records.contas.length > 0) return true;
+  }
+  return false;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readServerSnapshot(): any {
@@ -42,9 +82,6 @@ function writeServerSnapshot(payload: any): void {
 }
 
 const CHAT_MODELS = [
-  "gemini-3.8-flash",
-  "gemini-flash-latest",
-  "gemini-3.1-flash-lite",
   "gemini-3-flash-preview",
   "gemini-3.1-flash-lite-preview",
 ];
@@ -132,11 +169,42 @@ async function startServer() {
         return res.status(400).json({ error: "Snapshot inválido" });
       }
       const existing = readServerSnapshot();
+      const incomingHasCustom = hasServerCustomizations(incoming.records);
+      const existingHasCustom = existing
+        ? hasServerCustomizations(existing.records)
+        : false;
+
+      // Never allow an untouched default browser to overwrite a customized snapshot!
+      if (!incomingHasCustom) {
+        return res.json({
+          ok: true,
+          updated: false,
+          snapshot: existingHasCustom ? existing : null,
+          buildVersion: APP_BUILD_VERSION,
+        });
+      }
+
+      // If existing has demo_limpo=true and incoming has demo_limpo=false, protect existing
+      if (
+        existingHasCustom &&
+        existing?.records?.demo_limpo === true &&
+        incoming.records?.demo_limpo === false
+      ) {
+        return res.json({
+          ok: true,
+          updated: false,
+          snapshot: existing,
+          buildVersion: APP_BUILD_VERSION,
+        });
+      }
+
       const incomingTime = Number(incoming.updatedAt) || Date.now();
-      const existingTime = Number(existing?.updatedAt) || 0;
+      const existingTime = existingHasCustom
+        ? Number(existing?.updatedAt) || 0
+        : 0;
       const force = Boolean(req.query.force);
 
-      if (force || !existing || incomingTime >= existingTime - 1000) {
+      if (force || !existingHasCustom || incomingTime >= existingTime - 1000) {
         const toSave = {
           ...incoming,
           updatedAt: incomingTime,
@@ -255,8 +323,11 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
 3. LEITURA DE PRINTS BANCÁRIOS, SALDOS, FATURAS E ARQUIVOS (CRÍTICO):
    - NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de bancos, contas, saldos, Pix, faturas, horários, dietas ou treinos!
    - Só gere "GUARDAR_SEGUNDO_CEREBRO" se ela pedir EXPLICITAMENTE para arquivar no Segundo Cérebro.
-   - Se ela enviar PRINT DE CONTA BANCÁRIA / SALDO / EXTRATO / CARTÃO ou pedir para atualizar o saldo ("atualize meu saldo", "meu saldo está X", "tenho X no banco Y", "criar conta"): leia atentamente todos os bancos e valores e gere IMEDIATAMENTE a ação "ATUALIZAR_CONTAS_FINANCAS" preenchendo "contasAjuste": [{ "nome": "Nome do Banco", "saldoAtual": 1234.56 }] e/ou "cartoesAjuste"!
-   - Se ela pedir "atualize meu saldo" sem informar o valor exato ainda, gere mesmo assim a ação "ATUALIZAR_CONTAS_FINANCAS" com as contas atuais dela para que ela possa editar o valor direto no card ou responder no chat! O aplicativo atualizará o saldo se a conta já existir e CRIARÁ A CONTA AUTOMATICAMENTE caso ela ainda não exista!
+   - Se ela enviar PRINT(S) DE CONTA BANCÁRIA / SALDO / EXTRATO / CARTÃO (ex: Nubank, PicPay, Inter, Bradesco, Santander, C6, Mercado Pago, Itaú, Caixa, BB, XP, BTG, etc.) ou pedir para atualizar as finanças/saldos:
+     a) Analise CADA IMAGEM em anexo com máxima atenção e extraia o nome exato do banco/instituição (ex: "PicPay", "Nubank", "Reserva / Caixinha Nubank", etc.) e o valor exato do saldo disponível ("saldoAtual") e/ou fatura de cartão ("faturaAtual", "limiteTotal").
+     b) PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE os bancos/contas que aparecem nos prints enviados agora ou que foram citados na mensagem da usuária! NUNCA inclua contas do contextoApp (como "Itaú" ou "Reserva") se elas NÃO estiverem nos prints enviados pela usuária!
+     c) Quando a usuária enviar os prints das contas dela dizendo "esses são os prints das minhas contas", "atualize a parte de finanças com isso" ou similar, defina "substituirExistentes": true na ação "ATUALIZAR_CONTAS_FINANCAS", para que o aplicativo substitua quaisquer contas antigas/exemplo (como Itaú) e mantenha/crie EXATAMENTE as contas reais dos prints (como Nubank e PicPay)!
+   - Se ela pedir "atualize meu saldo" por texto sem anexar prints e sem informar valor numérico, gere a ação "ATUALIZAR_CONTAS_FINANCAS" para edição rápida no card.
 4. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
    - Se a usuária pedir para automatizar um tipo de ação (ex: "automatize atualizações de saldo", "pode fazer gastos direto"), preencha "automatizarTipos". Se pedir para voltar a confirmar, preencha "pedirConfirmacaoTipos".
 
