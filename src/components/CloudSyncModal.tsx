@@ -79,12 +79,14 @@ export const NetworkAndSyncBadges: React.FC<{
   googleUser: GoogleUserProfile | null;
   hasConflictOrConfirm: boolean;
   onClickOpenSync: () => void;
+  onQuickRefresh?: () => void;
 }> = ({
   t,
   isOnline,
   syncStatus,
   googleUser,
   onClickOpenSync,
+  onQuickRefresh,
 }) => {
   const statusLabel =
     syncStatus === 'syncing' ? 'Sincronizando...' : 'Sincronizado';
@@ -138,6 +140,26 @@ export const NetworkAndSyncBadges: React.FC<{
           {googleUser ? statusLabel : 'Google Drive'}
         </span>
       </button>
+
+      {onQuickRefresh && (
+        <button
+          onClick={onQuickRefresh}
+          style={{
+            backgroundColor: t.card,
+            color: t.text,
+            borderColor: t.border,
+          }}
+          className="px-2.5 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 cursor-pointer transition hover:opacity-90"
+          title="Forçar atualização imediata da versão web e sincronizar dados mais recentes"
+        >
+          <RefreshCw
+            size={13}
+            className={syncStatus === 'syncing' ? 'animate-spin' : ''}
+            style={{ color: t.primary }}
+          />
+          <span className="hidden sm:inline">Atualizar</span>
+        </button>
+      )}
     </div>
   );
 };

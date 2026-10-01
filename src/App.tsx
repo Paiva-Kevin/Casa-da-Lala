@@ -51,6 +51,8 @@ import {
   AnexoLala,
   RegistroHistoricoAcaoLala,
   SnapshotEstadoAcaoLala,
+  ItemAprendizadoLala,
+  CategoriaAprendizadoLala,
 } from "./types/lala";
 import {
   calcularDinheiroLivreHoje,
@@ -106,10 +108,12 @@ import {
   AppBackupPayload,
   exportFullBackupPayload,
   getSyncMetadata,
+  hasRealUserCustomizations,
   idbGetRecord,
   idbSetRecord,
   importFullBackupPayload,
   SyncMetadata,
+  syncSnapshotWithServer,
   updateSyncMetadata,
 } from "./services/offlineStorage";
 import {
@@ -428,8 +432,8 @@ export default function App() {
     useState<PendingConfirmationState | null>(null);
   const [syncMeta, setSyncMeta] = useState<SyncMetadata>({
     id: "meta",
-    updatedAt: Date.now(),
-    updatedAtISO: new Date().toISOString(),
+    updatedAt: 0,
+    updatedAtISO: "",
     lastSyncedAt: null,
     lastSyncedAtISO: null,
     syncStatus: "pending",
@@ -551,13 +555,40 @@ export default function App() {
           new Date(remoteFile.modifiedTime).getTime() ||
           0;
         const localTime = localPayload.updatedAt || 0;
-        const currentMeta = await getSyncMetadata();
-        const lastSynced = currentMeta.lastSyncedAt || 0;
+        const localHasCustom = hasRealUserCustomizations(localPayload.records);
+        const remoteHasCustom = remotePayload
+          ? hasRealUserCustomizations(remotePayload.records)
+          : false;
 
         // Automatic background synchronization without interrupting the user:
-        // 1. If local data was modified more recently than remote (or user clicked manual sync), push automatically to Drive
-        if (!remotePayload || localTime >= remoteTime - 1500 || !silentIfNoChanges) {
-          if (Math.abs(localTime - remoteTime) > 1500 || !silentIfNoChanges) {
+        // 1. If remote Drive backup is newer than local (or local only has untouched defaults while remote has real user data) -> pull & apply
+        if (
+          remotePayload &&
+          remotePayload.records &&
+          ((remoteHasCustom && !localHasCustom) ||
+            remoteTime > localTime + 1500)
+        ) {
+          await importFullBackupPayload(remotePayload);
+          const refreshed = await getSyncMetadata();
+          setSyncMeta(refreshed);
+          setPendingConfirmation(null);
+          window.dispatchEvent(new CustomEvent("lala-backup-restored"));
+          // Mirror the pulled Drive state to server snapshot so all open tabs/origins get it immediately
+          syncSnapshotWithServer(true).catch(() => {});
+          if (!silentIfNoChanges) {
+            showToast("Dados atualizados a partir do Google Drive!");
+          }
+        } else if (
+          !remotePayload ||
+          localTime > remoteTime + 1500 ||
+          !silentIfNoChanges
+        ) {
+          // 2. Local data was modified more recently than remote (or user clicked manual sync with up-to-date local data) -> push to Drive
+          if (
+            !remotePayload ||
+            Math.abs(localTime - remoteTime) > 1500 ||
+            !silentIfNoChanges
+          ) {
             const uploaded = await uploadDriveBackupContent(
               localPayload,
               remoteFile.id,
@@ -573,6 +604,7 @@ export default function App() {
             });
             setSyncMeta(synced);
             setPendingConfirmation(null);
+            syncSnapshotWithServer(true).catch(() => {});
             if (!silentIfNoChanges) {
               showToast("Sincronizado com o Google Drive!");
             }
@@ -584,30 +616,13 @@ export default function App() {
             });
             setSyncMeta(synced);
           }
-        } else if (remotePayload && remoteTime > localTime + 1500 && localTime <= lastSynced + 2000) {
-          // 2. Remote Drive backup is newer and local hasn't diverged -> automatically pull & apply silently
-          await importFullBackupPayload(remotePayload);
-          const refreshed = await getSyncMetadata();
-          setSyncMeta(refreshed);
-          setPendingConfirmation(null);
-          window.dispatchEvent(new CustomEvent("lala-backup-restored"));
         } else {
-          // 3. Default: push latest local state to Drive automatically so the user is never nagged
-          const uploaded = await uploadDriveBackupContent(
-            localPayload,
-            remoteFile.id,
-            useAppDataFolder
-          );
-          const now = Date.now();
           const synced = await updateSyncMetadata({
             syncStatus: "synced",
-            lastSyncedAt: now,
-            lastSyncedAtISO: new Date(now).toISOString(),
-            driveFileId: uploaded.id,
+            driveFileId: remoteFile.id,
             lastError: null,
           });
           setSyncMeta(synced);
-          setPendingConfirmation(null);
         }
       } catch (err: unknown) {
         const msg =
@@ -641,43 +656,125 @@ export default function App() {
   );
 
   // Automatic background synchronization:
-  // 1) Debounced 20s after any local change
-  // 2) Periodic every 3 minutes
-  // 3) Immediately when internet connection returns (`online` event)
+  // 1) Immediately on startup / page load (both Server Snapshot & Google Drive)
+  // 2) Debounced 600ms after any local change for Server Snapshot & 8s for Google Drive
+  // 3) Immediately when tab becomes visible / focused (`visibilitychange` & `focus`)
+  // 4) Periodic every 25s for Server Snapshot & every 2 minutes for Google Drive
+  // 5) Immediately when internet connection returns (`online` event)
   useEffect(() => {
-    let debounceTimer: number | undefined;
+    let driveDebounceTimer: number | undefined;
+    let serverDebounceTimer: number | undefined;
 
-    const triggerDebouncedAutoSync = () => {
-      if (debounceTimer) window.clearTimeout(debounceTimer);
-      debounceTimer = window.setTimeout(() => {
-        if (navigator.onLine && googleUser && !needsAuth) {
-          handleSyncCheckWithDrive(true);
+    const runInitialAndFocusSync = () => {
+      if (!navigator.onLine) return;
+      syncSnapshotWithServer(false).then((res) => {
+        if (res.action === "pulled") {
+          getSyncMetadata().then(setSyncMeta);
         }
-      }, 20000);
-    };
-
-    const handleOnlineReconnect = () => {
+      });
       if (googleUser && !needsAuth) {
         handleSyncCheckWithDrive(true);
       }
     };
 
+    // Run immediately on mount (after 300ms hydration window)
+    const initTimer = window.setTimeout(runInitialAndFocusSync, 300);
+
+    const triggerDebouncedAutoSync = () => {
+      if (serverDebounceTimer) window.clearTimeout(serverDebounceTimer);
+      serverDebounceTimer = window.setTimeout(() => {
+        if (navigator.onLine) {
+          syncSnapshotWithServer(true).catch(() => {});
+        }
+      }, 600);
+
+      if (driveDebounceTimer) window.clearTimeout(driveDebounceTimer);
+      driveDebounceTimer = window.setTimeout(() => {
+        if (navigator.onLine && googleUser && !needsAuth) {
+          handleSyncCheckWithDrive(true);
+        }
+      }, 8000);
+    };
+
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === "visible") {
+        runInitialAndFocusSync();
+      }
+    };
+
     window.addEventListener("lala-local-mutation", triggerDebouncedAutoSync);
-    window.addEventListener("online", handleOnlineReconnect);
+    window.addEventListener("online", runInitialAndFocusSync);
+    window.addEventListener("focus", handleVisibilityOrFocus);
+    document.addEventListener("visibilitychange", handleVisibilityOrFocus);
+
+    const serverInterval = window.setInterval(() => {
+      if (navigator.onLine && document.visibilityState === "visible") {
+        syncSnapshotWithServer(false).then((res) => {
+          if (res.action === "pulled") {
+            getSyncMetadata().then(setSyncMeta);
+          }
+        });
+      }
+    }, 25000);
 
     const periodicInterval = window.setInterval(() => {
       if (navigator.onLine && googleUser && !needsAuth) {
         handleSyncCheckWithDrive(true);
       }
-    }, 180000);
+    }, 120000);
 
     return () => {
-      if (debounceTimer) window.clearTimeout(debounceTimer);
+      window.clearTimeout(initTimer);
+      if (driveDebounceTimer) window.clearTimeout(driveDebounceTimer);
+      if (serverDebounceTimer) window.clearTimeout(serverDebounceTimer);
       window.removeEventListener("lala-local-mutation", triggerDebouncedAutoSync);
-      window.removeEventListener("online", handleOnlineReconnect);
+      window.removeEventListener("online", runInitialAndFocusSync);
+      window.removeEventListener("focus", handleVisibilityOrFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityOrFocus);
+      window.clearInterval(serverInterval);
       window.clearInterval(periodicInterval);
     };
   }, [googleUser, needsAuth, handleSyncCheckWithDrive]);
+
+  const handleQuickRefreshAppAndData = useCallback(async () => {
+    try {
+      showToast("Verificando atualizações e sincronizando dados...");
+      // 1. Sync snapshot with server (Preview <-> Web <-> Mobile)
+      const snapRes = await syncSnapshotWithServer(false);
+      if (snapRes.action === "pulled") {
+        const refreshed = await getSyncMetadata();
+        setSyncMeta(refreshed);
+      }
+      // 2. Sync with Google Drive if connected
+      if (navigator.onLine && googleUser && !needsAuth) {
+        await handleSyncCheckWithDrive(true);
+      }
+      // 3. Clear any legacy Service Worker caches and check for SW update
+      if ("caches" in window) {
+        const names = await caches.keys();
+        for (const name of names) {
+          if (
+            name !== "casa-da-lala-offline-v14" &&
+            name !== "casa-da-lala-fonts-v4"
+          ) {
+            await caches.delete(name);
+          }
+        }
+      }
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg) {
+          await reg.update();
+          if (reg.waiting) {
+            reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          }
+        }
+      }
+      showToast("App e dados atualizados para a versão mais recente!");
+    } catch {
+      showToast("Dados locais atualizados!");
+    }
+  }, [googleUser, needsAuth, handleSyncCheckWithDrive, showToast]);
 
   const handleConfirmOverwriteDrive = async () => {
     if (!pendingConfirmation) return;
@@ -1865,30 +1962,82 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_CONTAS_FINANCAS": {
-        if (acao.payload?.contasAjuste && acao.payload.contasAjuste.length > 0) {
+        const normalizarTextoBanco = (str: string) =>
+          (str || "")
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[()/-]/g, " ")
+            .trim();
+
+        const extrairTokensBanco = (str: string) =>
+          normalizarTextoBanco(str)
+            .split(/\s+/)
+            .filter(
+              (w) =>
+                w.length >= 2 &&
+                ![
+                  "conta",
+                  "banco",
+                  "saldo",
+                  "atual",
+                  "corrente",
+                  "pix",
+                  "meu",
+                  "minha",
+                  "principal",
+                ].includes(w)
+            );
+
+        const listaAjusteContas =
+          acao.payload?.contasAjuste && acao.payload.contasAjuste.length > 0
+            ? acao.payload.contasAjuste
+            : typeof acao.payload?.valor === "number"
+            ? [
+                {
+                  nome: contas[0]?.nome || "Nubank (Conta / Pix)",
+                  saldoAtual: acao.payload.valor,
+                },
+              ]
+            : [];
+
+        if (listaAjusteContas.length > 0) {
           setContas((prev) => {
             if (acao.payload?.substituirExistentes) {
-              return (acao.payload.contasAjuste || []).map((aj, idx) => ({
+              return listaAjusteContas.map((aj, idx) => ({
                 id: Date.now() + idx,
                 nome: aj.nome,
                 tipo: "Corrente / Pix" as const,
-                saldoAtual: aj.saldoAtual,
+                saldoAtual: Number(aj.saldoAtual || 0),
                 cor: idx === 0 ? ("primary" as const) : ("finance" as const),
               }));
             }
             const copia = [...prev];
-            for (const aj of acao.payload?.contasAjuste || []) {
-              const idx = copia.findIndex((c) =>
-                c.nome.toLowerCase().includes(aj.nome.split(" ")[0].toLowerCase())
-              );
+            for (const aj of listaAjusteContas) {
+              const tokensAlvo = extrairTokensBanco(aj.nome);
+              let idx = -1;
+
+              if (tokensAlvo.length > 0) {
+                idx = copia.findIndex((c) => {
+                  const normExist = normalizarTextoBanco(c.nome);
+                  return tokensAlvo.some((tk) => normExist.includes(tk));
+                });
+              } else if (copia.length > 0) {
+                // Se o nome for genérico ("Conta Principal", "Meu Saldo"), atualiza a conta principal (índice 0)
+                idx = 0;
+              }
+
               if (idx >= 0) {
-                copia[idx] = { ...copia[idx], saldoAtual: aj.saldoAtual };
+                copia[idx] = {
+                  ...copia[idx],
+                  saldoAtual: Number(aj.saldoAtual || 0),
+                };
               } else {
                 copia.push({
                   id: Date.now() + Math.floor(Math.random() * 1000),
-                  nome: aj.nome,
+                  nome: aj.nome || "Nova Conta",
                   tipo: "Corrente / Pix",
-                  saldoAtual: aj.saldoAtual,
+                  saldoAtual: Number(aj.saldoAtual || 0),
                   cor: "primary",
                 });
               }
@@ -1911,9 +2060,16 @@ export default function App() {
             }
             const copia = [...prev];
             for (const aj of acao.payload?.cartoesAjuste || []) {
-              const idx = copia.findIndex((c) =>
-                c.nome.toLowerCase().includes(aj.nome.split(" ")[0].toLowerCase())
-              );
+              const tokensAlvo = extrairTokensBanco(aj.nome);
+              const idx =
+                tokensAlvo.length > 0
+                  ? copia.findIndex((c) => {
+                      const normExist = normalizarTextoBanco(c.nome);
+                      return tokensAlvo.some((tk) => normExist.includes(tk));
+                    })
+                  : copia.length > 0
+                  ? 0
+                  : -1;
               if (idx >= 0) {
                 copia[idx] = {
                   ...copia[idx],
@@ -2319,7 +2475,7 @@ export default function App() {
       return [novoRegistro, ...semDuplicata].slice(0, 60);
     });
 
-    // Atualiza contagem de confirmações e regras aprendidas no perfil da usuária
+    // Atualiza contagem de confirmações, regras aprendidas e Memória Viva (5 dimensões) no perfil da usuária
     setPerfilCalibrado((prev) => {
       const contagensAtuais = prev.contagemConfirmacoesPorTipo || {};
       const novaContagem = (contagensAtuais[acao.tipo] || 0) + 1;
@@ -2331,6 +2487,71 @@ export default function App() {
           ? [opcoes.notaAprendizado.trim(), ...regrasAtuais]
           : regrasAtuais;
 
+      const memoriaAtual = [...(prev.itensMemoriaViva || [])];
+      const adicionarItemMemoria = (
+        categoria: CategoriaAprendizadoLala,
+        textoItem: string,
+        origem: ItemAprendizadoLala["origem"]
+      ) => {
+        const limpo = textoItem.trim();
+        if (!limpo) return;
+        const jaExiste = memoriaAtual.some(
+          (m) => m.texto.toLowerCase() === limpo.toLowerCase()
+        );
+        if (!jaExiste) {
+          memoriaAtual.unshift({
+            id: `mem-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            categoria,
+            texto: limpo,
+            origem,
+            dataHora: agoraHora,
+          });
+        }
+      };
+
+      if (opcoes?.editadaPeloUsuario && opcoes?.notaAprendizado) {
+        adicionarItemMemoria(
+          "acao_usuario",
+          opcoes.notaAprendizado,
+          "edicao_acao"
+        );
+      } else if (acao.tipo === "ATUALIZAR_CONTAS_FINANCAS" && acao.payload?.contasAjuste?.length) {
+        adicionarItemMemoria(
+          "contexto",
+          `Saldos confirmados: ${acao.payload.contasAjuste
+            .map(
+              (c) =>
+                `${c.nome}: R$ ${Number(c.saldoAtual || 0)
+                  .toFixed(2)
+                  .replace(".", ",")}`
+            )
+            .join(" · ")}`,
+          "acao_app"
+        );
+      } else if (
+        acao.tipo === "AGENDAR_COMPROMISSO" ||
+        acao.tipo === "ATUALIZAR_HABITOS" ||
+        acao.tipo === "ATUALIZAR_DIETA_E_COMPRAS" ||
+        acao.tipo === "ATUALIZAR_TREINO" ||
+        acao.tipo === "ATUALIZAR_PERFIL_CHECKIN"
+      ) {
+        adicionarItemMemoria(
+          "rotina",
+          `Rotina confirmada: ${acao.titulo}`,
+          "acao_app"
+        );
+      } else if (
+        acao.tipo === "REGISTRAR_GASTO" ||
+        acao.tipo === "REGISTRAR_RECEITA" ||
+        acao.tipo === "CRIAR_TAREFA"
+      ) {
+        adicionarItemMemoria(
+          "acao_usuario",
+          `Ação confirmada no app: ${acao.titulo}`,
+          "acao_app"
+        );
+      }
+
       return {
         ...prev,
         contagemConfirmacoesPorTipo: {
@@ -2338,6 +2559,7 @@ export default function App() {
           [acao.tipo]: novaContagem,
         },
         regrasAprendidasLala: novasRegras,
+        itensMemoriaViva: memoriaAtual.slice(0, 80),
       };
     });
 
@@ -2390,12 +2612,35 @@ export default function App() {
       }))
     );
 
+    // Registra aprendizado de decisão/preferência quando a usuária desfaz uma ação
+    setPerfilCalibrado((prev) => {
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const novoItem: ItemAprendizadoLala = {
+        id: `mem-undo-${Date.now()}`,
+        categoria: "decisao",
+        texto: `Usuária desfez a ação "${registro.acao.titulo}" (${registro.acao.tipo}) — pedir confirmação cuidadosa em casos semelhantes.`,
+        origem: "acao_app",
+        dataHora: agoraHora,
+      };
+      return {
+        ...prev,
+        itensMemoriaViva: [novoItem, ...(prev.itensMemoriaViva || [])].slice(
+          0,
+          80
+        ),
+      };
+    });
+
     showToast(
       "↩️ Ação desfeita! Os dados anteriores do aplicativo foram restaurados."
     );
   };
 
   const recusarAcaoDaLala = (acaoId: string, interacaoId?: number) => {
+    let tituloRecusado = "";
     setInteracoesLala((prev) =>
       prev.map((item) => {
         if (interacaoId && item.id !== interacaoId) {
@@ -2404,14 +2649,35 @@ export default function App() {
         }
         return {
           ...item,
-          acoesPropostas: item.acoesPropostas?.map((a) =>
-            a.id === acaoId
-              ? { ...a, executada: false, recusada: true, desfeita: false }
-              : a
-          ),
+          acoesPropostas: item.acoesPropostas?.map((a) => {
+            if (a.id === acaoId) {
+              tituloRecusado = a.titulo;
+              return { ...a, executada: false, recusada: true, desfeita: false };
+            }
+            return a;
+          }),
         };
       })
     );
+    if (tituloRecusado) {
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      setPerfilCalibrado((prev) => ({
+        ...prev,
+        itensMemoriaViva: [
+          {
+            id: `mem-recusa-${Date.now()}`,
+            categoria: "decisao" as const,
+            texto: `Usuária optou por descartar a sugestão "${tituloRecusado}".`,
+            origem: "acao_app" as const,
+            dataHora: agoraHora,
+          },
+          ...(prev.itensMemoriaViva || []),
+        ].slice(0, 80),
+      }));
+    }
     showToast("Ação descartada. Nada foi alterado no aplicativo.");
   };
 
@@ -2507,6 +2773,20 @@ export default function App() {
         limiteTotal: c.limiteTotal,
         vencimentoDia: c.vencimentoDia,
       })),
+      regrasAprendidasLala: perfilCalibrado.regrasAprendidasLala || [],
+      itensMemoriaViva: perfilCalibrado.itensMemoriaViva || [],
+      ultimasAcoesNoApp: historicoAcoesLala
+        .slice(0, 10)
+        .map(
+          (h) =>
+            `${h.acao.titulo} (${
+              h.desfeita
+                ? "desfeita"
+                : h.editadaPeloUsuario
+                ? "editada pela usuária"
+                : "confirmada"
+            })`
+        ),
     };
 
     const resultado = await consultarLalaUnificada(
@@ -2520,6 +2800,35 @@ export default function App() {
       hour: "2-digit",
       minute: "2-digit",
     });
+
+    if (
+      resultado.aprendizadosExtraidos &&
+      resultado.aprendizadosExtraidos.length > 0
+    ) {
+      setPerfilCalibrado((prev) => {
+        const atuais = [...(prev.itensMemoriaViva || [])];
+        for (const ap of resultado.aprendizadosExtraidos || []) {
+          if (
+            ap.texto &&
+            !atuais.some(
+              (m) => m.texto.toLowerCase() === ap.texto.toLowerCase()
+            )
+          ) {
+            atuais.unshift({
+              id: `mem-chat-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              categoria: ap.categoria,
+              texto: ap.texto,
+              origem: "conversa",
+              dataHora: agoraHora,
+            });
+          }
+        }
+        return {
+          ...prev,
+          itensMemoriaViva: atuais.slice(0, 80),
+        };
+      });
+    }
     const modoGlobal = perfilCalibrado.autonomiaLala ?? "confirmar";
     const tiposAuto = perfilCalibrado.tiposAutomatizados || [];
 
@@ -2888,6 +3197,7 @@ export default function App() {
                 googleUser={googleUser && !needsAuth ? googleUser : null}
                 hasConflictOrConfirm={!!pendingConfirmation}
                 onClickOpenSync={() => setSyncModalOpen(true)}
+                onQuickRefresh={handleQuickRefreshAppAndData}
               />
 
               <PWAInstallButton t={t} compact />

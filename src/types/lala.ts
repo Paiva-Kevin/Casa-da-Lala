@@ -38,6 +38,28 @@ export type TomGovernanta =
   | "executiva"
   | "treinadora";
 
+export type CategoriaAprendizadoLala =
+  | "contexto"
+  | "acao_usuario"
+  | "decisao"
+  | "rotina"
+  | "forma_de_uso";
+
+export interface ItemAprendizadoLala {
+  id: string;
+  categoria: CategoriaAprendizadoLala;
+  texto: string;
+  origem:
+    | "conversa"
+    | "edicao_acao"
+    | "confirmacao_acao"
+    | "desfazer_acao"
+    | "uso_app"
+    | "acao_app"
+    | "manual";
+  dataHora: string;
+}
+
 export interface PerfilUsuarioCalibrado {
   nomeUsuario: string;
   cursoUERJ: string;
@@ -56,6 +78,7 @@ export interface PerfilUsuarioCalibrado {
   tiposAutomatizados?: AcaoGovernanta["tipo"][];
   contagemConfirmacoesPorTipo?: Partial<Record<AcaoGovernanta["tipo"], number>>;
   regrasAprendidasLala?: string[];
+  itensMemoriaViva?: ItemAprendizadoLala[];
 }
 
 export type IntencaoImportacaoArquivo =
@@ -368,6 +391,10 @@ export interface InteracaoGovernanta {
   guardadoNoCofre?: boolean;
   sugestoesResposta?: string[];
   novaRegraAprendida?: string;
+  aprendizadosExtraidos?: {
+    categoria: CategoriaAprendizadoLala;
+    texto: string;
+  }[];
   automatizarTipos?: AcaoGovernanta["tipo"][];
   pedirConfirmacaoTipos?: AcaoGovernanta["tipo"][];
 }

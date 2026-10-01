@@ -174,11 +174,10 @@ export async function getSyncMetadata(): Promise<SyncMetadata> {
     } catch {
       // ignore
     }
-    const now = Date.now();
     return {
       id: 'meta',
-      updatedAt: now,
-      updatedAtISO: new Date(now).toISOString(),
+      updatedAt: 0,
+      updatedAtISO: '',
       lastSyncedAt: null,
       lastSyncedAtISO: null,
       syncStatus: 'pending',
@@ -272,6 +271,48 @@ export const ALL_STATE_KEYS = [
   'historico_acoes_lala',
 ] as const;
 
+// Checks whether the local browser state actually has real user interactions/modifications
+// rather than just the untouched default initial template data.
+export function hasRealUserCustomizations(
+  records: Record<string, unknown>
+): boolean {
+  if (!records || typeof records !== 'object') return false;
+  if (records.demo_limpo === true) return true;
+  if (
+    Array.isArray(records.historico_acoes_lala) &&
+    records.historico_acoes_lala.length > 0
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(records.interacoes_lala) &&
+    records.interacoes_lala.length > 1
+  ) {
+    return true;
+  }
+  const perfil = records.perfil_calibrado as
+    | {
+        calibrado?: boolean;
+        itensMemoriaViva?: unknown[];
+        regrasAprendidasLala?: unknown[];
+      }
+    | undefined;
+  if (perfil?.calibrado) return true;
+  if (
+    Array.isArray(perfil?.itensMemoriaViva) &&
+    perfil.itensMemoriaViva.length > 0
+  ) {
+    return true;
+  }
+  if (
+    Array.isArray(perfil?.regrasAprendidasLala) &&
+    perfil.regrasAprendidasLala.length > 0
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function exportFullBackupPayload(): Promise<AppBackupPayload> {
   const meta = await getSyncMetadata();
   const records: Record<string, unknown> = {};
@@ -290,12 +331,14 @@ export async function exportFullBackupPayload(): Promise<AppBackupPayload> {
     }
   }
 
-  const updatedAt = meta.updatedAt || Date.now();
+  const hasCustom = hasRealUserCustomizations(records);
+  const updatedAt = hasCustom ? meta.updatedAt || Date.now() : meta.updatedAt || 0;
+
   return {
     appName: 'Casa da Lala',
     schemaVersion: 5,
     updatedAt,
-    updatedAtISO: new Date(updatedAt).toISOString(),
+    updatedAtISO: updatedAt > 0 ? new Date(updatedAt).toISOString() : '',
     deviceInfo:
       typeof navigator !== 'undefined' ? navigator.userAgent : 'Web Client',
     records,
@@ -312,13 +355,100 @@ export async function importFullBackupPayload(
   }
 
   const now = Date.now();
+  const effectiveUpdatedAt = payload.updatedAt || now;
   await updateSyncMetadata({
-    updatedAt: payload.updatedAt || now,
+    updatedAt: effectiveUpdatedAt,
     updatedAtISO:
-      payload.updatedAtISO || new Date(payload.updatedAt || now).toISOString(),
+      payload.updatedAtISO || new Date(effectiveUpdatedAt).toISOString(),
     lastSyncedAt: now,
     lastSyncedAtISO: new Date(now).toISOString(),
     syncStatus: 'synced',
     lastError: null,
   });
+}
+
+// Synchronizes local state with the server's /api/sync/snapshot endpoint so that
+// Preview, Web Version, and Mobile PWA share state automatically in real time.
+export async function syncSnapshotWithServer(
+  forcePush = false
+): Promise<{
+  action: 'pulled' | 'pushed' | 'noop';
+  buildVersion?: string;
+}> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return { action: 'noop' };
+  }
+
+  try {
+    const localPayload = await exportFullBackupPayload();
+    const localHasCustom = hasRealUserCustomizations(localPayload.records);
+    const localTime = localPayload.updatedAt || 0;
+
+    if (forcePush && (localHasCustom || localTime > 0)) {
+      const pushPayload = {
+        ...localPayload,
+        updatedAt: localTime || Date.now(),
+      };
+      const res = await fetch('/api/sync/snapshot?force=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pushPayload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return { action: 'pushed', buildVersion: data.buildVersion };
+      }
+      return { action: 'noop' };
+    }
+
+    const getRes = await fetch('/api/sync/snapshot', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!getRes.ok) return { action: 'noop' };
+
+    const data = await getRes.json();
+    const remoteSnap = data?.snapshot as AppBackupPayload | null;
+    const remoteTime = Number(remoteSnap?.updatedAt) || 0;
+    const remoteHasCustom = remoteSnap
+      ? hasRealUserCustomizations(remoteSnap.records)
+      : false;
+
+    // 1. If server has a newer snapshot (or local is just untouched default data while server has real user data), pull it!
+    if (
+      remoteSnap &&
+      remoteSnap.records &&
+      ((remoteHasCustom && !localHasCustom) ||
+        (remoteTime > localTime + 1000 && (remoteHasCustom || localTime === 0)))
+    ) {
+      await importFullBackupPayload(remoteSnap);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('lala-backup-restored'));
+      }
+      return { action: 'pulled', buildVersion: data?.buildVersion };
+    }
+
+    // 2. If local has real user activity and is newer than server (or server has no snapshot yet), push to server!
+    if (
+      (localHasCustom || localTime > 0) &&
+      (!remoteSnap ||
+        (!remoteHasCustom && localHasCustom) ||
+        localTime > remoteTime + 1000)
+    ) {
+      const pushPayload = {
+        ...localPayload,
+        updatedAt: localTime || Date.now(),
+      };
+      await fetch('/api/sync/snapshot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pushPayload),
+      });
+      return { action: 'pushed', buildVersion: data?.buildVersion };
+    }
+
+    return { action: 'noop', buildVersion: data?.buildVersion };
+  } catch {
+    return { action: 'noop' };
+  }
 }

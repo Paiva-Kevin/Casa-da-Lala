@@ -26,27 +26,76 @@
     <script type="module" src="/src/main.tsx"></script>
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          if ('caches' in window) {
-            caches.keys().then((names) => {
-              names.forEach((name) => {
-                if (name.includes('v8') || name.includes('v7') || name.includes('v6') || name.includes('v5') || name.includes('v4') || name.includes('v3')) {
-                  caches.delete(name);
+        const CURRENT_SW_VERSION = 'casa-da-lala-offline-v14';
+        let isReloadingForSw = false;
+
+        const reloadOnceForUpdate = () => {
+          if (isReloadingForSw) return;
+          const lastReload = Number(sessionStorage.getItem('lala_sw_reload_ts') || '0');
+          if (Date.now() - lastReload < 8000) return;
+          isReloadingForSw = true;
+          sessionStorage.setItem('lala_sw_reload_ts', String(Date.now()));
+          window.location.reload();
+        };
+
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data && event.data.type === 'SW_UPDATED_FORCE_RELOAD' && event.data.hadLegacyCache) {
+            reloadOnceForUpdate();
+          }
+        });
+
+        window.addEventListener('load', async () => {
+          try {
+            if ('caches' in window) {
+              const names = await caches.keys();
+              let purgedAny = false;
+              for (const name of names) {
+                if (
+                  name !== CURRENT_SW_VERSION &&
+                  name !== 'casa-da-lala-fonts-v4' &&
+                  (name.includes('workbox') || name.includes('casa-da-lala-offline'))
+                ) {
+                  await caches.delete(name);
+                  purgedAny = true;
                 }
-              });
+              }
+              const savedVer = localStorage.getItem('casa_lala_sw_version');
+              localStorage.setItem('casa_lala_sw_version', CURRENT_SW_VERSION);
+              if (purgedAny && savedVer && savedVer !== CURRENT_SW_VERSION) {
+                reloadOnceForUpdate();
+                return;
+              }
+            }
+
+            const reg = await navigator.serviceWorker.register('/sw.js?v=14', {
+              scope: '/',
+              updateViaCache: 'none',
+            });
+            reg.update();
+            if (reg.waiting) {
+              reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+            }
+            reg.addEventListener('updatefound', () => {
+              const newWorker = reg.installing;
+              if (newWorker) {
+                newWorker.addEventListener('statechange', () => {
+                  if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                    newWorker.postMessage({ type: 'SKIP_WAITING' });
+                  }
+                });
+              }
+            });
+          } catch (err) {
+            console.debug('Service Worker registration fallback:', err);
+          }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            navigator.serviceWorker.getRegistration().then((reg) => {
+              if (reg) reg.update();
             });
           }
-          navigator.serviceWorker
-            .register('/sw.js', { scope: '/' })
-            .then((reg) => {
-              reg.update();
-              if (reg.waiting) {
-                reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-              }
-            })
-            .catch((err) => {
-              console.debug('Service Worker registration fallback:', err);
-            });
         });
       }
     </script>

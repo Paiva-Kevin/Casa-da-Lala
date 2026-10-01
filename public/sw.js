@@ -1,9 +1,7 @@
-const CACHE_NAME = 'casa-da-lala-offline-v9';
-const FONT_CACHE_NAME = 'casa-da-lala-fonts-v3';
+const CACHE_NAME = 'casa-da-lala-offline-v14';
+const FONT_CACHE_NAME = 'casa-da-lala-fonts-v4';
 
 const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
   '/icon.svg',
   '/pwa-192x192.png',
@@ -13,6 +11,7 @@ const PRECACHE_ASSETS = [
 ];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(PRECACHE_ASSETS).catch((err) => {
@@ -20,20 +19,52 @@ self.addEventListener('install', (event) => {
       });
     })
   );
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME && name !== FONT_CACHE_NAME)
-          .map((name) => caches.delete(name))
+    (async () => {
+      const cacheNames = await caches.keys();
+      let hadLegacyCache = false;
+
+      await Promise.all(
+        cacheNames.map(async (name) => {
+          if (name !== CACHE_NAME && name !== FONT_CACHE_NAME) {
+            if (
+              name.includes('workbox') ||
+              name.includes('casa-da-lala-offline')
+            ) {
+              hadLegacyCache = true;
+            }
+            await caches.delete(name);
+          }
+        })
       );
-    })
+
+      await self.clients.claim();
+
+      // If this client was previously stuck on an old Workbox or offline cache,
+      // notify all open windows and navigate them to the fresh network build.
+      const windowClients = await self.clients.matchAll({
+        type: 'window',
+        includeUncontrolled: true,
+      });
+      for (const client of windowClients) {
+        client.postMessage({
+          type: 'SW_UPDATED_FORCE_RELOAD',
+          version: CACHE_NAME,
+          hadLegacyCache,
+        });
+        if (hadLegacyCache && 'navigate' in client) {
+          try {
+            await client.navigate(client.url);
+          } catch {
+            // ignore navigation restriction if any
+          }
+        }
+      }
+    })()
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
@@ -56,7 +87,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-First strategy for Google Fonts
+  // Cache-First strategy for Google Fonts only
   if (
     url.hostname.includes('fonts.googleapis.com') ||
     url.hostname.includes('fonts.gstatic.com')
@@ -79,32 +110,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests (HTML): Network-First with Offline Cache Fallback
+  // Navigation requests (HTML): Strict Network-First (bypassing HTTP cache) with Offline Cache Fallback
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request)
+      fetch(request, { cache: 'no-store' })
         .then((response) => {
           if (response && response.status === 200) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(request, copy.clone());
+              cache.put('/index.html', copy);
+            });
           }
           return response;
         })
         .catch(async () => {
           const cachedPage = await caches.match(request);
           if (cachedPage) return cachedPage;
-          return caches.match('/index.html');
+          const cachedIndex = await caches.match('/index.html');
+          if (cachedIndex) return cachedIndex;
+          return Response.error();
         })
     );
     return;
   }
 
-  // Same-origin static assets: Network-First with Offline Cache Fallback
+  // Same-origin static assets: Strict Network-First with Offline Cache Fallback
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async (cache) => {
         try {
-          const response = await fetch(request);
+          const response = await fetch(request, { cache: 'no-cache' });
           if (response && response.status === 200) {
             cache.put(request, response.clone());
           }

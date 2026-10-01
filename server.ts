@@ -1,21 +1,77 @@
 import "dotenv/config";
 import express from "express";
+import fs from "fs";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
 const PORT = Number(process.env.PORT) || 3000;
+const APP_BUILD_VERSION = "v14.2";
+const DATA_DIR = path.join(process.cwd(), ".data");
+const SNAPSHOT_FILE = path.join(DATA_DIR, "cloud_snapshot.json");
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let cachedServerSnapshot: any = null;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function readServerSnapshot(): any {
+  if (cachedServerSnapshot) return cachedServerSnapshot;
+  try {
+    if (fs.existsSync(SNAPSHOT_FILE)) {
+      const raw = fs.readFileSync(SNAPSHOT_FILE, "utf-8");
+      cachedServerSnapshot = JSON.parse(raw);
+      return cachedServerSnapshot;
+    }
+  } catch (err) {
+    console.warn("Aviso ao ler snapshot local do servidor:", err);
+  }
+  return null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function writeServerSnapshot(payload: any): void {
+  cachedServerSnapshot = payload;
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(payload), "utf-8");
+  } catch (err) {
+    console.warn("Aviso ao salvar snapshot local do servidor:", err);
+  }
+}
 
 const CHAT_MODELS = [
   "gemini-3.8-flash",
-  "gemini-2.5-flash",
   "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3-flash-preview",
+  "gemini-3.1-flash-lite-preview",
 ];
 
 const TTS_MODELS = [
   "gemini-3.8-flash-lite-tts",
-  "gemini-2.5-flash-preview-tts",
+  "gemini-3.8-flash-tts",
 ];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extrairJsonSeguro(raw: string): any {
+  const limpo = (raw || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+  try {
+    return JSON.parse(limpo);
+  } catch {
+    const ini = limpo.indexOf("{");
+    const fim = limpo.lastIndexOf("}");
+    if (ini >= 0 && fim > ini) {
+      return JSON.parse(limpo.slice(ini, fim + 1));
+    }
+    throw new Error("JSON inválido retornado pelo modelo");
+  }
+}
 
 async function startServer() {
   const app = express();
@@ -26,11 +82,85 @@ async function startServer() {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
     if (req.method === "OPTIONS") {
       res.status(204).end();
       return;
     }
     next();
+  });
+
+  // Prevent browser/SW caching of HTML entrypoints and Service Worker scripts in both dev and prod
+  app.use((req, res, next) => {
+    if (
+      req.path === "/" ||
+      req.path === "/index.html" ||
+      req.path === "/sw.js" ||
+      req.path === "/registerSW.js" ||
+      req.path.startsWith("/workbox-")
+    ) {
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate"
+      );
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
+    }
+    next();
+  });
+
+  app.get("/api/version", (_req, res) => {
+    res.json({
+      buildVersion: APP_BUILD_VERSION,
+      serverTime: Date.now(),
+    });
+  });
+
+  // Automatic Cross-Origin / Cross-Device Cloud Snapshot Sync (Preview <-> Web <-> Mobile)
+  app.get("/api/sync/snapshot", (_req, res) => {
+    const snap = readServerSnapshot();
+    res.json({
+      buildVersion: APP_BUILD_VERSION,
+      snapshot: snap,
+    });
+  });
+
+  app.post("/api/sync/snapshot", (req, res) => {
+    try {
+      const incoming = req.body;
+      if (!incoming || typeof incoming !== "object" || !incoming.records) {
+        return res.status(400).json({ error: "Snapshot inválido" });
+      }
+      const existing = readServerSnapshot();
+      const incomingTime = Number(incoming.updatedAt) || Date.now();
+      const existingTime = Number(existing?.updatedAt) || 0;
+      const force = Boolean(req.query.force);
+
+      if (force || !existing || incomingTime >= existingTime - 1000) {
+        const toSave = {
+          ...incoming,
+          updatedAt: incomingTime,
+          updatedAtISO: new Date(incomingTime).toISOString(),
+        };
+        writeServerSnapshot(toSave);
+        return res.json({
+          ok: true,
+          updated: true,
+          updatedAt: incomingTime,
+          buildVersion: APP_BUILD_VERSION,
+        });
+      }
+
+      return res.json({
+        ok: true,
+        updated: false,
+        snapshot: existing,
+        buildVersion: APP_BUILD_VERSION,
+      });
+    } catch (err) {
+      console.error("Erro em POST /api/sync/snapshot:", err);
+      return res.status(500).json({ error: "Falha ao salvar snapshot" });
+    }
   });
 
   // Server-side Gemini API endpoint for Lala (Unified Multimodal Agent)
@@ -103,39 +233,48 @@ async function startServer() {
               .join("\n---\n")
           : "Início da conversa.";
 
-      const systemInstruction = `Você é a Lala, a governanta pessoal e assistente de vida do aplicativo "Casa da Lala".
-Você conversa em formato de BATE-PAPO fluido, direto, caloroso e inteligente.
+      const systemInstruction = `Você é a Lala, a governanta pessoal, parceira de decisões e assistente de vida inteligente do aplicativo "Casa da Lala".
+Você conversa em formato de BATE-PAPO humano, acolhedor, perspicaz, proativo e altamente contextualizado.
 
-Contexto atual do aplicativo da usuária (inclui autonomiaLala, tiposAutomatizados e regrasAprendidasLala):
+Contexto completo e Memória Viva da usuária (inclui contas, cartões, rotina, histórico de ações, regrasAprendidasLala e itensMemoriaViva):
 ${JSON.stringify(contextoApp || {})}
 
 Histórico recente da conversa:
 ${historicoFormatado}
 
-MISSÃO PRINCIPAL:
-1. Você administra, filtra e atualiza QUALQUER parte do aplicativo a partir do que a usuária escrever, falar por áudio ou enviar em 1 ou várias imagens/prints/arquivos!
-2. REGRAS APRENDIDAS E CONFIRMAÇÃO PROGRESSIVA:
-   - Respeite rigorosamente as "regrasAprendidasLala" e "instrucoesPersonalizadasLala" presentes no contextoApp (são correções e preferências que a usuária já te ensinou!).
-   - Por padrão, a usuária prefere revisar e CONFIRMAR cada ação antes de alterar o app (exceto para tipos listados em "tiposAutomatizados" ou quando "autonomiaLala" === "auto"). Portanto, gere sempre as ações completas e detalhadas em "acoesPropostas" e avise na "respostaLala" que você preparou o card da ação logo abaixo para ela conferir, editar se quiser me ensinar algum ajuste, ou confirmar com 1 clique (ou diga que já aplicou caso aquele tipo já esteja automatizado).
-   - Se a usuária der uma instrução de aprendizado (ex: "sempre que eu lançar mercado coloca na conta Itaú", "nunca agende nada antes das 9h", "quando for ração da Nina o valor é 45,90"), preencha "novaRegraAprendida" com essa regra clara para você memorizar para sempre!
-   - Se a usuária pedir no chat para AUTOMATIZAR algum processo (ex: "pode fazer gastos automático agora", "não precisa mais pedir confirmação para tarefas", "automatiza tudo de pets"), inclua os tipos correspondentes em "automatizarTipos". Se ela pedir para voltar a pedir confirmação, inclua em "pedirConfirmacaoTipos".
-3. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
-   - Só gere a ação "GUARDAR_SEGUNDO_CEREBRO" se a usuária pedir EXPLICITAMENTE para guardar/arquivar o documento no Segundo Cérebro.
-   - Se a usuária enviar PRINTS DE CONTA BANCÁRIA, SALDO, EXTRATO, PIX OU CARTÃO DE CRÉDITO (ou der comandos sobre a conta dela): leia todos os números e nomes dos bancos/cartões nas imagens e gere IMEDIATAMENTE as ações "ATUALIZAR_CONTAS_FINANCAS" (com contasAjuste e/ou cartoesAjuste), "REGISTRAR_GASTO" e/ou "REGISTRAR_RECEITA"! Se ela estiver mostrando os saldos atuais das contas dela, defina "substituirExistentes": true em ATUALIZAR_CONTAS_FINANCAS caso ela peça para deixar apenas as contas dela.
-   - Se a usuária enviar PRINTS DE HORÁRIOS, AGENDA, CALENDÁRIO OU AULAS: extraia os eventos/disciplinas e gere "AGENDAR_COMPROMISSO" e/ou "ATUALIZAR_GRADE_UERJ".
-   - Se enviar PRINTS/ARQUIVOS DE DIETA, CARDÁPIO OU MERCADO: extraia as refeições e ingredientes e gere "ATUALIZAR_DIETA_E_COMPRAS" ou "CRIAR_LISTA_COMPRAS".
-   - Se enviar PRINTS/ARQUIVOS DE TAREFAS, PROJETOS OU TREINO: gere "CRIAR_TAREFA", "ATUALIZAR_PROJETOS_TRABALHO" ou "ATUALIZAR_TREINO".
-4. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você preparou ou atualizou no app!
+DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
+1. VOCÊ APRENDE CONTINUAMENTE SOBRE A USUÁRIA EM 5 DIMENSÕES:
+   Sempre que a usuária conversar, enviar prints, tomar uma decisão, falar da rotina ou explicar como quer algo, extraia aprendizados concretos no array "aprendizadosExtraidos" usando uma das categorias:
+   - "contexto": fatos sobre a vida dela, bancos que usa, saldos, matérias da UERJ, trabalho (CDT/RCR), saúde, metas ou pets (Nina e Tobias).
+   - "acao_usuario": como ela prefere que ações sejam lançadas (ex: qual conta usar, categorias preferidas, formato de tarefas).
+   - "decisao": decisões que ela tomou, prioridades que escolheu ou critérios que usa para decidir.
+   - "rotina": horários habituais, dias de aula/trabalho/treino, sono, refeições e rituais da semana.
+   - "forma_de_uso": como ela gosta de usar você (a Lala), o nível de detalhe que prefere e o que espera quando manda prints ou áudios.
+2. USE O QUE VOCÊ JÁ SABE NA CONVERSA:
+   - Consulte "itensMemoriaViva", "regrasAprendidasLala" e "ultimasAcoesNoApp" no contextoApp. Conecte os pontos! Por exemplo, se o saldo mudar, comente como fica o Dinheiro Livre Hoje; se ela agendar algo, considere a prontidão, o sono e as aulas da UERJ/CDT.
+3. LEITURA DE PRINTS BANCÁRIOS, SALDOS, FATURAS E ARQUIVOS (CRÍTICO):
+   - NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de bancos, contas, saldos, Pix, faturas, horários, dietas ou treinos!
+   - Só gere "GUARDAR_SEGUNDO_CEREBRO" se ela pedir EXPLICITAMENTE para arquivar no Segundo Cérebro.
+   - Se ela enviar PRINT DE CONTA BANCÁRIA / SALDO / EXTRATO / CARTÃO ou pedir para atualizar o saldo ("atualize meu saldo", "meu saldo está X", "tenho X no banco Y", "criar conta"): leia atentamente todos os bancos e valores e gere IMEDIATAMENTE a ação "ATUALIZAR_CONTAS_FINANCAS" preenchendo "contasAjuste": [{ "nome": "Nome do Banco", "saldoAtual": 1234.56 }] e/ou "cartoesAjuste"!
+   - Se ela pedir "atualize meu saldo" sem informar o valor exato ainda, gere mesmo assim a ação "ATUALIZAR_CONTAS_FINANCAS" com as contas atuais dela para que ela possa editar o valor direto no card ou responder no chat! O aplicativo atualizará o saldo se a conta já existir e CRIARÁ A CONTA AUTOMATICAMENTE caso ela ainda não exista!
+4. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
+   - Se a usuária pedir para automatizar um tipo de ação (ex: "automatize atualizações de saldo", "pode fazer gastos direto"), preencha "automatizarTipos". Se pedir para voltar a confirmar, preencha "pedirConfirmacaoTipos".
 
 Retorne SEMPRE um objeto JSON válido exatamente neste formato:
 {
   "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
   "transcricaoAudioUsuario": "string opcional se enviou áudio",
-  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você preparou/atualizou",
+  "respostaLala": "Sua resposta natural, inteligente e contextualizada em pt-BR, detalhando exatamente os valores/bancos/dados que você identificou e preparou para ela",
   "tituloCard": "Resumo curto em até 5 palavras",
   "tags": ["Tag1", "Tag2"],
-  "novaRegraAprendida": "string opcional quando a usuária ensinar um padrão ou preferência para as próximas vezes",
-  "automatizarTipos": ["REGISTRAR_GASTO"],
+  "novaRegraAprendida": "string opcional resumindo uma preferência ou regra ensinada pela usuária",
+  "aprendizadosExtraidos": [
+    {
+      "categoria": "contexto" | "acao_usuario" | "decisao" | "rotina" | "forma_de_uso",
+      "texto": "Descrição clara e útil do que você aprendeu sobre a usuária nesta interação"
+    }
+  ],
+  "automatizarTipos": [],
   "pedirConfirmacaoTipos": [],
   "matrizDecisao": {
     "cenarioA": "string opcional",
@@ -145,12 +284,12 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
   "acoesPropostas": [
     {
       "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
-      "titulo": "Título claro da ação executada (ex: Atualizar saldo Nubank para R$ 1.450,00)",
-      "detalhe": "Explicação curta",
+      "titulo": "Título claro da ação (ex: Atualizar saldo Nubank para R$ 1.450,00)",
+      "detalhe": "Explicação curta do impacto no app",
       "substituirExistentes": false,
       "texto": "string opcional (para CRIAR_TAREFA, REGISTRAR_GASTO, REGISTRAR_RECEITA)",
       "valor": 0,
-      "categoriaGasto": "Mercado" | "Pets" | "Transporte & UERJ" | "Saúde & Corpo" | "Lazer & Outros" | "Fixos & Reserva",
+      "categoriaGasto": "Mercado" | "Pets" | "Transporte" | "Estudos & UERJ" | "Lazer & Outros" | "Moradia & Fixos" | "Dívida",
       "srpe": 0,
       "contasAjuste": [{ "nome": "Nome do Banco/Conta", "saldoAtual": 1234.56 }],
       "cartoesAjuste": [{ "nome": "Nome do Cartão", "faturaAtual": 500.00, "limiteTotal": 3000.00, "vencimentoDia": 10 }],
@@ -215,11 +354,12 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       }
       parts.push({ text: promptFinal });
 
-      let response = null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let parsed: any = null;
       let lastErr: unknown = null;
       for (const modelName of CHAT_MODELS) {
         try {
-          response = await ai.models.generateContent({
+          const response = await ai.models.generateContent({
             model: modelName,
             contents: parts,
             config: {
@@ -227,22 +367,23 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
               responseMimeType: "application/json",
             },
           });
-          if (response?.text) break;
+          if (response?.text) {
+            const candidate = extrairJsonSeguro(response.text);
+            if (candidate && typeof candidate.respostaLala === "string") {
+              parsed = candidate;
+              break;
+            }
+          }
         } catch (err) {
           lastErr = err;
           console.warn(`Fallback de modelo em /api/lala/interact (${modelName}):`, err);
         }
       }
 
-      if (!response) {
-        throw lastErr || new Error("Nenhum modelo Gemini respondeu.");
+      if (!parsed) {
+        throw lastErr || new Error("Nenhum modelo Gemini respondeu com JSON válido.");
       }
 
-      const rawText = (response.text || "{}")
-        .replace(/^```json\s*/i, "")
-        .replace(/```\s*$/i, "")
-        .trim();
-      const parsed = JSON.parse(rawText);
       return res.json(parsed);
     } catch (error: unknown) {
       console.error("Erro em /api/lala/interact:", error);
@@ -367,15 +508,33 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       server: {
         middlewareMode: true,
         hmr: false,
-        watch: null,
       },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (
+            filePath.endsWith("sw.js") ||
+            filePath.endsWith("index.html") ||
+            filePath.includes("workbox-")
+          ) {
+            res.setHeader(
+              "Cache-Control",
+              "no-store, no-cache, must-revalidate, proxy-revalidate"
+            );
+          }
+        },
+      })
+    );
     app.get("*", (_req, res) => {
+      res.setHeader(
+        "Cache-Control",
+        "no-store, no-cache, must-revalidate, proxy-revalidate"
+      );
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

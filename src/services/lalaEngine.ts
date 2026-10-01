@@ -1,12 +1,13 @@
 // Unified Local & Cloud Multimodal Intelligence Engine for Lala
 // Automatically understands commands, uploaded files/images (diet, UERJ schedule, workouts, receipts, or vault storage), expenses, tasks, pet care, vents, daydreams, and questions.
 
-import { GoogleGenAI } from "@google/genai";
 import {
   AcaoGovernanta,
   AnexoLala,
   ArquivoRepositorio,
+  CategoriaAprendizadoLala,
   InteracaoGovernanta,
+  ItemAprendizadoLala,
   MatrizDecisaoLala,
   ModoInteracaoLala,
 } from "../types/lala";
@@ -33,6 +34,8 @@ export interface LalaContextSnapshot {
   autonomiaLala?: "auto" | "confirmar";
   tiposAutomatizados?: AcaoGovernanta["tipo"][];
   regrasAprendidasLala?: string[];
+  itensMemoriaViva?: ItemAprendizadoLala[];
+  ultimasAcoesNoApp?: string[];
   instrucoesPersonalizadasLala?: string;
   horarioAcordar?: string;
   horarioDormir?: string;
@@ -875,33 +878,163 @@ export function processarMensagemLocalLala(
     };
   }
 
-  // CASO 5: Calibrar / Alterar Saldo Bancário por voz/texto
-  const matchSaldo = lower.match(
-    /(?:saldo|conta|nubank|itaú|itau|banco).*?(?:para|é|e|em|r\$)\s*(\d+(?:[.,]\d{1,2})?)/i
-  );
-  if (matchSaldo) {
-    const novoSaldo = parseFloat(matchSaldo[1].replace(",", "."));
-    if (!isNaN(novoSaldo)) {
-      const nomeConta = lower.includes("itaú") || lower.includes("itau")
-        ? "Itaú / Recebimentos"
-        : lower.includes("reserva")
-        ? "Reserva Emergência"
-        : "Nubank (Conta / Pix)";
+  // CASO 5: Calibrar / Alterar Saldo Bancário ou Criar Conta por voz/texto/print
+  const parseValorMoedaBR = (rawNum: string): number => {
+    const s = rawNum.trim();
+    if (!s) return NaN;
+    // Ex: "1.250,50" -> "1250.50"
+    if (s.includes(".") && s.includes(",")) {
+      return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    }
+    // Ex: "1.500" (milhar com 3 dígitos após ponto)
+    if (/^\d{1,3}(\.\d{3})+$/.test(s)) {
+      return parseFloat(s.replace(/\./g, ""));
+    }
+    return parseFloat(s.replace(",", "."));
+  };
+
+  const BANCOS_CONHECIDOS: { chaves: string[]; nomePadrao: string }[] = [
+    { chaves: ["nubank", "nu ", "roxinho"], nomePadrao: "Nubank (Conta / Pix)" },
+    { chaves: ["itaú", "itau"], nomePadrao: "Itaú (Bolsa UERJ & CDT)" },
+    { chaves: ["inter", "banco inter"], nomePadrao: "Banco Inter" },
+    { chaves: ["picpay", "pic pay"], nomePadrao: "PicPay" },
+    { chaves: ["mercado pago", "mercadopago"], nomePadrao: "Mercado Pago" },
+    { chaves: ["santander"], nomePadrao: "Santander" },
+    { chaves: ["bradesco"], nomePadrao: "Bradesco" },
+    { chaves: ["caixa", "cef"], nomePadrao: "Caixa" },
+    { chaves: ["c6", "c6 bank"], nomePadrao: "C6 Bank" },
+    { chaves: ["xp", "banco xp"], nomePadrao: "XP" },
+    { chaves: ["btg"], nomePadrao: "BTG Pactual" },
+    {
+      chaves: ["reserva", "caixinha", "poupança", "poupanca", "quitação", "quitacao"],
+      nomePadrao: "Reserva / Caixinha Quitação",
+    },
+  ];
+
+  const resolverNomeConta = (trecho: string): string => {
+    const tLower = trecho.toLowerCase();
+    // 1. Tenta casar com uma conta que a usuária já tem no app
+    if (ctx.contasBancarias && ctx.contasBancarias.length > 0) {
+      for (const c of ctx.contasBancarias) {
+        const palavraChave = c.nome
+          .toLowerCase()
+          .replace(/[()/-]/g, " ")
+          .split(/\s+/)
+          .find(
+            (w) =>
+              w.length >= 3 &&
+              !["conta", "banco", "pix", "corrente", "bolsa"].includes(w)
+          );
+        if (palavraChave && tLower.includes(palavraChave)) {
+          return c.nome;
+        }
+      }
+    }
+    // 2. Tenta casar com catálogo de bancos conhecidos
+    for (const b of BANCOS_CONHECIDOS) {
+      if (b.chaves.some((ch) => tLower.includes(ch))) {
+        return b.nomePadrao;
+      }
+    }
+    // 3. Fallback para primeira conta da usuária ou Nubank
+    return ctx.contasBancarias?.[0]?.nome || "Nubank (Conta / Pix)";
+  };
+
+  const falouDeSaldoOuConta =
+    /\b(saldo|saldos|minha conta|minhas contas|atualizar saldo|atualiza meu saldo|atualize meu saldo|atualizar meu saldo|atualiza o saldo|meu saldo|tenho na conta|tenho no banco|tenho no nubank|tenho no ita[uú]|crie a conta|criar conta|ajustar saldo|mudar saldo)\b/i.test(
+      lower
+    ) ||
+    (anexo?.intencao === "financas" &&
+      !lower.includes("gastei") &&
+      !lower.includes("comprei") &&
+      !lower.includes("paguei"));
+
+  const contasExtraidas: { nome: string; saldoAtual: number }[] = [];
+
+  if (falouDeSaldoOuConta) {
+    // Tenta extrair pares "Banco ... Valor" quando há múltiplos bancos na frase
+    const regexBancoValor =
+      /\b(nubank|ita[uú]|inter|picpay|mercado\s*pago|santander|bradesco|caixa|c6|xp|btg|reserva|caixinha)\b[^0-9\n]{0,25}?(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/gi;
+    let m: RegExpExecArray | null;
+    while ((m = regexBancoValor.exec(textoCombinado)) !== null) {
+      const val = parseValorMoedaBR(m[2]);
+      if (!isNaN(val)) {
+        const nomeResolvido = resolverNomeConta(m[1]);
+        const idxExist = contasExtraidas.findIndex(
+          (c) => c.nome.toLowerCase() === nomeResolvido.toLowerCase()
+        );
+        if (idxExist >= 0) {
+          contasExtraidas[idxExist].saldoAtual = val;
+        } else {
+          contasExtraidas.push({ nome: nomeResolvido, saldoAtual: val });
+        }
+      }
+    }
+
+    // Se não achou múltiplos pares explícitos, procura o valor principal mencionado na frase
+    if (contasExtraidas.length === 0) {
+      const matchValorUnico = textoCombinado.match(
+        /(?:para|é|e|em|est[áa]|ficou|de|r\$|:)\s*(?:r\$\s*)?(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i
+      ) ||
+        textoCombinado.match(
+          /\b(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(?:reais|no\s+nubank|no\s+ita[uú]|na\s+conta|de\s+saldo)?\b/i
+        );
+
+      if (matchValorUnico) {
+        const novoSaldo = parseValorMoedaBR(matchValorUnico[1]);
+        if (!isNaN(novoSaldo)) {
+          const nomeConta = resolverNomeConta(textoCombinado);
+          contasExtraidas.push({ nome: nomeConta, saldoAtual: novoSaldo });
+        }
+      }
+    }
+
+    if (contasExtraidas.length > 0) {
+      const resumoTit = contasExtraidas
+        .map(
+          (c) =>
+            `${c.nome.split(" (")[0]}: R$ ${c.saldoAtual
+              .toFixed(2)
+              .replace(".", ",")}`
+        )
+        .join(" · ");
       acoes.push({
         id: `act-${Date.now()}-saldo`,
         tipo: "ATUALIZAR_CONTAS_FINANCAS",
-        titulo: `Atualizar saldo de ${nomeConta} para R$ ${novoSaldo.toFixed(2).replace(".", ",")}`,
-        detalhe: "Recalcula automaticamente o seu Dinheiro Livre Hoje",
+        titulo: `Atualizar saldo (${resumoTit})`,
+        detalhe:
+          "Atualiza o saldo na aba Finanças e recalcula seu Dinheiro Livre Hoje",
         executada: false,
         payload: {
-          contasAjuste: [{ nome: nomeConta, saldoAtual: novoSaldo }],
+          contasAjuste: contasExtraidas,
+        },
+      });
+    } else {
+      const contasBase =
+        ctx.contasBancarias && ctx.contasBancarias.length > 0
+          ? ctx.contasBancarias
+          : [{ nome: "Nubank (Conta / Pix)", saldoAtual: 0 }];
+      acoes.push({
+        id: `act-${Date.now()}-saldo-ajuste`,
+        tipo: "ATUALIZAR_CONTAS_FINANCAS",
+        titulo: "Atualizar Saldo Bancário",
+        detalhe:
+          "Toque em 'Editar' no card abaixo para digitar o valor exato ou me responda o valor aqui no chat (ex: 'Meu saldo no Nubank é 1.450,00')",
+        executada: false,
+        payload: {
+          contasAjuste: contasBase.map((c) => ({
+            nome: c.nome,
+            saldoAtual: c.saldoAtual,
+          })),
         },
       });
     }
   }
 
-  // Se houver qualquer anexo genérico não capturado acima, sempre oferece Guardar no Segundo Cérebro + Criar Tarefa
-  if (anexo && acoes.length === 0) {
+  // Só oferece Guardar no Segundo Cérebro se a pessoa pediu para guardar/arquivar
+  const pediuParaGuardarLocal =
+    /\b(guardar|salvar|arquivar|segundo c[ée]rebro|cofre)\b/i.test(lower);
+  if (anexo && acoes.length === 0 && pediuParaGuardarLocal) {
     acoes.push({
       id: `act-${Date.now()}-save-generic`,
       tipo: "GUARDAR_SEGUNDO_CEREBRO",
@@ -916,8 +1049,8 @@ export function processarMensagemLocalLala(
     });
   }
 
-  // Verifica se há gasto embutido na fala
-  const gasto = parseGastoNatural(texto);
+  // Verifica se há gasto embutido na fala (somente se NÃO for atualização de saldo bancário)
+  const gasto = !falouDeSaldoOuConta ? parseGastoNatural(texto) : null;
   if (
     gasto &&
     (lower.includes("gastei") ||
@@ -1223,6 +1356,54 @@ export function processarMensagemLocalLala(
     };
   }
 
+  // Extrai aprendizados contínuos nas 5 dimensões mesmo em modo local/offline
+  const aprendizadosExtraidosLocais: {
+    categoria: CategoriaAprendizadoLala;
+    texto: string;
+  }[] = [];
+
+  if (contasExtraidas.length > 0) {
+    aprendizadosExtraidosLocais.push({
+      categoria: "contexto",
+      texto: `Saldos bancários informados: ${contasExtraidas
+        .map(
+          (c) =>
+            `${c.nome} em R$ ${c.saldoAtual.toFixed(2).replace(".", ",")}`
+        )
+        .join(", ")}`,
+    });
+  }
+  if (gasto) {
+    aprendizadosExtraidosLocais.push({
+      categoria: "acao_usuario",
+      texto: `Costuma lançar "${gasto.descricao}" na categoria ${gasto.categoria} (${gasto.metodoSugerido})`,
+    });
+  }
+  if (matchHoraComp) {
+    aprendizadosExtraidosLocais.push({
+      categoria: "rotina",
+      texto: `Compromisso/hábito de rotina mencionado: "${texto.slice(0, 80)}"`,
+    });
+  }
+  if (
+    /\b(sempre que|prefiro que|quero que voc[êe]|nunca |a partir de agora|aprenda que)\b/i.test(
+      lower
+    )
+  ) {
+    aprendizadosExtraidosLocais.push({
+      categoria: "forma_de_uso",
+      texto: texto.trim(),
+    });
+  }
+  if (
+    /\b(decidi|escolhi|vou priorizar|minha prioridade|resolvi)\b/i.test(lower)
+  ) {
+    aprendizadosExtraidosLocais.push({
+      categoria: "decisao",
+      texto: texto.trim(),
+    });
+  }
+
   // Modo "comando"
   if (acoes.length === 0) {
     acoes.push({
@@ -1235,21 +1416,63 @@ export function processarMensagemLocalLala(
     });
   }
 
+  const respostaContextualizadaComando = falouDeSaldoOuConta
+    ? contasExtraidas.length > 0
+      ? `Prontinho! Identifiquei a atualização de saldo para **${contasExtraidas
+          .map(
+            (c) =>
+              `${c.nome} (R$ ${c.saldoAtual.toFixed(2).replace(".", ",")})`
+          )
+          .join(
+            " e "
+          )}**. Deixei o card pronto logo abaixo: basta tocar em **Confirmar** para atualizar seu saldo e recalcular seu Dinheiro Livre Hoje (ou em **Editar** se quiser ajustar algum centavo).`
+      : `Claro! Já deixei o card de **Atualização de Saldo Bancário** pronto aqui embaixo com suas contas atuais (${
+          ctx.contasBancarias && ctx.contasBancarias.length > 0
+            ? ctx.contasBancarias
+                .map(
+                  (c) =>
+                    `${c.nome}: R$ ${c.saldoAtual.toFixed(2).replace(".", ",")}`
+                )
+                .join(" · ")
+            : "Nubank"
+        }).\n\nVocê pode clicar em **Editar** direto no card abaixo para colocar o novo valor e confirmar, ou simplesmente me responder dizendo algo como: *"Meu saldo no Nubank é R$ 1.450,00"*!`
+    : anexo
+    ? `Analisei o arquivo "${anexo.nome}" e deixei as ações prontas abaixo para você revisar e confirmar com 1 toque.`
+    : `Prontinho! Preparei a ação logo abaixo considerando sua rotina de hoje (Prontidão em ${ctx.prontidaoScore}% e R$ ${ctx.dinheiroLivreHoje
+        .toFixed(2)
+        .replace(".", ",")} livres hoje). Confira e confirme ou edite como preferir!`;
+
   return {
     modo: "comando",
     nomeAnexo: anexo?.nome,
     anexo,
-    tituloCard: anexo ? `Arquivo processado: ${anexo.nome}` : `Capturado pela Lala`,
-    tags: anexo ? ["Arquivo", "Ação Rápida"] : ["Acesso Rápido", "Execução"],
-    respostaLala: anexo
-      ? `Analisei o arquivo "${anexo.nome}" e deixei as ações prontas abaixo para você confirmar com 1 toque.`
-      : `Prontinho! Identifiquei o que você precisa e deixei a ação engatilhada. Quer aproveitar e ajustar mais alguma coisa?`,
+    tituloCard: falouDeSaldoOuConta
+      ? "Atualização de Saldo Bancário"
+      : anexo
+      ? `Arquivo processado: ${anexo.nome}`
+      : `Ação preparada pela Lala`,
+    tags: falouDeSaldoOuConta
+      ? ["Finanças", "Saldo Bancário", "Dinheiro Livre"]
+      : anexo
+      ? ["Arquivo", "Ação Rápida"]
+      : ["Acesso Rápido", "Execução"],
+    respostaLala: respostaContextualizadaComando,
     acoesPropostas: acoes,
-    sugestoesResposta: [
-      "Como ficou meu resumo de hoje?",
-      "Agendar um compromisso na agenda",
-      "Dei sachê pra Nina e pro Tobias",
-    ],
+    aprendizadosExtraidos:
+      aprendizadosExtraidosLocais.length > 0
+        ? aprendizadosExtraidosLocais
+        : undefined,
+    sugestoesResposta: falouDeSaldoOuConta
+      ? [
+          "Meu saldo no Nubank é R$ 1.250,00",
+          "Atualizar Itaú para R$ 450,00",
+          "Como ficou meu Dinheiro Livre Hoje?",
+        ]
+      : [
+          "Como ficou meu resumo de hoje?",
+          "Atualizar meu saldo bancário",
+          "Dei sachê pra Nina e pro Tobias",
+        ],
   };
 }
 
@@ -1313,6 +1536,8 @@ export async function consultarLalaUnificada(
     autonomiaLala: rawCtx.autonomiaLala || "confirmar",
     tiposAutomatizados: rawCtx.tiposAutomatizados || [],
     regrasAprendidasLala: rawCtx.regrasAprendidasLala || [],
+    itensMemoriaViva: rawCtx.itensMemoriaViva || [],
+    ultimasAcoesNoApp: rawCtx.ultimasAcoesNoApp || [],
     instrucoesPersonalizadasLala: rawCtx.instrucoesPersonalizadasLala,
     horarioAcordar: rawCtx.horarioAcordar,
     horarioDormir: rawCtx.horarioDormir,
@@ -1378,167 +1603,7 @@ export async function consultarLalaUnificada(
           }
         }
       } catch {
-        // Tenta o próximo endpoint ou o SDK direto
-      }
-    }
-
-    // 2. Fallback Multimodal Direto via SDK (@google/genai) com múltiplos modelos caso o app esteja em hospedagem estática
-    if (!data) {
-      try {
-        const clientKey =
-          (typeof process !== "undefined" && process.env?.GEMINI_API_KEY) ||
-          (import.meta.env && import.meta.env.VITE_GEMINI_API_KEY) ||
-          "";
-        if (clientKey) {
-          const ai = new GoogleGenAI({ apiKey: clientKey });
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const parts: any[] = [];
-          for (const itemAnexo of listaAnexos) {
-            if (itemAnexo?.base64 && itemAnexo.mimeType) {
-              const cleanBase64 = itemAnexo.base64.includes(",")
-                ? itemAnexo.base64.split(",")[1]
-                : itemAnexo.base64;
-              if (
-                itemAnexo.mimeType.startsWith("image/") ||
-                itemAnexo.mimeType.startsWith("audio/") ||
-                itemAnexo.mimeType === "application/pdf"
-              ) {
-                parts.push({
-                  inlineData: {
-                    mimeType: itemAnexo.mimeType.split(";")[0],
-                    data: cleanBase64,
-                  },
-                });
-              }
-            }
-          }
-
-          const historicoFormatado =
-            Array.isArray(ctx.historicoConversa) &&
-            ctx.historicoConversa.length > 0
-              ? ctx.historicoConversa
-                  .slice(-10)
-                  .map(
-                    (h) =>
-                      `[${h.dataHora || "Antes"}] Usuária: ${h.usuario}\nLala: ${h.lala}`
-                  )
-                  .join("\n---\n")
-              : "Início da conversa.";
-
-          const systemInstruction = `Você é a Lala, a governanta pessoal e assistente de vida do aplicativo "Casa da Lala".
-Você conversa em formato de BATE-PAPO fluido, direto, caloroso e inteligente.
-
-Contexto atual do aplicativo da usuária (inclui autonomiaLala, tiposAutomatizados e regrasAprendidasLala):
-${JSON.stringify(ctx)}
-
-Histórico recente da conversa:
-${historicoFormatado}
-
-MISSÃO PRINCIPAL:
-1. Você administra, filtra e atualiza QUALQUER parte do aplicativo a partir do que a usuária escrever, falar por áudio ou enviar em 1 ou várias imagens/prints/arquivos!
-2. REGRAS APRENDIDAS E CONFIRMAÇÃO PROGRESSIVA:
-   - Respeite rigorosamente as "regrasAprendidasLala" e "instrucoesPersonalizadasLala" presentes no contexto (são correções e preferências que a usuária já te ensinou!).
-   - Por padrão, a usuária prefere revisar e CONFIRMAR cada ação antes de alterar o app (exceto para tipos listados em "tiposAutomatizados" ou quando "autonomiaLala" === "auto"). Gere sempre as ações detalhadas em "acoesPropostas" e avise na "respostaLala" que deixou o card abaixo pronto para ela conferir, editar (para te ensinar) ou confirmar com 1 toque.
-   - Se a usuária ensinar uma regra ou preferência no chat, preencha "novaRegraAprendida".
-   - Se a usuária pedir para automatizar algum processo daqui pra frente, inclua os tipos em "automatizarTipos". Se pedir para voltar a confirmar, use "pedirConfirmacaoTipos".
-3. NUNCA responda apenas oferecendo "Guardar imagem no Segundo Cérebro" quando a usuária enviar prints de contas bancárias, faturas, comprovantes, horários, dietas, treinos ou listas!
-   - Só gere a ação "GUARDAR_SEGUNDO_CEREBRO" se a usuária pedir EXPLICITAMENTE para guardar/arquivar o documento no Segundo Cérebro.
-   - Se a usuária enviar PRINTS DE CONTA BANCÁRIA, SALDO, EXTRATO, PIX OU CARTÃO DE CRÉDITO (ou der comandos sobre a conta dela): leia todos os números e nomes dos bancos/cartões nas imagens e gere IMEDIATAMENTE as ações "ATUALIZAR_CONTAS_FINANCAS" (com contasAjuste e/ou cartoesAjuste), "REGISTRAR_GASTO" e/ou "REGISTRAR_RECEITA"!
-   - Se a usuária enviar PRINTS DE HORÁRIOS, AGENDA, CALENDÁRIO OU AULAS: extraia os eventos/disciplinas e gere "AGENDAR_COMPROMISSO" e/ou "ATUALIZAR_GRADE_UERJ".
-   - Se enviar PRINTS/ARQUIVOS DE DIETA, CARDÁPIO OU MERCADO: extraia as refeições e ingredientes e gere "ATUALIZAR_DIETA_E_COMPRAS" ou "CRIAR_LISTA_COMPRAS".
-   - Se enviar PRINTS/ARQUIVOS DE TAREFAS, PROJETOS OU TREINO: gere "CRIAR_TAREFA", "ATUALIZAR_PROJETOS_TRABALHO" ou "ATUALIZAR_TREINO".
-4. Na sua "respostaLala", confirme claramente em tom de conversa o que você leu nos prints/mensagens e quais valores/itens você preparou ou atualizou no app!
-
-Retorne SEMPRE um objeto JSON válido exatamente neste formato:
-{
-  "modoDetectado": "comando" | "devaneio" | "desabafo" | "orientacao" | "informacao",
-  "transcricaoAudioUsuario": "string opcional se enviou áudio",
-  "respostaLala": "Sua resposta natural de bate-papo em pt-BR detalhando o que você preparou/atualizou",
-  "tituloCard": "Resumo curto em até 5 palavras",
-  "tags": ["Tag1", "Tag2"],
-  "novaRegraAprendida": "string opcional se a usuária ensinou uma regra",
-  "automatizarTipos": [],
-  "pedirConfirmacaoTipos": [],
-  "acoesPropostas": [
-    {
-      "tipo": "ATUALIZAR_CONTAS_FINANCAS" | "REGISTRAR_GASTO" | "REGISTRAR_RECEITA" | "CRIAR_TAREFA" | "AGENDAR_COMPROMISSO" | "ALIMENTAR_PETS" | "REGISTRAR_SRPE" | "ATUALIZAR_DIETA_E_COMPRAS" | "CRIAR_LISTA_COMPRAS" | "ATUALIZAR_GRADE_UERJ" | "ATUALIZAR_PETS" | "ATUALIZAR_TREINO" | "ATUALIZAR_PROJETOS_TRABALHO" | "ATUALIZAR_HABITOS" | "ATUALIZAR_METAS_RADAR" | "ATUALIZAR_PERFIL_CHECKIN" | "ALIVIAR_AGENDA_HOJE" | "LIMPAR_DADOS_EXEMPLO" | "GUARDAR_SEGUNDO_CEREBRO",
-      "titulo": "Título claro da ação executada",
-      "detalhe": "Explicação curta",
-      "substituirExistentes": false,
-      "texto": "string opcional",
-      "valor": 0,
-      "categoriaGasto": "Mercado" | "Pets" | "Transporte & UERJ" | "Saúde & Corpo" | "Lazer & Outros" | "Fixos & Reserva",
-      "contasAjuste": [{ "nome": "Nome do Banco/Conta", "saldoAtual": 1234.56 }],
-      "cartoesAjuste": [{ "nome": "Nome do Cartão", "faturaAtual": 500.00, "limiteTotal": 3000.00, "vencimentoDia": 10 }],
-      "compromissos": [{ "titulo": "Nome do evento", "hora": "14:00", "duracaoMin": 60, "diaMes": 30, "mes": 9, "ano": 2026, "local": "", "categoria": "pessoal", "sincronizarGoogle": true }],
-      "refeicoes": [{ "horario": "08:00", "nome": "Café da Manhã", "descricao": "Itens", "proteinaG": 30, "kcal": 400 }],
-      "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],
-      "disciplinas": [{ "nome": "Matéria", "professor": "Prof", "horarioSala": "Seg 08h-10h", "aulasTotaisSemestre": 30, "faltasMax": 7 }],
-      "petsAjuste": [{ "nome": "Nina", "racao": "Royal Canin", "estoqueSaches": 12, "estoqueRacaoKg": 4, "proximaVet": "Em dia" }],
-      "fichaTreino": { "nome": "Treino A", "foco": "Força", "exercicios": [{ "nome": "Agachamento", "series": 4, "reps": "10", "cargaKg": 40, "descansoSeg": 90 }] },
-      "projetos": [{ "nome": "Projeto", "papel": "Autora", "tarefa": "Entrega", "prazo": "Sexta", "prioridade": "alta" }],
-      "habitos": [{ "titulo": "Hábito", "categoria": "Saúde", "metaTexto": "Diário" }],
-      "metas": [{ "titulo": "Meta", "categoria": "Finanças", "prazo": "Dezembro", "marcos": ["Passo 1"] }],
-      "perfilCheckin": { "nomeUsuario": "Nome", "horasSono": 7.5, "energiaFisica": 8, "focoMental": 8 }
-    }
-  ]
-}`;
-
-          const temAudio = listaAnexos.some((a) =>
-            a.mimeType?.startsWith("audio/")
-          );
-          let promptFinal =
-            texto ||
-            (temAudio
-              ? "Ouça com atenção esta mensagem de voz da usuária, transcreva o que ela disse em 'transcricaoAudioUsuario', responda em 'respostaLala' e gere todas as ações correspondentes."
-              : "Analise detalhadamente a(s) imagem(ns) / arquivo(s) em anexo, extraia todos os valores, saldos, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
-
-          const anexosNaoAudio = listaAnexos.filter(
-            (a) => !a.mimeType?.startsWith("audio/")
-          );
-          if (anexosNaoAudio.length > 0) {
-            promptFinal += `\n\n[${anexosNaoAudio.length} arquivo(s)/imagem(ns) anexado(s): ${anexosNaoAudio
-              .map((a) => `"${a.nome}" (${a.mimeType})`)
-              .join(", ")}]`;
-            for (const a of anexosNaoAudio) {
-              if (a.textoExtraido) {
-                promptFinal += `\nConteúdo de "${a.nome}":\n${a.textoExtraido.slice(0, 10000)}`;
-              }
-            }
-          }
-          parts.push({ text: promptFinal });
-
-          const modelsToTry = [
-            "gemini-3.8-flash",
-            "gemini-2.5-flash",
-            "gemini-flash-latest",
-          ];
-          for (const modelName of modelsToTry) {
-            try {
-              const response = await ai.models.generateContent({
-                model: modelName,
-                contents: parts,
-                config: {
-                  systemInstruction,
-                  responseMimeType: "application/json",
-                },
-              });
-              const raw = (response.text || "{}")
-                .replace(/^```json\s*/i, "")
-                .replace(/```\s*$/i, "")
-                .trim();
-              const parsed = JSON.parse(raw);
-              if (parsed && parsed.respostaLala) {
-                data = parsed;
-                break;
-              }
-            } catch {
-              // Tenta próximo modelo
-            }
-          }
-        }
-      } catch {
-        // Fallback para motor local
+        // Tenta o próximo endpoint ou o motor local
       }
     }
 
@@ -1546,38 +1611,144 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       const modoDetectado: ModoInteracaoLala =
         data.modoDetectado || detectarIntencaoNatural(texto, primeiroAnexo);
 
+      // Normaliza as ações propostas pelo Gemini garantindo que ATUALIZAR_CONTAS_FINANCAS sempre tenha contasAjuste válido
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const acoesMapeadas: AcaoGovernanta[] = Array.isArray(data.acoesPropostas)
         ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          data.acoesPropostas.map((a: any, idx: number) => ({
-            id: `ai-act-${Date.now()}-${idx}`,
-            tipo: a.tipo || "CRIAR_TAREFA",
-            titulo: a.titulo || "Ação da Lala",
-            detalhe: a.detalhe || "",
-            executada: false,
-            payload: {
-              texto: a.texto || a.titulo,
-              valor: a.valor,
-              categoriaGasto: a.categoriaGasto,
-              srpe: a.srpe,
-              areaNota: a.areaNota || primeiroAnexo?.areaRepositorio,
-              anexo: primeiroAnexo,
-              substituirExistentes: a.substituirExistentes,
-              compromissos: a.compromissos,
-              refeicoes: a.refeicoes,
-              itensCompras: a.itensCompras,
-              disciplinas: a.disciplinas,
-              contasAjuste: a.contasAjuste,
-              cartoesAjuste: a.cartoesAjuste,
-              petsAjuste: a.petsAjuste,
-              fichaTreino: a.fichaTreino,
-              projetos: a.projetos,
-              habitos: a.habitos,
-              metas: a.metas,
-              perfilCheckin: a.perfilCheckin,
-            },
-          }))
+          data.acoesPropostas.map((a: any, idx: number) => {
+            const rawContas =
+              a.contasAjuste || a.payload?.contasAjuste || a.contas || [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let contasNormalizadas = Array.isArray(rawContas)
+              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                rawContas.map((c: any) => ({
+                  nome: String(
+                    c.nome ||
+                      c.banco ||
+                      c.conta ||
+                      ctx.contasBancarias?.[0]?.nome ||
+                      "Nubank (Conta / Pix)"
+                  ),
+                  saldoAtual: Number(
+                    c.saldoAtual ?? c.saldo ?? c.valor ?? a.valor ?? 0
+                  ),
+                }))
+              : [];
+
+            const rawCartoes =
+              a.cartoesAjuste || a.payload?.cartoesAjuste || a.cartoes || [];
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const cartoesNormalizados = Array.isArray(rawCartoes)
+              ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                rawCartoes.map((cc: any) => ({
+                  nome: String(cc.nome || cc.cartao || "Cartão de Crédito"),
+                  faturaAtual: Number(cc.faturaAtual ?? cc.fatura ?? cc.valor ?? 0),
+                  limiteTotal:
+                    cc.limiteTotal !== undefined
+                      ? Number(cc.limiteTotal)
+                      : undefined,
+                  vencimentoDia:
+                    cc.vencimentoDia !== undefined
+                      ? Number(cc.vencimentoDia)
+                      : undefined,
+                }))
+              : [];
+
+            if (
+              a.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+              contasNormalizadas.length === 0 &&
+              cartoesNormalizados.length === 0
+            ) {
+              // Tenta extrair da resposta ou do texto da usuária
+              const fallbackLocal = processarMensagemLocalLala(
+                `${texto} ${a.titulo || ""} ${data.respostaLala || ""}`,
+                ctx,
+                primeiroAnexo
+              );
+              const acaoSaldoLocal = (fallbackLocal.acoesPropostas || []).find(
+                (ac) => ac.tipo === "ATUALIZAR_CONTAS_FINANCAS"
+              );
+              if (acaoSaldoLocal?.payload?.contasAjuste?.length) {
+                contasNormalizadas = acaoSaldoLocal.payload.contasAjuste;
+              } else if (typeof a.valor === "number" && !isNaN(a.valor)) {
+                contasNormalizadas = [
+                  {
+                    nome:
+                      ctx.contasBancarias?.[0]?.nome || "Nubank (Conta / Pix)",
+                    saldoAtual: a.valor,
+                  },
+                ];
+              } else {
+                contasNormalizadas =
+                  ctx.contasBancarias && ctx.contasBancarias.length > 0
+                    ? ctx.contasBancarias.map((c) => ({
+                        nome: c.nome,
+                        saldoAtual: c.saldoAtual,
+                      }))
+                    : [{ nome: "Nubank (Conta / Pix)", saldoAtual: 0 }];
+              }
+            }
+
+            return {
+              id: `ai-act-${Date.now()}-${idx}`,
+              tipo: a.tipo || "CRIAR_TAREFA",
+              titulo: a.titulo || "Ação da Lala",
+              detalhe: a.detalhe || "",
+              executada: false,
+              payload: {
+                texto: a.texto || a.payload?.texto || a.titulo,
+                valor: a.valor ?? a.payload?.valor,
+                categoriaGasto: a.categoriaGasto || a.payload?.categoriaGasto,
+                srpe: a.srpe ?? a.payload?.srpe,
+                areaNota:
+                  a.areaNota ||
+                  a.payload?.areaNota ||
+                  primeiroAnexo?.areaRepositorio,
+                anexo: primeiroAnexo,
+                substituirExistentes:
+                  a.substituirExistentes ?? a.payload?.substituirExistentes,
+                compromissos: a.compromissos || a.payload?.compromissos,
+                refeicoes: a.refeicoes || a.payload?.refeicoes,
+                itensCompras: a.itensCompras || a.payload?.itensCompras,
+                disciplinas: a.disciplinas || a.payload?.disciplinas,
+                contasAjuste:
+                  contasNormalizadas.length > 0 ? contasNormalizadas : undefined,
+                cartoesAjuste:
+                  cartoesNormalizados.length > 0
+                    ? cartoesNormalizados
+                    : undefined,
+                petsAjuste: a.petsAjuste || a.payload?.petsAjuste,
+                fichaTreino: a.fichaTreino || a.payload?.fichaTreino,
+                projetos: a.projetos || a.payload?.projetos,
+                habitos: a.habitos || a.payload?.habitos,
+                metas: a.metas || a.payload?.metas,
+                perfilCheckin: a.perfilCheckin || a.payload?.perfilCheckin,
+              },
+            };
+          })
         : [];
+
+      // Se a usuária pediu explicitamente para atualizar o saldo/conta e o modelo não incluiu ATUALIZAR_CONTAS_FINANCAS, garante o card interativo!
+      const pediuSaldoExplicito =
+        /\b(atualizar saldo|atualiza meu saldo|atualize meu saldo|atualizar meu saldo|atualiza o saldo|meu saldo|mudar saldo|ajustar saldo)\b/i.test(
+          texto
+        );
+      if (
+        pediuSaldoExplicito &&
+        !acoesMapeadas.some((ac) => ac.tipo === "ATUALIZAR_CONTAS_FINANCAS")
+      ) {
+        const fallbackSaldo = processarMensagemLocalLala(
+          `${texto} ${data.respostaLala || ""}`,
+          ctx,
+          primeiroAnexo
+        );
+        const acaoSaldo = (fallbackSaldo.acoesPropostas || []).find(
+          (ac) => ac.tipo === "ATUALIZAR_CONTAS_FINANCAS"
+        );
+        if (acaoSaldo) {
+          acoesMapeadas.unshift(acaoSaldo);
+        }
+      }
 
       const isVoiceNote = primeiroAnexo?.mimeType?.startsWith("audio/");
       const pediuParaGuardarExplicitamente =
@@ -1618,6 +1789,26 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
           data.novaRegraAprendida.trim()
             ? data.novaRegraAprendida.trim()
             : undefined,
+        aprendizadosExtraidos: Array.isArray(data.aprendizadosExtraidos)
+          ? data.aprendizadosExtraidos
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .filter((ap: any) => ap && typeof ap.texto === "string" && ap.texto.trim())
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              .map((ap: any) => ({
+                categoria: (
+                  [
+                    "contexto",
+                    "acao_usuario",
+                    "decisao",
+                    "rotina",
+                    "forma_de_uso",
+                  ].includes(ap.categoria)
+                    ? ap.categoria
+                    : "contexto"
+                ) as CategoriaAprendizadoLala,
+                texto: ap.texto.trim(),
+              }))
+          : undefined,
         automatizarTipos: Array.isArray(data.automatizarTipos)
           ? data.automatizarTipos
           : undefined,

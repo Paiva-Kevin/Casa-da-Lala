@@ -303,14 +303,50 @@ export function LalaAppActionCard({
   const [regraAprendizadoInput, setRegraAprendizadoInput] = useState("");
 
   const abrirEdicao = () => {
-    setDraftAcao(JSON.parse(JSON.stringify(acao)));
+    const copia: AcaoGovernanta = JSON.parse(JSON.stringify(acao));
+    if (
+      copia.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+      (!copia.payload?.contasAjuste || copia.payload.contasAjuste.length === 0) &&
+      (!copia.payload?.cartoesAjuste || copia.payload.cartoesAjuste.length === 0)
+    ) {
+      copia.payload = {
+        ...copia.payload,
+        contasAjuste: [
+          {
+            nome: "Nubank (Conta / Pix)",
+            saldoAtual: Number(copia.payload?.valor ?? 0),
+          },
+        ],
+      };
+    }
+    setDraftAcao(copia);
     setRegraAprendizadoInput("");
     setEditando(true);
   };
 
   const salvarEdicao = () => {
+    const resumoContas =
+      draftAcao.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+      draftAcao.payload?.contasAjuste &&
+      draftAcao.payload.contasAjuste.length > 0
+        ? draftAcao.payload.contasAjuste
+            .map(
+              (c) =>
+                `${c.nome}: R$ ${Number(c.saldoAtual || 0)
+                  .toFixed(2)
+                  .replace(".", ",")}`
+            )
+            .join(" · ")
+        : "";
+
+    const tituloAtualizado =
+      resumoContas && draftAcao.titulo === acao.titulo
+        ? `Atualizar saldo: ${resumoContas}`
+        : draftAcao.titulo;
+
     const acaoFinal: AcaoGovernanta = {
       ...draftAcao,
+      titulo: tituloAtualizado,
       editadaPeloUsuario: true,
       desfeita: false,
       recusada: false,
@@ -319,6 +355,8 @@ export function LalaAppActionCard({
     const notaGerada =
       regraAprendizadoInput.trim() ||
       `Usuária ajustou "${acao.titulo}" para "${acaoFinal.titulo}"${
+        resumoContas ? ` (${resumoContas})` : ""
+      }${
         acaoFinal.payload?.categoriaGasto
           ? ` (Categoria: ${acaoFinal.payload.categoriaGasto})`
           : ""
@@ -856,8 +894,9 @@ export function LalaAppActionCard({
             )}
 
             {/* Edição de Contas Bancárias */}
-            {draftAcao.payload?.contasAjuste &&
-              draftAcao.payload.contasAjuste.length > 0 && (
+            {(draftAcao.tipo === "ATUALIZAR_CONTAS_FINANCAS" ||
+              (draftAcao.payload?.contasAjuste &&
+                draftAcao.payload.contasAjuste.length > 0)) && (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span
@@ -886,7 +925,7 @@ export function LalaAppActionCard({
                       <Plus size={11} /> Conta
                     </button>
                   </div>
-                  {draftAcao.payload.contasAjuste.map((c, idx) => (
+                  {(draftAcao.payload?.contasAjuste || []).map((c, idx) => (
                     <div key={idx} className="flex items-center gap-2">
                       <input
                         value={c.nome}

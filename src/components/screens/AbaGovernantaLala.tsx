@@ -29,12 +29,14 @@ import {
   AnexoLala,
   ArquivoRepositorio,
   CartaoCredito,
+  CategoriaAprendizadoLala,
   CheckinProntidao,
   Compromisso,
   ContaBancaria,
   Disciplina,
   HabitoDiario,
   InteracaoGovernanta,
+  ItemAprendizadoLala,
   ItemListaCompras,
   ItemRefeicao,
   MatrizDecisaoLala,
@@ -218,6 +220,18 @@ export function AbaGovernantaLala({
   const [processando, setProcessando] = useState(false);
   const [anexosAtuais, setAnexosAtuais] = useState<AnexoLala[]>([]);
   const [painelPerfilAberto, setPainelPerfilAberto] = useState(false);
+
+  // Memória Viva (5 dimensões: contexto, acao_usuario, decisao, rotina, forma_de_uso)
+  const [filtroCategoriaMemoria, setFiltroCategoriaMemoria] = useState<
+    "todas" | CategoriaAprendizadoLala
+  >("todas");
+  const [novaMemoriaCategoria, setNovaMemoriaCategoria] =
+    useState<CategoriaAprendizadoLala>("contexto");
+  const [novaMemoriaTexto, setNovaMemoriaTexto] = useState("");
+  const [editandoMemoriaId, setEditandoMemoriaId] = useState<string | null>(
+    null
+  );
+  const [editandoMemoriaTexto, setEditandoMemoriaTexto] = useState("");
 
   // Voice conversation state
   const [segundosGravacao, setSegundosGravacao] = useState(0);
@@ -609,9 +623,24 @@ export function AbaGovernantaLala({
           autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
           tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
           regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
+          itensMemoriaViva: perfilCalibrado?.itensMemoriaViva || [],
+          ultimasAcoesNoApp: historicoAcoesLala
+            .slice(0, 12)
+            .map(
+              (h) =>
+                `${h.acao.titulo} (${
+                  h.desfeita
+                    ? "desfeita pela usuária"
+                    : h.editadaPeloUsuario
+                    ? "editada pela usuária"
+                    : "confirmada"
+                })`
+            ),
           instrucoesPersonalizadasLala:
             perfilCalibrado?.instrucoesPersonalizadasLala,
-          historicoConversa: interacoes.slice(0, 8).map((it) => ({
+          horarioAcordar: perfilCalibrado?.horarioAcordar,
+          horarioDormir: perfilCalibrado?.horarioDormir,
+          historicoConversa: interacoes.slice(0, 10).map((it) => ({
             usuario: it.mensagemUsuario,
             lala: it.respostaLala,
             dataHora: it.dataHora,
@@ -620,16 +649,68 @@ export function AbaGovernantaLala({
         listaAnexos
       );
 
-      // Processa aprendizados ou pedidos de automação vindos pelo chat
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      // Processa aprendizados nas 5 dimensões ou pedidos de automação vindos pelo chat
       if (setPerfilCalibrado) {
+        if (
+          resultado.aprendizadosExtraidos &&
+          resultado.aprendizadosExtraidos.length > 0
+        ) {
+          setPerfilCalibrado((prev) => {
+            const atuais = [...(prev.itensMemoriaViva || [])];
+            for (const ap of resultado.aprendizadosExtraidos || []) {
+              const limpo = (ap.texto || "").trim();
+              if (
+                limpo &&
+                !atuais.some(
+                  (m) => m.texto.toLowerCase() === limpo.toLowerCase()
+                )
+              ) {
+                atuais.unshift({
+                  id: `mem-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                  categoria: ap.categoria,
+                  texto: limpo,
+                  origem: "conversa",
+                  dataHora: agoraHora,
+                });
+              }
+            }
+            return {
+              ...prev,
+              itensMemoriaViva: atuais.slice(0, 80),
+            };
+          });
+        }
+
         if (resultado.novaRegraAprendida) {
           const regra = resultado.novaRegraAprendida.trim();
           setPerfilCalibrado((prev) => {
             const atuais = prev.regrasAprendidasLala || [];
-            if (atuais.includes(regra)) return prev;
+            const memAtuais = [...(prev.itensMemoriaViva || [])];
+            if (
+              !memAtuais.some(
+                (m) => m.texto.toLowerCase() === regra.toLowerCase()
+              )
+            ) {
+              memAtuais.unshift({
+                id: `mem-regra-${Date.now()}`,
+                categoria: "forma_de_uso",
+                texto: regra,
+                origem: "conversa",
+                dataHora: agoraHora,
+              });
+            }
+            if (atuais.includes(regra)) {
+              return { ...prev, itensMemoriaViva: memAtuais.slice(0, 80) };
+            }
             return {
               ...prev,
               regrasAprendidasLala: [regra, ...atuais],
+              itensMemoriaViva: memAtuais.slice(0, 80),
             };
           });
           showToast(`🧠 Lala aprendeu: "${regra}"`);
@@ -670,11 +751,6 @@ export function AbaGovernantaLala({
           );
         }
       }
-
-      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
 
       const acoesProcessadas = (resultado.acoesPropostas || []).map((ac) => {
         const autoParaEsteTipo = deveExecutarAutomaticamente(ac.tipo);
@@ -1479,6 +1555,62 @@ export function AbaGovernantaLala({
                         {it.matrizDecisao &&
                           renderMatrizComparativa(it.matrizDecisao)}
 
+                        {/* Aprendizados capturados nesta conversa */}
+                        {((it.aprendizadosExtraidos &&
+                          it.aprendizadosExtraidos.length > 0) ||
+                          it.novaRegraAprendida) && (
+                          <div
+                            className="p-2.5 rounded-2xl border space-y-1.5"
+                            style={{
+                              backgroundColor: `${t.primary}10`,
+                              borderColor: `${t.primary}30`,
+                            }}
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <Brain size={12} style={{ color: t.primary }} />
+                              <span
+                                className="text-[10px] font-extrabold uppercase tracking-wider"
+                                style={{ color: t.primary }}
+                              >
+                                Aprendizado capturado pela Lala
+                              </span>
+                            </div>
+                            <div className="space-y-1">
+                              {it.novaRegraAprendida && (
+                                <p
+                                  className="text-[11px] leading-snug"
+                                  style={{ color: t.text }}
+                                >
+                                  • <strong>Regra:</strong>{" "}
+                                  {it.novaRegraAprendida}
+                                </p>
+                              )}
+                              {it.aprendizadosExtraidos?.map((ap, apIdx) => (
+                                <p
+                                  key={apIdx}
+                                  className="text-[11px] leading-snug"
+                                  style={{ color: t.text }}
+                                >
+                                  •{" "}
+                                  <strong style={{ color: t.primary }}>
+                                    {ap.categoria === "contexto"
+                                      ? "Contexto"
+                                      : ap.categoria === "acao_usuario"
+                                      ? "Sua Ação"
+                                      : ap.categoria === "decisao"
+                                      ? "Decisão"
+                                      : ap.categoria === "rotina"
+                                      ? "Rotina"
+                                      : "Forma de Uso"}
+                                    :
+                                  </strong>{" "}
+                                  {ap.texto}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Rodapé do balão: Ouvir resposta + Horário */}
                         <div className="flex items-center justify-between pt-1">
                           <button
@@ -2143,7 +2275,348 @@ export function AbaGovernantaLala({
             </div>
           </div>
 
-          {/* 2. Regras & Preferências que a Lala aprendeu com você */}
+          {/* 2. Memória Viva da Lala em 5 Dimensões (Contexto, Ações, Decisões, Rotina e Forma de Uso) */}
+          <div
+            className="p-4 sm:p-5 rounded-2xl border space-y-4"
+            style={{ backgroundColor: t.card, borderColor: t.border }}
+          >
+            <div>
+              <h3
+                className="text-sm font-bold flex items-center gap-2"
+                style={{ color: t.text }}
+              >
+                <Brain size={16} style={{ color: t.primary }} />
+                Memória Viva da Lala — O que ela aprende sobre você (
+                {(perfilCalibrado?.itensMemoriaViva || []).length})
+              </h3>
+              <p className="text-xs mt-0.5" style={{ color: t.textSoft }}>
+                A Lala absorve automaticamente seu <strong>Contexto</strong>,{" "}
+                <strong>Suas Ações</strong>, <strong>Decisões</strong>,{" "}
+                <strong>Rotina</strong> e a <strong>Forma como você usa ela</strong>{" "}
+                a cada conversa e a cada ação confirmada ou editada.
+              </p>
+            </div>
+
+            {/* Filtros das 5 dimensões */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {(
+                [
+                  { id: "todas", label: "Todas as Dimensões" },
+                  { id: "contexto", label: "1. Contexto" },
+                  { id: "acao_usuario", label: "2. Suas Ações" },
+                  { id: "decisao", label: "3. Decisões" },
+                  { id: "rotina", label: "4. Sua Rotina" },
+                  { id: "forma_de_uso", label: "5. Forma de Uso" },
+                ] as {
+                  id: "todas" | CategoriaAprendizadoLala;
+                  label: string;
+                }[]
+              ).map((cat) => {
+                const ativo = filtroCategoriaMemoria === cat.id;
+                const qtd =
+                  cat.id === "todas"
+                    ? (perfilCalibrado?.itensMemoriaViva || []).length
+                    : (perfilCalibrado?.itensMemoriaViva || []).filter(
+                        (m) => m.categoria === cat.id
+                      ).length;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setFiltroCategoriaMemoria(cat.id)}
+                    className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold border cursor-pointer transition-all flex items-center gap-1.5"
+                    style={{
+                      backgroundColor: ativo ? t.primary : t.bg,
+                      color: ativo ? "#fff" : t.textSoft,
+                      borderColor: ativo ? t.primary : t.border,
+                    }}
+                  >
+                    <span>{cat.label}</span>
+                    <span
+                      className="px-1.5 py-0.2 rounded-full text-[10px] font-mono-num"
+                      style={{
+                        backgroundColor: ativo
+                          ? "rgba(255,255,255,0.22)"
+                          : t.cardSubtle,
+                        color: ativo ? "#fff" : t.textSoft,
+                      }}
+                    >
+                      {qtd}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Ensinar novo aprendizado diretamente em qualquer uma das 5 dimensões */}
+            <div className="flex flex-col sm:flex-row gap-2">
+              <select
+                value={novaMemoriaCategoria}
+                onChange={(e) =>
+                  setNovaMemoriaCategoria(
+                    e.target.value as CategoriaAprendizadoLala
+                  )
+                }
+                className="px-3 py-2 rounded-xl text-xs font-bold border outline-none"
+                style={{
+                  backgroundColor: t.bg,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              >
+                <option value="contexto">Contexto</option>
+                <option value="acao_usuario">Suas Ações</option>
+                <option value="decisao">Decisões</option>
+                <option value="rotina">Sua Rotina</option>
+                <option value="forma_de_uso">Forma de Uso</option>
+              </select>
+              <input
+                value={novaMemoriaTexto}
+                onChange={(e) => setNovaMemoriaTexto(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const limpo = novaMemoriaTexto.trim();
+                    if (!limpo || !setPerfilCalibrado) return;
+                    const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                    setPerfilCalibrado((prev) => ({
+                      ...prev,
+                      itensMemoriaViva: [
+                        {
+                          id: `mem-man-${Date.now()}`,
+                          categoria: novaMemoriaCategoria,
+                          texto: limpo,
+                          origem: "manual",
+                          dataHora: agoraHora,
+                        },
+                        ...(prev.itensMemoriaViva || []),
+                      ],
+                    }));
+                    setNovaMemoriaTexto("");
+                    showToast("🧠 Novo aprendizado salvo na Memória Viva da Lala!");
+                  }
+                }}
+                placeholder="Ensine algo sobre seu contexto, rotina, decisões ou como prefere usar a Lala..."
+                className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                style={{
+                  backgroundColor: t.bg,
+                  color: t.text,
+                  borderColor: t.border,
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const limpo = novaMemoriaTexto.trim();
+                  if (!limpo || !setPerfilCalibrado) return;
+                  const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  });
+                  setPerfilCalibrado((prev) => ({
+                    ...prev,
+                    itensMemoriaViva: [
+                      {
+                        id: `mem-man-${Date.now()}`,
+                        categoria: novaMemoriaCategoria,
+                        texto: limpo,
+                        origem: "manual",
+                        dataHora: agoraHora,
+                      },
+                      ...(prev.itensMemoriaViva || []),
+                    ],
+                  }));
+                  setNovaMemoriaTexto("");
+                  showToast("🧠 Novo aprendizado salvo na Memória Viva da Lala!");
+                }}
+                disabled={!novaMemoriaTexto.trim()}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40"
+                style={{ backgroundColor: t.primary }}
+              >
+                <Plus size={14} /> Memorizar
+              </button>
+            </div>
+
+            {/* Lista de Itens da Memória Viva */}
+            {(() => {
+              const listaMem = (perfilCalibrado?.itensMemoriaViva || []).filter(
+                (m) =>
+                  filtroCategoriaMemoria === "todas" ||
+                  m.categoria === filtroCategoriaMemoria
+              );
+              if (listaMem.length === 0) {
+                return (
+                  <div
+                    className="p-4 rounded-xl border text-xs"
+                    style={{
+                      backgroundColor: t.bg,
+                      borderColor: t.border,
+                      color: t.textSoft,
+                    }}
+                  >
+                    A Lala registrará automaticamente aprendizados aqui conforme você conversar com ela, confirmar, editar ou desfazer ações!
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                  {listaMem.map((item) => {
+                    const labelCat =
+                      item.categoria === "contexto"
+                        ? "Contexto"
+                        : item.categoria === "acao_usuario"
+                        ? "Sua Ação"
+                        : item.categoria === "decisao"
+                        ? "Decisão"
+                        : item.categoria === "rotina"
+                        ? "Rotina"
+                        : "Forma de Uso";
+                    const labelOrigem =
+                      item.origem === "conversa"
+                        ? "Na conversa"
+                        : item.origem === "edicao_acao"
+                        ? "Da sua edição"
+                        : item.origem === "acao_app"
+                        ? "Da sua ação"
+                        : "Ensinado por você";
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-3 rounded-xl border flex items-center justify-between gap-2"
+                        style={{ backgroundColor: t.bg, borderColor: t.border }}
+                      >
+                        {editandoMemoriaId === item.id ? (
+                          <div className="flex-1 flex items-center gap-2">
+                            <input
+                              value={editandoMemoriaTexto}
+                              onChange={(e) =>
+                                setEditandoMemoriaTexto(e.target.value)
+                              }
+                              className="flex-1 px-2.5 py-1.5 rounded-lg text-xs border outline-none"
+                              style={{
+                                backgroundColor: t.card,
+                                color: t.text,
+                                borderColor: t.primary,
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const limpo = editandoMemoriaTexto.trim();
+                                if (!limpo || !setPerfilCalibrado) return;
+                                setPerfilCalibrado((prev) => ({
+                                  ...prev,
+                                  itensMemoriaViva: (
+                                    prev.itensMemoriaViva || []
+                                  ).map((m) =>
+                                    m.id === item.id
+                                      ? { ...m, texto: limpo }
+                                      : m
+                                  ),
+                                }));
+                                setEditandoMemoriaId(null);
+                                showToast("Memória atualizada!");
+                              }}
+                              className="px-2.5 py-1 rounded-lg text-xs font-bold text-white cursor-pointer"
+                              style={{ backgroundColor: t.primary }}
+                            >
+                              Salvar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditandoMemoriaId(null)}
+                              className="px-2 py-1 rounded-lg text-xs border cursor-pointer"
+                              style={{
+                                backgroundColor: t.card,
+                                color: t.textSoft,
+                                borderColor: t.border,
+                              }}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="space-y-1 min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span
+                                  className="px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase"
+                                  style={{
+                                    backgroundColor: `${t.primary}18`,
+                                    color: t.primary,
+                                  }}
+                                >
+                                  {labelCat}
+                                </span>
+                                <span
+                                  className="text-[10px] font-medium"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  {labelOrigem} · {item.dataHora}
+                                </span>
+                              </div>
+                              <p
+                                className="text-xs leading-relaxed"
+                                style={{ color: t.text }}
+                              >
+                                {item.texto}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditandoMemoriaId(item.id);
+                                  setEditandoMemoriaTexto(item.texto);
+                                }}
+                                className="p-1.5 rounded-lg border cursor-pointer"
+                                style={{
+                                  backgroundColor: t.card,
+                                  color: t.textSoft,
+                                  borderColor: t.border,
+                                }}
+                                title="Editar memória"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!setPerfilCalibrado) return;
+                                  setPerfilCalibrado((prev) => ({
+                                    ...prev,
+                                    itensMemoriaViva: (
+                                      prev.itensMemoriaViva || []
+                                    ).filter((m) => m.id !== item.id),
+                                  }));
+                                  showToast("Item removido da memória da Lala.");
+                                }}
+                                className="p-1.5 rounded-lg border cursor-pointer"
+                                style={{
+                                  backgroundColor: t.card,
+                                  color: t.danger,
+                                  borderColor: t.border,
+                                }}
+                                title="Remover memória"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* 2.5. Regras Diretas & Preferências que a Lala aprendeu com você */}
           <div
             className="p-4 sm:p-5 rounded-2xl border space-y-3.5"
             style={{ backgroundColor: t.card, borderColor: t.border }}

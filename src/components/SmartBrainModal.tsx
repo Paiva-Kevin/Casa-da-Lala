@@ -343,6 +343,7 @@ export function SmartBrainModal({
       autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
       tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
       regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
+      itensMemoriaViva: perfilCalibrado?.itensMemoriaViva || [],
       instrucoesPersonalizadasLala:
         perfilCalibrado?.instrucoesPersonalizadasLala,
       horarioAcordar: perfilCalibrado?.horarioAcordar,
