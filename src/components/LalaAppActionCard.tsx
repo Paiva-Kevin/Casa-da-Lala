@@ -235,11 +235,12 @@ export function getNomeAmigavelTipoAcao(tipo: AcaoGovernanta["tipo"]): string {
 
 const CATEGORIAS_GASTO: OrcamentoCategoria["categoria"][] = [
   "Mercado",
-  "Pets",
   "Transporte",
+  "Compras Avulsas",
+  "Moradia & Fixos",
+  "Pets",
   "Estudos & UERJ",
   "Lazer & Outros",
-  "Moradia & Fixos",
   "Dívida",
 ];
 
@@ -319,17 +320,182 @@ export function LalaAppActionCard({
         ],
       };
     }
+
+    if (
+      (copia.tipo === "REGISTRAR_GASTO" || copia.tipo === "REGISTRAR_RECEITA") &&
+      (!copia.payload?.lancamentosAjuste ||
+        copia.payload.lancamentosAjuste.length === 0)
+    ) {
+      const rawData = String(copia.payload?.data || "").trim();
+      const ehSem =
+        copia.payload?.semData === true ||
+        !rawData ||
+        /^(sem\s*data(?:\s*definida)?|n[ãa]o\s*informad|a\s*definir)$/i.test(
+          rawData
+        );
+      copia.payload = {
+        ...copia.payload,
+        lancamentosAjuste: [
+          {
+            descricao: copia.payload?.texto || copia.titulo || "Lançamento",
+            valor: Number(copia.payload?.valor ?? 0),
+            tipo: copia.tipo === "REGISTRAR_RECEITA" ? "receita" : "despesa",
+            status:
+              copia.payload?.statusGasto ||
+              (copia.payload?.recorrente ? "previsto" : "realizado"),
+            data: ehSem ? "" : rawData,
+            diaVencimento: ehSem ? null : copia.payload?.diaVencimento ?? null,
+            semData: ehSem,
+            recorrente: Boolean(copia.payload?.recorrente),
+            categoria: copia.payload?.categoriaGasto || "Mercado",
+            metodo: "Conta / Pix",
+          },
+        ],
+      };
+    } else if (
+      copia.payload?.lancamentosAjuste &&
+      copia.payload.lancamentosAjuste.length > 0
+    ) {
+      copia.payload.lancamentosAjuste = copia.payload.lancamentosAjuste.map(
+        (item) => {
+          const rawData = String(item.data || "").trim();
+          const ehSem =
+            item.semData === true ||
+            !rawData ||
+            /^(sem\s*data(?:\s*definida)?|n[ãa]o\s*informad|a\s*definir)$/i.test(
+              rawData
+            );
+          return {
+            ...item,
+            data: ehSem ? "" : rawData,
+            semData: ehSem,
+          };
+        }
+      );
+    }
+
     setDraftAcao(copia);
     setRegraAprendizadoInput("");
     setEditando(true);
   };
 
   const salvarEdicao = () => {
+    const copiaSalvar: AcaoGovernanta = JSON.parse(JSON.stringify(draftAcao));
+
+    if (
+      copiaSalvar.payload?.lancamentosAjuste &&
+      copiaSalvar.payload.lancamentosAjuste.length > 0
+    ) {
+      copiaSalvar.payload.lancamentosAjuste =
+        copiaSalvar.payload.lancamentosAjuste.map((item) => {
+          const rawD = String(item.data || "").trim();
+          const ehSem =
+            !rawD ||
+            /^(sem\s*data(?:\s*definida)?|n[ãa]o\s*informad|a\s*definir)$/i.test(
+              rawD
+            );
+          const mDia =
+            rawD.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
+            rawD.match(/\bdia\s+(\d{1,2})\b/i) ||
+            rawD.match(/^(\d{1,2})$/);
+          const dNum = mDia ? parseInt(mDia[1], 10) : null;
+          const diaValido =
+            !ehSem && dNum && dNum >= 1 && dNum <= 31 ? dNum : null;
+          const isRec = Boolean(item.recorrente);
+
+          let dataFinal = "Sem data";
+          if (!ehSem) {
+            if (/^\d{1,2}$/.test(rawD) && diaValido) {
+              dataFinal = isRec
+                ? `Todo dia ${String(diaValido).padStart(2, "0")}`
+                : `Dia ${String(diaValido).padStart(2, "0")}`;
+            } else {
+              dataFinal = rawD;
+            }
+          } else if (item.status === "realizado" && !isRec) {
+            dataFinal = "Hoje";
+          }
+
+          return {
+            ...item,
+            valor: Math.max(0, Number(item.valor) || 0),
+            data: dataFinal,
+            diaVencimento: diaValido,
+            semData: ehSem && !(item.status === "realizado" && !isRec),
+            recorrente: isRec,
+            status:
+              item.status || (isRec ? "previsto" : "realizado"),
+            categoria: item.categoria || "Mercado",
+          };
+        });
+
+      const list = copiaSalvar.payload.lancamentosAjuste;
+      const primeiro = list[0];
+      const somaTotal = list.reduce((s, i) => s + (Number(i.valor) || 0), 0);
+      const qtdRec = list.filter((i) => i.recorrente).length;
+
+      copiaSalvar.payload = {
+        ...copiaSalvar.payload,
+        texto: primeiro.descricao,
+        valor: primeiro.valor,
+        categoriaGasto: primeiro.categoria,
+        data: primeiro.data,
+        diaVencimento: primeiro.diaVencimento,
+        semData: primeiro.semData,
+        statusGasto: primeiro.status,
+        recorrente: primeiro.recorrente,
+      };
+
+      if (
+        copiaSalvar.tipo === "REGISTRAR_GASTO" ||
+        copiaSalvar.tipo === "REGISTRAR_RECEITA"
+      ) {
+        if (list.length === 1) {
+          const tagRec = primeiro.recorrente
+            ? "Recorrente Mensal"
+            : primeiro.status === "previsto"
+            ? "Previsto no Mês"
+            : "Pago / Avulso";
+          copiaSalvar.titulo = `${primeiro.descricao} — R$ ${Number(
+            primeiro.valor || 0
+          )
+            .toFixed(2)
+            .replace(".", ",")} (${tagRec} · ${
+            primeiro.semData ? "Sem data" : primeiro.data
+          })`;
+          copiaSalvar.detalhe = `Categoria: ${
+            primeiro.categoria || "Mercado"
+          } · ${tagRec} · Data: ${
+            primeiro.semData ? "Sem data definida" : primeiro.data
+          }`;
+        } else {
+          const rotuloRec =
+            qtdRec === list.length
+              ? "Todos Recorrentes Mensais"
+              : qtdRec > 0
+              ? `${qtdRec} Recorrente(s) & ${list.length - qtdRec} Avulso(s)`
+              : "Gastos Avulsos / Previstos";
+          copiaSalvar.titulo = `${list.length} lançamentos editados (${rotuloRec} · Total R$ ${somaTotal
+            .toFixed(2)
+            .replace(".", ",")})`;
+          copiaSalvar.detalhe = list
+            .slice(0, 4)
+            .map(
+              (i) =>
+                `${i.descricao}: ${i.semData ? "Sem data" : i.data} (${
+                  i.recorrente ? "Recorrente" : "Único"
+                })`
+            )
+            .join(" · ");
+        }
+      }
+    }
+
     const resumoContas =
-      draftAcao.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
-      draftAcao.payload?.contasAjuste &&
-      draftAcao.payload.contasAjuste.length > 0
-        ? draftAcao.payload.contasAjuste
+      copiaSalvar.tipo === "ATUALIZAR_CONTAS_FINANCAS" &&
+      copiaSalvar.payload?.contasAjuste &&
+      copiaSalvar.payload.contasAjuste.length > 0
+        ? copiaSalvar.payload.contasAjuste
             .map(
               (c) =>
                 `${c.nome}: R$ ${Number(c.saldoAtual || 0)
@@ -340,12 +506,12 @@ export function LalaAppActionCard({
         : "";
 
     const tituloAtualizado =
-      resumoContas && draftAcao.titulo === acao.titulo
+      resumoContas && copiaSalvar.titulo === acao.titulo
         ? `Atualizar saldo: ${resumoContas}`
-        : draftAcao.titulo;
+        : copiaSalvar.titulo;
 
     const acaoFinal: AcaoGovernanta = {
-      ...draftAcao,
+      ...copiaSalvar,
       titulo: tituloAtualizado,
       editadaPeloUsuario: true,
       desfeita: false,
@@ -903,155 +1069,17 @@ export function LalaAppActionCard({
             {/* Edição de Lista de Gastos Recorrentes / Lançamentos */}
             {draftAcao.payload?.lancamentosAjuste &&
               draftAcao.payload.lancamentosAjuste.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span
-                      className="text-[10px] font-bold"
-                      style={{ color: t.textSoft }}
+                      className="text-[11px] font-bold"
+                      style={{ color: t.text }}
                     >
-                      Despesas / Pagamentos ({draftAcao.payload.lancamentosAjuste.length} itens — deixe data vazia p/ Sem data)
+                      Itens da Ação ({draftAcao.payload.lancamentosAjuste.length}) — Escolha recorrência, categoria e data (ou deixe vazia p/ Sem data)
                     </span>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setDraftAcao((prev) => ({
-                          ...prev,
-                          payload: {
-                            ...prev.payload,
-                            lancamentosAjuste: [
-                              ...(prev.payload?.lancamentosAjuste || []),
-                              {
-                                descricao: "Nova despesa",
-                                valor: 0,
-                                tipo: "despesa",
-                                status: "previsto",
-                                data: "Sem data",
-                                diaVencimento: null,
-                                semData: true,
-                                recorrente: true,
-                                metodo: "Conta / Pix",
-                                categoria: "Moradia & Fixos",
-                              },
-                            ],
-                          },
-                        }))
-                      }
-                      className="text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
-                      style={{ color: t.primary }}
-                    >
-                      <Plus size={11} /> Despesa
-                    </button>
-                  </div>
-
-                  <div className="space-y-1.5 max-h-72 overflow-y-auto pr-1">
-                    {(draftAcao.payload.lancamentosAjuste || []).map(
-                      (lanc, idx) => (
-                        <div
-                          key={idx}
-                          className="grid grid-cols-12 gap-1.5 items-center"
-                        >
-                          <input
-                            value={lanc.descricao}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setDraftAcao((prev) => {
-                                const list = [
-                                  ...(prev.payload?.lancamentosAjuste || []),
-                                ];
-                                list[idx] = { ...list[idx], descricao: val };
-                                return {
-                                  ...prev,
-                                  payload: {
-                                    ...prev.payload,
-                                    lancamentosAjuste: list,
-                                  },
-                                };
-                              });
-                            }}
-                            placeholder="Descrição"
-                            className="col-span-5 px-2 py-1 rounded-lg border text-xs outline-none"
-                            style={{
-                              backgroundColor: t.bg,
-                              color: t.text,
-                              borderColor: t.border,
-                            }}
-                          />
-                          <input
-                            type="number"
-                            step="0.01"
-                            value={lanc.valor}
-                            onChange={(e) => {
-                              const val = Number(e.target.value) || 0;
-                              setDraftAcao((prev) => {
-                                const list = [
-                                  ...(prev.payload?.lancamentosAjuste || []),
-                                ];
-                                list[idx] = { ...list[idx], valor: val };
-                                return {
-                                  ...prev,
-                                  payload: {
-                                    ...prev.payload,
-                                    lancamentosAjuste: list,
-                                  },
-                                };
-                              });
-                            }}
-                            placeholder="R$"
-                            className="col-span-3 px-2 py-1 rounded-lg border text-xs font-mono-num outline-none"
-                            style={{
-                              backgroundColor: t.bg,
-                              color: t.text,
-                              borderColor: t.border,
-                            }}
-                          />
-                          <input
-                            value={
-                              lanc.semData || lanc.data === "Sem data"
-                                ? ""
-                                : lanc.data || ""
-                            }
-                            onChange={(e) => {
-                              const rawD = e.target.value;
-                              const ehSem =
-                                !rawD.trim() ||
-                                /^(sem\s*data|n[ãa]o\s*informad)/i.test(
-                                  rawD.trim()
-                                );
-                              const mDia =
-                                rawD.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
-                                rawD.match(/\bdia\s+(\d{1,2})\b/i) ||
-                                rawD.match(/^(\d{1,2})$/);
-                              const dNum = mDia ? parseInt(mDia[1], 10) : null;
-                              setDraftAcao((prev) => {
-                                const list = [
-                                  ...(prev.payload?.lancamentosAjuste || []),
-                                ];
-                                list[idx] = {
-                                  ...list[idx],
-                                  data: ehSem ? "Sem data" : rawD,
-                                  diaVencimento:
-                                    !ehSem && dNum && dNum >= 1 && dNum <= 31
-                                      ? dNum
-                                      : null,
-                                  semData: ehSem,
-                                };
-                                return {
-                                  ...prev,
-                                  payload: {
-                                    ...prev.payload,
-                                    lancamentosAjuste: list,
-                                  },
-                                };
-                              });
-                            }}
-                            placeholder="Sem data (ou Dia 10)"
-                            className="col-span-3 px-2 py-1 rounded-lg border text-xs font-mono-num outline-none"
-                            style={{
-                              backgroundColor: t.bg,
-                              color: t.text,
-                              borderColor: t.border,
-                            }}
-                          />
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {draftAcao.payload.lancamentosAjuste.length > 1 && (
+                        <>
                           <button
                             type="button"
                             onClick={() =>
@@ -1061,35 +1089,501 @@ export function LalaAppActionCard({
                                   ...prev.payload,
                                   lancamentosAjuste: (
                                     prev.payload?.lancamentosAjuste || []
-                                  ).filter((_, i) => i !== idx),
+                                  ).map((item) => ({
+                                    ...item,
+                                    recorrente: true,
+                                    status: "previsto",
+                                  })),
                                 },
                               }))
                             }
-                            className="col-span-1 p-1 text-red-500 flex justify-center cursor-pointer"
-                            title="Remover item"
+                            className="px-2 py-1 rounded-lg border text-[10px] font-bold cursor-pointer"
+                            style={{
+                              backgroundColor: `${t.primary}15`,
+                              color: t.primary,
+                              borderColor: `${t.primary}35`,
+                            }}
                           >
-                            <Trash2 size={12} />
+                            🔄 Todos Recorrentes
                           </button>
-                        </div>
-                      )
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftAcao((prev) => ({
+                                ...prev,
+                                payload: {
+                                  ...prev.payload,
+                                  lancamentosAjuste: (
+                                    prev.payload?.lancamentosAjuste || []
+                                  ).map((item) => ({
+                                    ...item,
+                                    recorrente: false,
+                                  })),
+                                },
+                              }))
+                            }
+                            className="px-2 py-1 rounded-lg border text-[10px] font-bold cursor-pointer"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.textSoft,
+                              borderColor: t.border,
+                            }}
+                          >
+                            📅 Todos Únicos/Avulsos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setDraftAcao((prev) => ({
+                                ...prev,
+                                payload: {
+                                  ...prev.payload,
+                                  lancamentosAjuste: (
+                                    prev.payload?.lancamentosAjuste || []
+                                  ).map((item) => ({
+                                    ...item,
+                                    data: "",
+                                    diaVencimento: null,
+                                    semData: true,
+                                  })),
+                                },
+                              }))
+                            }
+                            className="px-2 py-1 rounded-lg border text-[10px] font-bold cursor-pointer"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.action,
+                              borderColor: t.border,
+                            }}
+                          >
+                            Limpar todas as datas
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraftAcao((prev) => ({
+                            ...prev,
+                            payload: {
+                              ...prev.payload,
+                              lancamentosAjuste: [
+                                ...(prev.payload?.lancamentosAjuste || []),
+                                {
+                                  descricao: "Nova despesa",
+                                  valor: 0,
+                                  tipo: "despesa",
+                                  status: "previsto",
+                                  data: "",
+                                  diaVencimento: null,
+                                  semData: true,
+                                  recorrente: true,
+                                  metodo: "Conta / Pix",
+                                  categoria: "Moradia & Fixos",
+                                },
+                              ],
+                            },
+                          }))
+                        }
+                        className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-white flex items-center gap-0.5 cursor-pointer"
+                        style={{ backgroundColor: t.primary }}
+                      >
+                        <Plus size={11} /> Adicionar Item
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                    {(draftAcao.payload.lancamentosAjuste || []).map(
+                      (lanc, idx) => {
+                        const modoRecorrenciaAtual = lanc.recorrente
+                          ? "recorrente"
+                          : lanc.status === "previsto"
+                          ? "previsto_unico"
+                          : "realizado_avulso";
+
+                        return (
+                          <div
+                            key={idx}
+                            className="p-2.5 rounded-xl border space-y-2"
+                            style={{
+                              backgroundColor: t.bg,
+                              borderColor: t.border,
+                            }}
+                          >
+                            {/* Linha 1: Nome da Despesa + Valor R$ + Excluir */}
+                            <div className="grid grid-cols-12 gap-2 items-center">
+                              <div className="col-span-7 sm:col-span-7">
+                                <label
+                                  className="text-[9px] font-bold uppercase block mb-0.5"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  #{idx + 1} Descrição
+                                </label>
+                                <input
+                                  value={lanc.descricao}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setDraftAcao((prev) => {
+                                      const list = [
+                                        ...(prev.payload?.lancamentosAjuste ||
+                                          []),
+                                      ];
+                                      list[idx] = {
+                                        ...list[idx],
+                                        descricao: val,
+                                      };
+                                      return {
+                                        ...prev,
+                                        payload: {
+                                          ...prev.payload,
+                                          lancamentosAjuste: list,
+                                        },
+                                      };
+                                    });
+                                  }}
+                                  placeholder="Ex: Aluguel, Uber, Mercado..."
+                                  className="w-full px-2.5 py-1.5 rounded-lg border text-xs font-semibold outline-none"
+                                  style={{
+                                    backgroundColor: t.card,
+                                    color: t.text,
+                                    borderColor: t.border,
+                                  }}
+                                />
+                              </div>
+
+                              <div className="col-span-4 sm:col-span-4">
+                                <label
+                                  className="text-[9px] font-bold uppercase block mb-0.5"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  Valor (R$)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={lanc.valor === 0 ? "" : lanc.valor}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    const val =
+                                      raw === "" ? 0 : parseFloat(raw) || 0;
+                                    setDraftAcao((prev) => {
+                                      const list = [
+                                        ...(prev.payload?.lancamentosAjuste ||
+                                          []),
+                                      ];
+                                      list[idx] = { ...list[idx], valor: val };
+                                      return {
+                                        ...prev,
+                                        payload: {
+                                          ...prev.payload,
+                                          lancamentosAjuste: list,
+                                        },
+                                      };
+                                    });
+                                  }}
+                                  placeholder="0,00"
+                                  className="w-full px-2.5 py-1.5 rounded-lg border text-xs font-mono-num font-bold outline-none"
+                                  style={{
+                                    backgroundColor: t.card,
+                                    color: t.text,
+                                    borderColor: t.border,
+                                  }}
+                                />
+                              </div>
+
+                              <div className="col-span-1 flex justify-end pt-3.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDraftAcao((prev) => ({
+                                      ...prev,
+                                      payload: {
+                                        ...prev.payload,
+                                        lancamentosAjuste: (
+                                          prev.payload?.lancamentosAjuste || []
+                                        ).filter((_, i) => i !== idx),
+                                      },
+                                    }))
+                                  }
+                                  className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10 flex justify-center cursor-pointer"
+                                  title="Remover item"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Linha 2: Recorrência + Categoria + Data com botão Limpar */}
+                            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                              <div className="sm:col-span-4">
+                                <label
+                                  className="text-[9px] font-bold uppercase block mb-0.5"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  Recorrência / Tipo
+                                </label>
+                                <select
+                                  value={modoRecorrenciaAtual}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    setDraftAcao((prev) => {
+                                      const list = [
+                                        ...(prev.payload?.lancamentosAjuste ||
+                                          []),
+                                      ];
+                                      const ehRec = v === "recorrente";
+                                      const novoStatus: "previsto" | "realizado" =
+                                        v === "realizado_avulso"
+                                          ? "realizado"
+                                          : "previsto";
+                                      let dataAt = String(
+                                        list[idx].data || ""
+                                      ).trim();
+                                      if (
+                                        !ehRec &&
+                                        /^todo\s+dia\s+/i.test(dataAt)
+                                      ) {
+                                        dataAt = dataAt.replace(
+                                          /^todo\s+dia\s+/i,
+                                          "Dia "
+                                        );
+                                      } else if (
+                                        ehRec &&
+                                        /^dia\s+\d+$/i.test(dataAt)
+                                      ) {
+                                        dataAt = `Todo ${dataAt.toLowerCase()}`;
+                                      }
+                                      list[idx] = {
+                                        ...list[idx],
+                                        recorrente: ehRec,
+                                        status: novoStatus,
+                                        data: dataAt,
+                                      };
+                                      return {
+                                        ...prev,
+                                        payload: {
+                                          ...prev.payload,
+                                          lancamentosAjuste: list,
+                                        },
+                                      };
+                                    });
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg border text-xs font-bold outline-none"
+                                  style={{
+                                    backgroundColor: t.card,
+                                    color: lanc.recorrente
+                                      ? t.primary
+                                      : t.text,
+                                    borderColor: lanc.recorrente
+                                      ? t.primary
+                                      : t.border,
+                                  }}
+                                >
+                                  <option value="recorrente">
+                                    🔄 Recorrente Mensal (Fixo)
+                                  </option>
+                                  <option value="previsto_unico">
+                                    📅 Previsto Único (Só este mês)
+                                  </option>
+                                  <option value="realizado_avulso">
+                                    ✅ Gasto Avulso (Já pago)
+                                  </option>
+                                </select>
+                              </div>
+
+                              <div className="sm:col-span-3">
+                                <label
+                                  className="text-[9px] font-bold uppercase block mb-0.5"
+                                  style={{ color: t.textSoft }}
+                                >
+                                  Categoria
+                                </label>
+                                <select
+                                  value={lanc.categoria || "Moradia & Fixos"}
+                                  onChange={(e) => {
+                                    const cat = e.target
+                                      .value as OrcamentoCategoria["categoria"];
+                                    setDraftAcao((prev) => {
+                                      const list = [
+                                        ...(prev.payload?.lancamentosAjuste ||
+                                          []),
+                                      ];
+                                      list[idx] = {
+                                        ...list[idx],
+                                        categoria: cat,
+                                      };
+                                      return {
+                                        ...prev,
+                                        payload: {
+                                          ...prev.payload,
+                                          lancamentosAjuste: list,
+                                        },
+                                      };
+                                    });
+                                  }}
+                                  className="w-full px-2 py-1.5 rounded-lg border text-xs outline-none"
+                                  style={{
+                                    backgroundColor: t.card,
+                                    color: t.text,
+                                    borderColor: t.border,
+                                  }}
+                                >
+                                  {CATEGORIAS_GASTO.map((cat) => (
+                                    <option key={cat} value={cat}>
+                                      {cat}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="sm:col-span-5">
+                                <div className="flex items-center justify-between mb-0.5">
+                                  <label
+                                    className="text-[9px] font-bold uppercase"
+                                    style={{ color: t.textSoft }}
+                                  >
+                                    Data / Vencimento{" "}
+                                    {!lanc.data?.trim() && (
+                                      <span style={{ color: t.action }}>
+                                        (Sem data)
+                                      </span>
+                                    )}
+                                  </label>
+                                  <div className="flex items-center gap-1">
+                                    {["5", "10", "15", "20"].map((dSug) => (
+                                      <button
+                                        key={dSug}
+                                        type="button"
+                                        onClick={() =>
+                                          setDraftAcao((prev) => {
+                                            const list = [
+                                              ...(prev.payload
+                                                ?.lancamentosAjuste || []),
+                                            ];
+                                            const isRec = Boolean(
+                                              list[idx].recorrente
+                                            );
+                                            list[idx] = {
+                                              ...list[idx],
+                                              data: isRec
+                                                ? `Todo dia ${dSug.padStart(
+                                                    2,
+                                                    "0"
+                                                  )}`
+                                                : `Dia ${dSug.padStart(2, "0")}`,
+                                              diaVencimento: Number(dSug),
+                                              semData: false,
+                                            };
+                                            return {
+                                              ...prev,
+                                              payload: {
+                                                ...prev.payload,
+                                                lancamentosAjuste: list,
+                                              },
+                                            };
+                                          })
+                                        }
+                                        className="px-1.5 py-0.5 rounded text-[9px] font-mono-num font-bold cursor-pointer border"
+                                        style={{
+                                          backgroundColor: t.card,
+                                          color: t.textSoft,
+                                          borderColor: t.border,
+                                        }}
+                                        title={`Definir dia ${dSug}`}
+                                      >
+                                        Dia {dSug}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="relative flex items-center">
+                                  <input
+                                    type="text"
+                                    value={lanc.data || ""}
+                                    onChange={(e) => {
+                                      const rawD = e.target.value;
+                                      setDraftAcao((prev) => {
+                                        const list = [
+                                          ...(prev.payload?.lancamentosAjuste ||
+                                            []),
+                                        ];
+                                        list[idx] = {
+                                          ...list[idx],
+                                          data: rawD,
+                                          semData: !rawD.trim(),
+                                        };
+                                        return {
+                                          ...prev,
+                                          payload: {
+                                            ...prev.payload,
+                                            lancamentosAjuste: list,
+                                          },
+                                        };
+                                      });
+                                    }}
+                                    placeholder="Vazio = Sem data (ou digite ex: Dia 10)"
+                                    className="w-full pl-2.5 pr-16 py-1.5 rounded-lg border text-xs font-mono-num outline-none"
+                                    style={{
+                                      backgroundColor: t.card,
+                                      color: t.text,
+                                      borderColor: t.border,
+                                    }}
+                                  />
+                                  {Boolean(lanc.data && lanc.data.trim()) && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDraftAcao((prev) => {
+                                          const list = [
+                                            ...(prev.payload
+                                              ?.lancamentosAjuste || []),
+                                          ];
+                                          list[idx] = {
+                                            ...list[idx],
+                                            data: "",
+                                            diaVencimento: null,
+                                            semData: true,
+                                          };
+                                          return {
+                                            ...prev,
+                                            payload: {
+                                              ...prev.payload,
+                                              lancamentosAjuste: list,
+                                            },
+                                          };
+                                        })
+                                      }
+                                      className="absolute right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 cursor-pointer"
+                                      style={{
+                                        backgroundColor: `${t.danger}18`,
+                                        color: t.danger,
+                                      }}
+                                      title="Apagar data e deixar Sem data"
+                                    >
+                                      <X size={10} /> Limpar
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
                     )}
                   </div>
                 </div>
               )}
 
-            {/* Campos específicos de Gasto / Receita / Tarefa */}
-            {(!draftAcao.payload?.lancamentosAjuste ||
-              draftAcao.payload.lancamentosAjuste.length <= 1) &&
-              (draftAcao.tipo === "REGISTRAR_GASTO" ||
-                draftAcao.tipo === "REGISTRAR_RECEITA" ||
-                draftAcao.tipo === "CRIAR_TAREFA") && (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                <div className="sm:col-span-1">
+            {/* Campos específicos de Tarefa */}
+            {draftAcao.tipo === "CRIAR_TAREFA" && (
+              <div className="grid grid-cols-1 gap-2">
+                <div>
                   <label
                     className="text-[10px] font-bold block mb-0.5"
                     style={{ color: t.textSoft }}
                   >
-                    Texto / Nome do Item
+                    Texto / Nome da Tarefa
                   </label>
                   <input
                     value={draftAcao.payload?.texto || draftAcao.titulo}
@@ -1107,73 +1601,6 @@ export function LalaAppActionCard({
                     }}
                   />
                 </div>
-
-                {(draftAcao.tipo === "REGISTRAR_GASTO" ||
-                  draftAcao.tipo === "REGISTRAR_RECEITA") && (
-                  <>
-                    <div>
-                      <label
-                        className="text-[10px] font-bold block mb-0.5"
-                        style={{ color: t.textSoft }}
-                      >
-                        Valor (R$)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        value={draftAcao.payload?.valor ?? 0}
-                        onChange={(e) =>
-                          setDraftAcao((prev) => ({
-                            ...prev,
-                            payload: {
-                              ...prev.payload,
-                              valor: Number(e.target.value) || 0,
-                            },
-                          }))
-                        }
-                        className="w-full px-2.5 py-1.5 rounded-lg border text-xs font-mono-num outline-none"
-                        style={{
-                          backgroundColor: t.bg,
-                          color: t.text,
-                          borderColor: t.border,
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label
-                        className="text-[10px] font-bold block mb-0.5"
-                        style={{ color: t.textSoft }}
-                      >
-                        Categoria
-                      </label>
-                      <select
-                        value={draftAcao.payload?.categoriaGasto || "Mercado"}
-                        onChange={(e) =>
-                          setDraftAcao((prev) => ({
-                            ...prev,
-                            payload: {
-                              ...prev.payload,
-                              categoriaGasto: e.target
-                                .value as OrcamentoCategoria["categoria"],
-                            },
-                          }))
-                        }
-                        className="w-full px-2.5 py-1.5 rounded-lg border text-xs outline-none"
-                        style={{
-                          backgroundColor: t.bg,
-                          color: t.text,
-                          borderColor: t.border,
-                        }}
-                      >
-                        {CATEGORIAS_GASTO.map((cat) => (
-                          <option key={cat} value={cat}>
-                            {cat}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </>
-                )}
               </div>
             )}
 

@@ -87,6 +87,16 @@ function detectarCategoriaAutomatica(
   )
     return "Dívida";
   if (
+    s.includes("compra avulsa") ||
+    s.includes("compras avulsas") ||
+    s.includes("shopee") ||
+    s.includes("shein") ||
+    s.includes("mercado livre") ||
+    s.includes("presente") ||
+    s.includes("roupa")
+  )
+    return "Compras Avulsas";
+  if (
     s.includes("cinema") ||
     s.includes("bar") ||
     s.includes("show") ||
@@ -279,12 +289,16 @@ interface FinancasScreenProps {
     despesasPrevistasPendentes: number;
     gastoRealizadoHoje: number;
   };
+  diasRestantesCiclo?: number;
+  diaProximoPagamento?: number;
+  onSetDiaProximoPagamento?: (dia?: number) => void;
 }
 
-const CATEGORIAS_FINANCAS: OrcamentoCategoria["categoria"][] = [
+const CATEGORIAS_FINANCAS_BASE: OrcamentoCategoria["categoria"][] = [
   "Mercado",
-  "Pets",
   "Transporte",
+  "Compras Avulsas",
+  "Pets",
   "Moradia & Fixos",
   "Estudos & UERJ",
   "Dívida",
@@ -305,7 +319,26 @@ export function FinancasScreen({
   setLancamentos,
   adicionarLancamento,
   dinheiroLivreInfo,
+  diasRestantesCiclo = 4,
+  diaProximoPagamento,
+  onSetDiaProximoPagamento,
 }: FinancasScreenProps) {
+  const CATEGORIAS_FINANCAS = React.useMemo(() => {
+    const setCats = new Set<string>(CATEGORIAS_FINANCAS_BASE);
+    orcamentos.forEach((o) => {
+      if (o.categoria) setCats.add(o.categoria);
+    });
+    lancamentos.forEach((l) => {
+      if (l.categoria) setCats.add(l.categoria);
+    });
+    return Array.from(setCats);
+  }, [orcamentos, lancamentos]);
+
+  const [novaCategoriaNome, setNovaCategoriaNome] = useState("");
+  const [categoriaExpandida, setCategoriaExpandida] = useState<string | null>(
+    null
+  );
+  const [editandoCicloDias, setEditandoCicloDias] = useState(false);
   const [abaRegistro, setAbaRegistro] = useState<"rapido_ia" | "manual">(
     "rapido_ia"
   );
@@ -880,15 +913,33 @@ export function FinancasScreen({
       {/* KPIs DO FLUXO DE CAIXA */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         <div
-          className="rounded-3xl p-4 border space-y-1"
+          className="rounded-3xl p-4 border space-y-1.5"
           style={{ background: t.card, borderColor: t.border }}
         >
-          <span
-            className="text-xs font-semibold block"
-            style={{ color: t.textSoft }}
-          >
-            Dinheiro Livre Hoje
-          </span>
+          <div className="flex items-center justify-between gap-1">
+            <span
+              className="text-xs font-semibold block"
+              style={{ color: t.textSoft }}
+            >
+              Dinheiro Livre Hoje
+            </span>
+            {onSetDiaProximoPagamento && (
+              <button
+                type="button"
+                onClick={() => setEditandoCicloDias((v) => !v)}
+                className="text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer"
+                style={{
+                  backgroundColor: `${t.finance}15`,
+                  color: t.finance,
+                }}
+                title="Configurar dia do próximo pagamento para o cálculo diário"
+              >
+                {diaProximoPagamento
+                  ? `Ciclo dia ${diaProximoPagamento}`
+                  : "Ajustar ciclo"}
+              </button>
+            )}
+          </div>
           <p
             className="text-2xl font-bold font-mono-num"
             style={{ color: t.finance }}
@@ -897,8 +948,61 @@ export function FinancasScreen({
           </p>
           <p className="text-[11px] font-mono-num" style={{ color: t.textSoft }}>
             Líquido R$ {dinheiroLivreInfo.saldoLiquidoDisponivelMes.toFixed(0)}{" "}
-            ÷ 4d
+            ÷ {diasRestantesCiclo}d{" "}
+            {diaProximoPagamento
+              ? `(até dia ${diaProximoPagamento})`
+              : "(restantes no mês)"}
           </p>
+          {editandoCicloDias && onSetDiaProximoPagamento && (
+            <div
+              className="pt-2 mt-1 border-t space-y-1.5"
+              style={{ borderColor: t.border }}
+            >
+              <span
+                className="text-[10px] font-bold block"
+                style={{ color: t.textSoft }}
+              >
+                Dividir saldo até qual dia de pagamento?
+              </span>
+              <div className="flex flex-wrap items-center gap-1">
+                {[5, 10, 15, 20, 30].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => {
+                      onSetDiaProximoPagamento(d);
+                      setEditandoCicloDias(false);
+                    }}
+                    className="px-2 py-1 rounded-lg text-[10px] font-bold cursor-pointer border"
+                    style={{
+                      backgroundColor:
+                        diaProximoPagamento === d ? t.finance : t.bg,
+                      color: diaProximoPagamento === d ? "#fff" : t.text,
+                      borderColor:
+                        diaProximoPagamento === d ? t.finance : t.border,
+                    }}
+                  >
+                    Dia {d}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSetDiaProximoPagamento(undefined);
+                    setEditandoCicloDias(false);
+                  }}
+                  className="px-2 py-1 rounded-lg text-[10px] font-semibold cursor-pointer border"
+                  style={{
+                    backgroundColor: !diaProximoPagamento ? t.finance : t.bg,
+                    color: !diaProximoPagamento ? "#fff" : t.textSoft,
+                    borderColor: t.border,
+                  }}
+                >
+                  Fim do mês
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         <div
@@ -1577,17 +1681,44 @@ export function FinancasScreen({
                         <ArrowDownRight size={16} style={{ color: t.action }} />
                       )}
                       <div className="min-w-0 flex-1">
-                        <p
-                          className="text-xs sm:text-sm font-semibold truncate"
-                          style={{ color: t.text }}
-                        >
-                          {l.descricao}
-                        </p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p
+                            className="text-xs sm:text-sm font-semibold truncate"
+                            style={{ color: t.text }}
+                          >
+                            {l.descricao}
+                          </p>
+                          {l.recorrente && (
+                            <span
+                              className="px-1.5 py-0.5 rounded-md text-[9px] font-bold"
+                              style={{
+                                backgroundColor: `${t.primary}16`,
+                                color: t.primary,
+                              }}
+                            >
+                              🔄 Recorrente
+                            </span>
+                          )}
+                          {l.status === "previsto" && (
+                            <span
+                              className="px-1.5 py-0.5 rounded-md text-[9px] font-bold"
+                              style={{
+                                backgroundColor: `${t.alert}18`,
+                                color: t.alert,
+                              }}
+                            >
+                              Previsto
+                            </span>
+                          )}
+                        </div>
                         <p
                           className="text-[11px] font-mono-num truncate"
                           style={{ color: t.textSoft }}
                         >
-                          {l.data} · {l.categoria} ·{" "}
+                          {l.semData || l.data === "Sem data"
+                            ? "Sem data definida"
+                            : l.data}{" "}
+                          · {l.categoria} ·{" "}
                           {l.metodo === "Cartão de Crédito"
                             ? `Cartão ${cartaoObj?.nome || "Crédito"}`
                             : `${contaObj?.nome || "Conta / Pix"}`}
@@ -1743,25 +1874,25 @@ export function FinancasScreen({
             </div>
           </section>
 
-          {/* Teto Mensal por Categoria (Editável) */}
+          {/* Acumulador por Categoria & Orçamento Flexível (Gastos Variáveis e Fixos) */}
           <section
-            className="rounded-3xl p-5 border space-y-3"
+            className="rounded-3xl p-5 border space-y-3.5"
             style={{ background: t.card, borderColor: t.border }}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-start justify-between gap-2">
               <div>
                 <h3 className="text-sm font-bold" style={{ color: t.text }}>
-                  Orçamento por Categoria & Quitação
+                  Categorias & Acumulador do Mês
                 </h3>
-                <p className="text-[11px]" style={{ color: t.textSoft }}>
-                  Ajuste os tetos mensais planejados quando quiser
+                <p className="text-[11px] leading-snug" style={{ color: t.textSoft }}>
+                  Gastos variáveis (Uber, Mercado, Compras Avulsas) acumulam livremente no mês sem exigir teto fixo. Toque na categoria para ver os itens.
                 </p>
               </div>
               {setOrcamentos && (
                 <button
                   type="button"
                   onClick={() => setEditandoOrcamentos((v) => !v)}
-                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
                   style={{
                     backgroundColor: editandoOrcamentos
                       ? t.primary
@@ -1770,91 +1901,328 @@ export function FinancasScreen({
                   }}
                 >
                   <Sliders size={12} />
-                  {editandoOrcamentos ? "Concluir" : "Editar Tetos"}
+                  {editandoOrcamentos ? "Concluir" : "Configurar"}
                 </button>
               )}
             </div>
 
+            {editandoOrcamentos && setOrcamentos && (
+              <div
+                className="p-3 rounded-2xl border space-y-2"
+                style={{ backgroundColor: t.bg, borderColor: t.border }}
+              >
+                <span
+                  className="text-[10px] font-bold uppercase block"
+                  style={{ color: t.textSoft }}
+                >
+                  Criar Nova Categoria (ex: Uber, Compras Avulsas, Delivery)
+                </span>
+                <div className="flex gap-2">
+                  <input
+                    value={novaCategoriaNome}
+                    onChange={(e) => setNovaCategoriaNome(e.target.value)}
+                    placeholder="Nome da categoria..."
+                    className="flex-1 px-3 py-2 rounded-xl text-xs border outline-none"
+                    style={{
+                      backgroundColor: t.card,
+                      color: t.text,
+                      borderColor: t.border,
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const limpo = novaCategoriaNome.trim();
+                      if (!limpo) return;
+                      if (
+                        !orcamentos.some(
+                          (o) =>
+                            o.categoria.toLowerCase() === limpo.toLowerCase()
+                        )
+                      ) {
+                        setOrcamentos((prev) => [
+                          ...prev,
+                          {
+                            categoria: limpo,
+                            tetoMensal: 0,
+                            semTetoDefinido: true,
+                          },
+                        ]);
+                      }
+                      setNovaCategoriaNome("");
+                    }}
+                    className="px-3 py-2 rounded-xl text-xs font-bold text-white cursor-pointer"
+                    style={{ backgroundColor: t.primary }}
+                  >
+                    + Criar
+                  </button>
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2.5">
-              {orcamentos.map((orc) => {
-                const gastoCat = lancamentosMes
-                  .filter(
-                    (l) => l.tipo === "despesa" && l.categoria === orc.categoria
-                  )
+              {CATEGORIAS_FINANCAS.map((nomeCat) => {
+                const orcExist = orcamentos.find(
+                  (o) => o.categoria === nomeCat
+                ) || {
+                  categoria: nomeCat,
+                  tetoMensal: 0,
+                  semTetoDefinido: true,
+                };
+                const itensCat = lancamentosMes.filter(
+                  (l) => l.tipo === "despesa" && l.categoria === nomeCat
+                );
+                const gastoCat = itensCat.reduce((acc, l) => acc + l.valor, 0);
+                const gastoRealizadoCat = itensCat
+                  .filter((l) => l.status === "realizado")
                   .reduce((acc, l) => acc + l.valor, 0);
+                const gastoPrevistoCat = itensCat
+                  .filter((l) => l.status === "previsto")
+                  .reduce((acc, l) => acc + l.valor, 0);
+
+                const ehAcumuladorLivre =
+                  Boolean(orcExist.semTetoDefinido) ||
+                  orcExist.tetoMensal <= 0;
                 const pct =
-                  orc.tetoMensal > 0
+                  !ehAcumuladorLivre && orcExist.tetoMensal > 0
                     ? Math.min(
                         100,
-                        Math.round((gastoCat / orc.tetoMensal) * 100)
+                        Math.round((gastoCat / orcExist.tetoMensal) * 100)
                       )
                     : 0;
+                const isExpanded = categoriaExpandida === nomeCat;
+
                 return (
-                  <div key={orc.categoria} className="space-y-1">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-medium" style={{ color: t.text }}>
-                        {orc.categoria}
-                      </span>
-                      {editandoOrcamentos && setOrcamentos ? (
-                        <div className="flex items-center gap-1">
+                  <div
+                    key={nomeCat}
+                    className="p-3 rounded-2xl border space-y-2 transition-all"
+                    style={{
+                      backgroundColor: t.bg,
+                      borderColor: isExpanded ? t.primary : t.border,
+                    }}
+                  >
+                    <div
+                      onClick={() =>
+                        setCategoriaExpandida(isExpanded ? null : nomeCat)
+                      }
+                      className="flex justify-between items-center gap-2 text-xs cursor-pointer select-none"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span
+                          className="font-bold truncate"
+                          style={{ color: t.text }}
+                        >
+                          {nomeCat}
+                        </span>
+                        <span
+                          className="px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0"
+                          style={{
+                            backgroundColor: ehAcumuladorLivre
+                              ? `${t.primary}15`
+                              : `${t.finance}15`,
+                            color: ehAcumuladorLivre ? t.primary : t.finance,
+                          }}
+                        >
+                          {ehAcumuladorLivre
+                            ? `Acumulador · ${itensCat.length}x`
+                            : `Teto R$ ${orcExist.tetoMensal}`}
+                        </span>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span
+                          className="font-mono-num font-bold text-xs sm:text-sm"
+                          style={{ color: t.text }}
+                        >
+                          R$ {gastoCat.toFixed(2).replace(".", ",")}
+                        </span>
+                        {!ehAcumuladorLivre && (
                           <span
-                            className="text-[10px]"
+                            className="text-[10px] font-mono-num ml-1"
                             style={{ color: t.textSoft }}
                           >
-                            Teto R$:
+                            ({pct}%)
                           </span>
-                          <input
-                            type="number"
-                            step="50"
-                            value={orc.tetoMensal}
-                            onChange={(e) => {
-                              const nv = Math.max(
-                                0,
-                                Number(e.target.value) || 0
-                              );
-                              setOrcamentos((prev) =>
-                                prev.map((o) =>
-                                  o.categoria === orc.categoria
-                                    ? { ...o, tetoMensal: nv }
-                                    : o
-                                )
-                              );
-                            }}
-                            className="w-20 px-2 py-0.5 rounded-lg text-xs font-mono-num font-bold text-right border outline-none"
-                            style={{
-                              backgroundColor: t.bg,
-                              color: t.text,
-                              borderColor: t.border,
-                            }}
-                          />
-                        </div>
-                      ) : (
-                        <span
-                          className="font-mono-num"
-                          style={{ color: t.textSoft }}
-                        >
-                          R$ {gastoCat.toFixed(0)} / R$ {orc.tetoMensal} ({pct}
-                          %)
-                        </span>
-                      )}
+                        )}
+                      </div>
                     </div>
-                    <div
-                      className="w-full h-1.5 rounded-full overflow-hidden"
-                      style={{ background: t.cardSubtle }}
-                    >
+
+                    {/* Sub-resumo rápido: Realizado vs Previsto e Média por gasto */}
+                    {itensCat.length > 0 && (
                       <div
-                        className="h-1.5 rounded-full"
-                        style={{
-                          width: `${pct}%`,
-                          background:
-                            pct >= 90
-                              ? t.danger
-                              : pct >= 75
-                              ? t.alert
-                              : t.finance,
-                        }}
-                      />
-                    </div>
+                        className="flex items-center justify-between text-[10px] font-mono-num"
+                        style={{ color: t.textSoft }}
+                      >
+                        <span>
+                          Pago: R$ {gastoRealizadoCat.toFixed(0)} · Previsto: R${" "}
+                          {gastoPrevistoCat.toFixed(0)}
+                        </span>
+                        <span>
+                          Média: R$ {(gastoCat / itensCat.length).toFixed(0)}/item
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Barra visual (apenas quando a usuária escolheu usar Teto Mensal Fixo) */}
+                    {!ehAcumuladorLivre && (
+                      <div
+                        className="w-full h-1.5 rounded-full overflow-hidden"
+                        style={{ background: t.cardSubtle }}
+                      >
+                        <div
+                          className="h-1.5 rounded-full"
+                          style={{
+                            width: `${pct}%`,
+                            background:
+                              pct >= 90
+                                ? t.danger
+                                : pct >= 75
+                                ? t.alert
+                                : t.finance,
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {/* Controles de Configuração da Categoria */}
+                    {editandoOrcamentos && setOrcamentos && (
+                      <div
+                        className="pt-2 border-t flex flex-wrap items-center justify-between gap-2"
+                        style={{ borderColor: t.border }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOrcamentos((prev) => {
+                              const jaTem = prev.some(
+                                (o) => o.categoria === nomeCat
+                              );
+                              if (!jaTem) {
+                                return [
+                                  ...prev,
+                                  {
+                                    categoria: nomeCat,
+                                    tetoMensal: 300,
+                                    semTetoDefinido: false,
+                                  },
+                                ];
+                              }
+                              return prev.map((o) =>
+                                o.categoria === nomeCat
+                                  ? {
+                                      ...o,
+                                      semTetoDefinido: !ehAcumuladorLivre,
+                                      tetoMensal:
+                                        !ehAcumuladorLivre
+                                          ? o.tetoMensal
+                                          : o.tetoMensal || 300,
+                                    }
+                                  : o
+                              );
+                            });
+                          }}
+                          className="px-2.5 py-1 rounded-lg text-[10px] font-bold border cursor-pointer"
+                          style={{
+                            backgroundColor: ehAcumuladorLivre
+                              ? `${t.primary}15`
+                              : t.card,
+                            color: ehAcumuladorLivre ? t.primary : t.textSoft,
+                            borderColor: ehAcumuladorLivre
+                              ? t.primary
+                              : t.border,
+                          }}
+                        >
+                          {ehAcumuladorLivre
+                            ? "✓ Modo Acumulador Livre (Sem teto fixo)"
+                            : "Usar como Acumulador Livre"}
+                        </button>
+
+                        {!ehAcumuladorLivre && (
+                          <div className="flex items-center gap-1">
+                            <span
+                              className="text-[10px]"
+                              style={{ color: t.textSoft }}
+                            >
+                              Teto R$:
+                            </span>
+                            <input
+                              type="number"
+                              step="50"
+                              value={orcExist.tetoMensal || ""}
+                              placeholder="0"
+                              onChange={(e) => {
+                                const nv = Math.max(
+                                  0,
+                                  Number(e.target.value) || 0
+                                );
+                                setOrcamentos((prev) =>
+                                  prev.map((o) =>
+                                    o.categoria === nomeCat
+                                      ? {
+                                          ...o,
+                                          tetoMensal: nv,
+                                          semTetoDefinido: nv <= 0,
+                                        }
+                                      : o
+                                  )
+                                );
+                              }}
+                              className="w-20 px-2 py-1 rounded-lg text-xs font-mono-num font-bold text-right border outline-none"
+                              style={{
+                                backgroundColor: t.card,
+                                color: t.text,
+                                borderColor: t.border,
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Lista de gastos acumulados dentro desta categoria ao tocar nela */}
+                    {isExpanded && (
+                      <div
+                        className="pt-2 border-t space-y-1.5"
+                        style={{ borderColor: t.border }}
+                      >
+                        {itensCat.length === 0 ? (
+                          <p
+                            className="text-[11px] italic"
+                            style={{ color: t.textSoft }}
+                          >
+                            Nenhum gasto acumulado em {nomeCat} neste mês.
+                          </p>
+                        ) : (
+                          itensCat.map((item) => (
+                            <div
+                              key={item.id}
+                              onClick={() => setLancamentoEditando({ ...item })}
+                              className="px-2.5 py-1.5 rounded-xl border flex items-center justify-between text-[11px] cursor-pointer hover:opacity-90"
+                              style={{
+                                backgroundColor: t.card,
+                                borderColor: t.border,
+                              }}
+                            >
+                              <span
+                                className="font-semibold truncate"
+                                style={{ color: t.text }}
+                              >
+                                {item.semData || item.data === "Sem data"
+                                  ? "Sem data"
+                                  : item.data}{" "}
+                                · {item.descricao}
+                              </span>
+                              <span
+                                className="font-mono-num font-bold shrink-0 ml-2"
+                                style={{ color: t.action }}
+                              >
+                                R$ {item.valor.toFixed(2).replace(".", ",")}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -3162,7 +3530,76 @@ export function FinancasScreen({
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
+              {/* Seletor de Recorrência explícito */}
+              <div>
+                <label
+                  className="text-[10px] font-bold uppercase block mb-1"
+                  style={{ color: t.textSoft }}
+                >
+                  Recorrência do Gasto / Receita
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dAt = lancamentoEditando.diaVencimento;
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        recorrente: true,
+                        status: "previsto",
+                        data:
+                          !lancamentoEditando.semData && dAt
+                            ? `Todo dia ${String(dAt).padStart(2, "0")}`
+                            : lancamentoEditando.data,
+                      });
+                    }}
+                    className="py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer"
+                    style={{
+                      backgroundColor: lancamentoEditando.recorrente
+                        ? `${t.primary}18`
+                        : t.bg,
+                      color: lancamentoEditando.recorrente
+                        ? t.primary
+                        : t.textSoft,
+                      borderColor: lancamentoEditando.recorrente
+                        ? t.primary
+                        : t.border,
+                    }}
+                  >
+                    🔄 Recorrente (Todo mês)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const dAt = lancamentoEditando.diaVencimento;
+                      setLancamentoEditando({
+                        ...lancamentoEditando,
+                        recorrente: false,
+                        data:
+                          !lancamentoEditando.semData && dAt
+                            ? `Dia ${String(dAt).padStart(2, "0")}`
+                            : lancamentoEditando.data,
+                      });
+                    }}
+                    className="py-2 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer"
+                    style={{
+                      backgroundColor: !lancamentoEditando.recorrente
+                        ? `${t.action}18`
+                        : t.bg,
+                      color: !lancamentoEditando.recorrente
+                        ? t.action
+                        : t.textSoft,
+                      borderColor: !lancamentoEditando.recorrente
+                        ? t.action
+                        : t.border,
+                    }}
+                  >
+                    1️⃣ Único / Avulso
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label
                     className="text-[10px] font-bold uppercase block mb-1"
@@ -3173,11 +3610,19 @@ export function FinancasScreen({
                   <input
                     type="number"
                     step="0.01"
-                    value={lancamentoEditando.valor}
+                    value={
+                      lancamentoEditando.valor === 0
+                        ? ""
+                        : lancamentoEditando.valor
+                    }
+                    placeholder="0,00"
                     onChange={(e) =>
                       setLancamentoEditando({
                         ...lancamentoEditando,
-                        valor: Math.max(0, parseFloat(e.target.value) || 0),
+                        valor:
+                          e.target.value === ""
+                            ? 0
+                            : Math.max(0, parseFloat(e.target.value) || 0),
                       })
                     }
                     className="w-full px-3 py-2 rounded-xl text-xs font-mono-num font-bold border outline-none"
@@ -3189,7 +3634,7 @@ export function FinancasScreen({
                   />
                 </div>
 
-                 <div>
+                <div>
                   <div className="flex items-center justify-between mb-1">
                     <label
                       className="text-[10px] font-bold uppercase block"
@@ -3202,7 +3647,7 @@ export function FinancasScreen({
                       onClick={() =>
                         setLancamentoEditando({
                           ...lancamentoEditando,
-                          data: "Sem data",
+                          data: "",
                           diaVencimento: null,
                           semData: true,
                         })
@@ -3210,40 +3655,130 @@ export function FinancasScreen({
                       className="text-[10px] font-bold underline cursor-pointer"
                       style={{ color: t.action }}
                     >
-                      Definir Sem data
+                      Limpar / Sem data
                     </button>
                   </div>
-                  <input
-                    value={lancamentoEditando.data}
-                    placeholder="Ex: Todo dia 10, 15/10 ou Sem data"
-                    onChange={(e) => {
-                      const valData = e.target.value;
-                      const mDia =
-                        valData.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
-                        valData.match(/\bdia\s+(\d{1,2})\b/i) ||
-                        valData.match(/^(\d{1,2})$/);
-                      const dNum = mDia ? parseInt(mDia[1], 10) : null;
-                      const ehSem =
-                        !valData.trim() ||
-                        /^(sem\s*data|n[ãa]o\s*informad)/i.test(valData.trim());
-                      setLancamentoEditando({
-                        ...lancamentoEditando,
-                        data: valData,
-                        diaVencimento:
-                          !ehSem && dNum && dNum >= 1 && dNum <= 31
-                            ? dNum
-                            : null,
-                        semData: ehSem,
-                      });
-                    }}
-                    className="w-full px-3 py-2 rounded-xl text-xs font-mono-num border outline-none"
-                    style={{
-                      backgroundColor: t.bg,
-                      color: t.text,
-                      borderColor: t.border,
-                    }}
-                  />
+                  <div className="relative">
+                    <input
+                      value={
+                        lancamentoEditando.semData ||
+                        /^sem\s*data$/i.test(
+                          (lancamentoEditando.data || "").trim()
+                        )
+                          ? ""
+                          : lancamentoEditando.data
+                      }
+                      placeholder="Sem data (ex: Todo dia 10 ou 15/10)"
+                      onChange={(e) => {
+                        const valData = e.target.value;
+                        const mDia =
+                          valData.match(/\b(\d{1,2})\/\d{1,2}\b/) ||
+                          valData.match(/\bdia\s+(\d{1,2})\b/i) ||
+                          valData.match(/^(\d{1,2})$/);
+                        const dNum = mDia ? parseInt(mDia[1], 10) : null;
+                        const ehSem =
+                          !valData.trim() ||
+                          /^(sem\s*data|n[ãa]o\s*informad)/i.test(
+                            valData.trim()
+                          );
+                        setLancamentoEditando({
+                          ...lancamentoEditando,
+                          data: valData,
+                          diaVencimento:
+                            !ehSem && dNum && dNum >= 1 && dNum <= 31
+                              ? dNum
+                              : null,
+                          semData: ehSem,
+                        });
+                      }}
+                      className="w-full pl-3 pr-7 py-2 rounded-xl text-xs font-mono-num border outline-none"
+                      style={{
+                        backgroundColor: t.bg,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                    {!lancamentoEditando.semData &&
+                      lancamentoEditando.data &&
+                      !/^sem\s*data$/i.test(lancamentoEditando.data) && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLancamentoEditando({
+                              ...lancamentoEditando,
+                              data: "",
+                              diaVencimento: null,
+                              semData: true,
+                            })
+                          }
+                          className="absolute right-2 top-1/2 -translate-y-1/2 w-5 h-5 rounded-full flex items-center justify-center cursor-pointer"
+                          style={{
+                            backgroundColor: t.cardSubtle,
+                            color: t.textSoft,
+                          }}
+                          title="Apagar data"
+                        >
+                          <X size={11} />
+                        </button>
+                      )}
+                  </div>
                 </div>
+              </div>
+
+              {/* Atalhos rápidos de dia de vencimento no modal */}
+              <div className="flex flex-wrap items-center gap-1">
+                {[5, 10, 15, 18, 20, 25].map((diaBtn) => {
+                  const ativo =
+                    !lancamentoEditando.semData &&
+                    lancamentoEditando.diaVencimento === diaBtn;
+                  return (
+                    <button
+                      key={diaBtn}
+                      type="button"
+                      onClick={() =>
+                        setLancamentoEditando({
+                          ...lancamentoEditando,
+                          diaVencimento: diaBtn,
+                          semData: false,
+                          data: lancamentoEditando.recorrente
+                            ? `Todo dia ${String(diaBtn).padStart(2, "0")}`
+                            : `Dia ${String(diaBtn).padStart(2, "0")}`,
+                        })
+                      }
+                      className="px-2 py-1 rounded-lg text-[10px] font-mono-num font-bold border cursor-pointer"
+                      style={{
+                        backgroundColor: ativo ? t.primary : t.bg,
+                        color: ativo ? "#fff" : t.textSoft,
+                        borderColor: ativo ? t.primary : t.border,
+                      }}
+                    >
+                      Dia {String(diaBtn).padStart(2, "0")}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLancamentoEditando({
+                      ...lancamentoEditando,
+                      data: "Sem data",
+                      diaVencimento: null,
+                      semData: true,
+                    })
+                  }
+                  className="px-2 py-1 rounded-lg text-[10px] font-bold border cursor-pointer"
+                  style={{
+                    backgroundColor: lancamentoEditando.semData
+                      ? `${t.alert}20`
+                      : t.bg,
+                    color: lancamentoEditando.semData ? t.alert : t.textSoft,
+                    borderColor: lancamentoEditando.semData
+                      ? t.alert
+                      : t.border,
+                  }}
+                >
+                  Sem data
+                </button>
               </div>
 
               <div className="grid grid-cols-2 gap-2.5">
@@ -3387,9 +3922,26 @@ export function FinancasScreen({
                 <button
                   type="button"
                   onClick={() => {
+                    const dataNormalizada =
+                      lancamentoEditando.semData ||
+                      !String(lancamentoEditando.data || "").trim()
+                        ? "Sem data"
+                        : /^\d{1,2}$/.test(lancamentoEditando.data.trim())
+                        ? lancamentoEditando.recorrente
+                          ? `Todo dia ${String(
+                              parseInt(lancamentoEditando.data.trim(), 10)
+                            ).padStart(2, "0")}`
+                          : `Dia ${String(
+                              parseInt(lancamentoEditando.data.trim(), 10)
+                            ).padStart(2, "0")}`
+                        : lancamentoEditando.data.trim();
+                    const finalizado: LancamentoFinanceiro = {
+                      ...lancamentoEditando,
+                      data: dataNormalizada,
+                    };
                     setLancamentos((prev) =>
                       prev.map((x) =>
-                        x.id === lancamentoEditando.id ? lancamentoEditando : x
+                        x.id === finalizado.id ? finalizado : x
                       )
                     );
                     setLancamentoEditando(null);

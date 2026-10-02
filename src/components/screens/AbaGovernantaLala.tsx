@@ -277,6 +277,7 @@ export function AbaGovernantaLala({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -284,6 +285,26 @@ export function AbaGovernantaLala({
   const timerGravacaoRef = useRef<number | null>(null);
   const cancelarGravacaoRef = useRef<boolean>(false);
   const transcricaoAcumuladaRef = useRef<string>("");
+
+  // Guarda apenas os IDs das ações cujo aviso/notificação no topo o usuário ocultou (sem recusar a ação!)
+  const [idsPendentesAvisoOculto, setIdsPendentesAvisoOculto] = useState<
+    string[]
+  >(() => {
+    try {
+      const raw = localStorage.getItem("casa_lala_aviso_pendentes_ocultos");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const nextHeight = Math.min(Math.max(el.scrollHeight, 54), 176);
+    el.style.height = `${nextHeight}px`;
+  }, [mensagem]);
 
   const interacoesCronologicas = useMemo(
     () => [...interacoes].reverse(),
@@ -312,6 +333,14 @@ export function AbaGovernantaLala({
     }
     return lista;
   }, [interacoes]);
+
+  const acoesPendentesVisiveisNoAviso = useMemo(
+    () =>
+      acoesPendentesConfirmacao.filter(
+        (item) => !idsPendentesAvisoOculto.includes(item.acao.id)
+      ),
+    [acoesPendentesConfirmacao, idsPendentesAvisoOculto]
+  );
 
   useEffect(() => {
     if (subAba === "chat") {
@@ -838,7 +867,6 @@ export function AbaGovernantaLala({
               itensMemoriaViva: memAtuais.slice(0, 80),
             };
           });
-          showToast(`🧠 Lala aprendeu: "${regra}"`);
         }
 
         if (
@@ -1644,8 +1672,8 @@ export function AbaGovernantaLala({
       {/* ==================== VISÃO 1: BATE-PAPO COM A LALA ==================== */}
       {subAba === "chat" && (
         <>
-          {/* Faixa rápida de ações aguardando confirmação, se houver */}
-          {acoesPendentesConfirmacao.length > 0 && (
+          {/* Faixa rápida de ações aguardando confirmação, se houver (Limpar oculta apenas a notificação sem dispensar a ação!) */}
+          {acoesPendentesVisiveisNoAviso.length > 0 && (
             <div
               className="px-4 py-2 border-b flex items-center justify-between gap-2 shrink-0"
               style={{
@@ -1663,34 +1691,38 @@ export function AbaGovernantaLala({
                   className="text-xs font-bold truncate"
                   style={{ color: t.text }}
                 >
-                  Você tem {acoesPendentesConfirmacao.length} ação(ões) da Lala aguardando sua revisão ou confirmação
+                  Você tem {acoesPendentesVisiveisNoAviso.length} ação(ões) da Lala aguardando sua revisão ou confirmação
                 </span>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => {
-                    setInteracoes((prev) =>
-                      prev.map((it) => ({
-                        ...it,
-                        acoesPropostas: (it.acoesPropostas || []).map((ac) =>
-                          !ac.executada && !ac.recusada && !ac.desfeita
-                            ? { ...ac, recusada: true }
-                            : ac
-                        ),
-                      }))
+                    const novosIds = Array.from(
+                      new Set([
+                        ...idsPendentesAvisoOculto,
+                        ...acoesPendentesVisiveisNoAviso.map((a) => a.acao.id),
+                      ])
                     );
-                    showToast("Ações pendentes antigas dispensadas.");
+                    setIdsPendentesAvisoOculto(novosIds);
+                    try {
+                      localStorage.setItem(
+                        "casa_lala_aviso_pendentes_ocultos",
+                        JSON.stringify(novosIds)
+                      );
+                    } catch {
+                      // ignore
+                    }
                   }}
-                  className="px-2 py-1 rounded-lg text-[11px] font-bold border cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold border cursor-pointer hover:opacity-85 transition-opacity"
                   style={{
                     backgroundColor: t.card,
                     color: t.textSoft,
                     borderColor: t.border,
                   }}
-                  title="Dispensar todas as ações pendentes antigas"
+                  title="Ocultar apenas esta faixa de aviso (as ações continuam salvas no chat e em Pendentes)"
                 >
-                  Limpar
+                  Limpar aviso
                 </button>
                 <button
                   type="button"
@@ -1813,62 +1845,6 @@ export function AbaGovernantaLala({
 
                         {it.matrizDecisao &&
                           renderMatrizComparativa(it.matrizDecisao)}
-
-                        {/* Aprendizados capturados nesta conversa */}
-                        {((it.aprendizadosExtraidos &&
-                          it.aprendizadosExtraidos.length > 0) ||
-                          it.novaRegraAprendida) && (
-                          <div
-                            className="p-2.5 rounded-2xl border space-y-1.5"
-                            style={{
-                              backgroundColor: `${t.primary}10`,
-                              borderColor: `${t.primary}30`,
-                            }}
-                          >
-                            <div className="flex items-center gap-1.5">
-                              <Brain size={12} style={{ color: t.primary }} />
-                              <span
-                                className="text-[10px] font-extrabold uppercase tracking-wider"
-                                style={{ color: t.primary }}
-                              >
-                                Aprendizado capturado pela Lala
-                              </span>
-                            </div>
-                            <div className="space-y-1">
-                              {it.novaRegraAprendida && (
-                                <p
-                                  className="text-[11px] leading-snug"
-                                  style={{ color: t.text }}
-                                >
-                                  • <strong>Regra:</strong>{" "}
-                                  {it.novaRegraAprendida}
-                                </p>
-                              )}
-                              {it.aprendizadosExtraidos?.map((ap, apIdx) => (
-                                <p
-                                  key={apIdx}
-                                  className="text-[11px] leading-snug"
-                                  style={{ color: t.text }}
-                                >
-                                  •{" "}
-                                  <strong style={{ color: t.primary }}>
-                                    {ap.categoria === "contexto"
-                                      ? "Contexto"
-                                      : ap.categoria === "acao_usuario"
-                                      ? "Sua Ação"
-                                      : ap.categoria === "decisao"
-                                      ? "Decisão"
-                                      : ap.categoria === "rotina"
-                                      ? "Rotina"
-                                      : "Forma de Uso"}
-                                    :
-                                  </strong>{" "}
-                                  {ap.texto}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
 
                         {/* Rodapé do balão: Ouvir resposta + Reanalisar + Horário */}
                         {!it.processandoResposta && (
@@ -2267,30 +2243,26 @@ export function AbaGovernantaLala({
                 </div>
               </div>
             ) : (
-              <div className="flex items-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-                  style={{
-                    backgroundColor:
-                      anexosAtuais.length > 0 ? `${t.primary}18` : t.bg,
-                    color: anexosAtuais.length > 0 ? t.primary : t.textSoft,
-                    borderColor:
-                      anexosAtuais.length > 0 ? t.primary : t.border,
-                  }}
-                  title="Anexar 1 ou várias imagens, prints de contas, PDFs ou planilhas"
-                >
-                  <Paperclip size={18} />
-                </button>
-
+              <div
+                className="rounded-3xl border p-2.5 sm:p-3 space-y-2 shadow-2xs transition-all"
+                style={{
+                  backgroundColor: t.bg,
+                  borderColor:
+                    mensagem.trim() || anexosAtuais.length > 0
+                      ? t.primary
+                      : t.border,
+                }}
+              >
                 <textarea
-                  rows={1}
+                  ref={textareaRef}
+                  rows={2}
                   value={mensagem}
                   onPaste={handlePaste}
                   onChange={(e) => setMensagem(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
+                    // Enter sozinho SEMPRE pula linha (especialmente no celular).
+                    // No computador, Ctrl+Enter ou Cmd+Enter envia rapidamente.
+                    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                       e.preventDefault();
                       enviarMensagemParaLala();
                     }
@@ -2298,43 +2270,91 @@ export function AbaGovernantaLala({
                   placeholder={
                     anexosAtuais.length > 0
                       ? `Diga o que a Lala deve fazer com os ${anexosAtuais.length} arquivo(s)...`
-                      : "Converse com a Lala, cole prints (Ctrl+V), ensine regras ou peça alterações..."
+                      : "Escreva para a Lala (Enter pula linha · toque em Enviar para mandar)..."
                   }
-                  className="flex-1 px-4 py-3 rounded-2xl text-xs sm:text-sm outline-none border resize-none max-h-32"
+                  className="w-full px-1.5 py-1 text-sm leading-relaxed outline-none bg-transparent resize-none min-h-[54px] max-h-44 overflow-y-auto"
                   style={{
-                    backgroundColor: t.bg,
                     color: t.text,
-                    borderColor: t.border,
                   }}
                 />
 
-                <button
-                  type="button"
-                  onClick={iniciarGravacaoDeVoz}
-                  className="p-3 rounded-2xl border shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-                  style={{
-                    backgroundColor: t.bg,
-                    color: t.primary,
-                    borderColor: t.border,
-                  }}
-                  title="Gravar áudio para a Lala"
+                <div
+                  className="flex items-center justify-between gap-2 pt-1.5 border-t"
+                  style={{ borderColor: `${t.border}80` }}
                 >
-                  <Mic size={18} />
-                </button>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer hover:opacity-85 transition-opacity"
+                      style={{
+                        backgroundColor:
+                          anexosAtuais.length > 0 ? `${t.primary}18` : t.card,
+                        color: anexosAtuais.length > 0 ? t.primary : t.text,
+                        borderColor:
+                          anexosAtuais.length > 0 ? t.primary : t.border,
+                      }}
+                      title="Anexar 1 ou várias imagens, prints de contas, PDFs ou planilhas"
+                    >
+                      <Paperclip size={15} style={{ color: t.primary }} />
+                      <span>Anexar</span>
+                    </button>
 
-                <button
-                  type="button"
-                  disabled={
-                    processando ||
-                    (!mensagem.trim() && anexosAtuais.length === 0)
-                  }
-                  onClick={() => enviarMensagemParaLala()}
-                  className="p-3 rounded-2xl text-white shrink-0 cursor-pointer disabled:opacity-40 transition-all"
-                  style={{ backgroundColor: t.primary }}
-                  title="Enviar mensagem"
-                >
-                  <Send size={18} />
-                </button>
+                    <button
+                      type="button"
+                      onClick={iniciarGravacaoDeVoz}
+                      className="px-3 py-2 rounded-2xl border text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer hover:opacity-85 transition-opacity"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                      title="Gravar áudio para a Lala"
+                    >
+                      <Mic size={15} style={{ color: t.action }} />
+                      <span>Áudio</span>
+                    </button>
+
+                    {mensagem.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setMensagem("")}
+                        className="px-2.5 py-2 rounded-2xl text-[11px] font-bold flex items-center gap-1 cursor-pointer hover:opacity-80"
+                        style={{
+                          backgroundColor: t.cardSubtle,
+                          color: t.textSoft,
+                        }}
+                        title="Apagar rascunho da caixa de texto"
+                      >
+                        <X size={12} />
+                        <span>Limpar texto</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span
+                      className="hidden sm:inline text-[10px] font-medium"
+                      style={{ color: t.textSoft }}
+                    >
+                      Enter pula linha
+                    </span>
+                    <button
+                      type="button"
+                      disabled={
+                        processando ||
+                        (!mensagem.trim() && anexosAtuais.length === 0)
+                      }
+                      onClick={() => enviarMensagemParaLala()}
+                      className="px-4 py-2 rounded-2xl text-xs font-bold text-white flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+                      style={{ backgroundColor: t.primary }}
+                      title="Enviar mensagem para a Lala"
+                    >
+                      <span>Enviar</span>
+                      <Send size={14} />
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
           </div>

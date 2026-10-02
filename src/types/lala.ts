@@ -80,6 +80,7 @@ export interface PerfilUsuarioCalibrado {
   regrasAprendidasLala?: string[];
   itensMemoriaViva?: ItemAprendizadoLala[];
   ultimaLimpezaChatEm?: number;
+  diaProximoPagamento?: number;
 }
 
 export type IntencaoImportacaoArquivo =
@@ -804,8 +805,11 @@ export interface OrcamentoCategoria {
     | "Moradia & Fixos"
     | "Estudos & UERJ"
     | "Dívida"
-    | "Lazer & Outros";
+    | "Lazer & Outros"
+    | "Compras Avulsas"
+    | (string & {});
   tetoMensal: number;
+  semTetoDefinido?: boolean;
 }
 
 export interface LancamentoFinanceiro {

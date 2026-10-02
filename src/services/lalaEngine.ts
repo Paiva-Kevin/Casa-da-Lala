@@ -800,14 +800,21 @@ function classificarCategoriaDespesa(
     return "Moradia & Fixos";
   }
   if (
-    /\b(mercado|supermercado|padaria|feira|a[çc]ougue|hortifruti| frango|ovo|ovos|leite|p[ãa]o|meal prep|comida|alimenta[çc][ãa]o|compras|farm[áa]cia|rem[ée]dio|droga|higiene|limpeza)\b/.test(
+    /\b(compra avulsa|compras avulsas|avulso|avulsa|shopee|shein|mercado livre|aliexpress|encomenda|mimo|presente|blusa|roupa|sapato|t[êe]nis|cosm[ée]tico|maquiagem)\b/.test(
+      s
+    )
+  ) {
+    return "Compras Avulsas";
+  }
+  if (
+    /\b(mercado|supermercado|padaria|feira|a[çc]ougue|hortifruti|frango|ovo|ovos|leite|p[ãa]o|meal prep|comida|alimenta[çc][ãa]o|farm[áa]cia|rem[ée]dio|droga|higiene|limpeza)\b/.test(
       s
     )
   ) {
     return "Mercado";
   }
   if (
-    /\b(cinema|bar|festa|show|restaurante|ifood|lazer|passeio|viagem|roupa|presente|beleza|sal[ãa]o|unha|cabelo)\b/.test(
+    /\b(cinema|bar|festa|show|restaurante|ifood|lazer|passeio|viagem|beleza|sal[ãa]o|unha|cabelo)\b/.test(
       s
     )
   ) {
@@ -2272,13 +2279,13 @@ export function processarMensagemLocalLala(
     });
   }
 
-  // Evita transformar mensagens de conversa/reclamação/repetição ("Tente de novo", "Não leu") ou prints de imagem em tarefas!
+  // Evita transformar mensagens de conversa/reclamação/alinhamento/enriquecimento ("Tente de novo", "Evite perguntas", "Parar de dar ação") ou prints de imagem em tarefas!
   const ehMensagemConversaOuRetry =
     Boolean(anexo?.mimeType?.startsWith("image/")) ||
-    /^(tente de novo|tenta de novo|refa[çc]a|repete|repita|n[ãa]o leu|voc[êe] n[ãa]o leu|leia os prints|l[êe] os prints|errou|est[áa] errado|n[ãa]o funcionou|cade o picpay|cad[êe] o picpay|faltou o picpay|n[ãa]o tenho ita[uú]|tire o ita[uú]|tira o ita[uú])$/i.test(
+    /^(tente de novo|tenta de novo|refa[çc]a|repete|repita|n[ãa]o leu|voc[êe] n[ãa]o leu|leia os prints|l[êe] os prints|errou|est[áa] errado|n[ãa]o funcionou|cade o picpay|cad[êe] o picpay|faltou o picpay|n[ãa]o tenho ita[uú]|tire o ita[uú]|tira o ita[uú]|continue|continua)$/i.test(
       lower.trim()
     ) ||
-    /\b(tente de novo|tenta de novo|voc[êe] n[ãa]o leu|n[ãa]o leu os prints|faltou criar|n[ãa]o tinha ita[uú]|parte de finan[çc]as|minhas contas)\b/i.test(
+    /\b(tente de novo|tenta de novo|voc[êe] n[ãa]o leu|n[ãa]o leu os prints|faltou criar|n[ãa]o tinha ita[uú]|parte de finan[çc]as|minhas contas|evite perguntas|evitar perguntas|parar de ficar dando a[çc][ãa]o|n[ãa]o precisa dar a[çc][ãa]o|sem a[çc][ãa]o|entendeu o que quis dizer|enriquecer|acumular os gastos)\b/i.test(
       lower
     );
 
@@ -2583,10 +2590,16 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E LEITURA DE PRINTS (CRÍTICO):
    - CONSOLIDAÇÃO OBRIGATÓRIA: Se houver 2, 3 ou mais prints de bancos diferentes, inclua TODOS os bancos identificados juntos no mesmo array "contasAjuste" dentro de uma única ação "ATUALIZAR_CONTAS_FINANCAS". Não deixe nenhum banco dos prints de fora!
    - PROIBIÇÃO DE CONTAS FANTASMAS: Em "contasAjuste", inclua SOMENTE as contas que aparecem visualmente nos prints enviados pela usuária ou que foram citadas por ela na mensagem! NUNCA inclua "Itaú" nem qualquer outra conta que não esteja nos prints enviados!
     - Defina "substituirExistentes": true sempre que a usuária enviar prints das contas dela para atualizar as finanças, garantindo que apenas as contas reais dos prints fiquem no aplicativo!
-3. LISTAS DE GASTOS RECORRENTES, CONTAS FIXAS E PAGAMENTOS PREVISTOS (REGRA DE OURO):
+3. LISTAS DE GASTOS RECORRENTES, CONTAS FIXAS, PAGAMENTOS PREVISTOS E CATEGORIAS FLEXÍVEIS (REGRA DE OURO):
    - Quando a usuária enviar uma lista de gastos recorrentes, despesas fixas, boletos, assinaturas ou pagamentos previstos (seja por texto, áudio ou imagem), você DEVE confirmar e incluir **100% de todas as despesas enviadas sem omitir NENHUMA**, tanto no texto de "respostaLala" (listando uma por uma com valor e data/sem data) quanto no array "lancamentosAjuste" dentro da ação "REGISTRAR_GASTO".
    - PROIBIDO INVENTAR OU ASSUMIR DATAS: Se a usuária informou o dia de vencimento (ex: "dia 10", "vence dia 15", "05/05"), preencha "diaVencimento": 10, "data": "Todo dia 10" (ou "10/05"), "semData": false. Se a usuária NÃO informou data/dia para uma despesa (ex: "Netflix R$ 55,90" ou "Condomínio R$ 620"), preencha OBRIGATORIAMENTE "semData": true, "diaVencimento": null e "data": "Sem data". NUNCA invente dias nem use a data de hoje para gastos previstos/recorrentes sem data!
+   - ATUALIZAÇÃO DE DATAS DE GASTOS RECORRENTES JÁ EXISTENTES: Se a usuária informar as datas/dias de vencimento de gastos que ela já mencionou antes (ex: "Academia dia 10, Wellhub dia 05, Acordo dia 18 e Celular dia 17"), inclua esses itens em "lancamentosAjuste" dentro de "REGISTRAR_GASTO" com os valores correspondentes do contexto e as novas datas ("Todo dia 10", "diaVencimento": 10, "semData": false, "recorrente": true) — o aplicativo atualizará os lançamentos existentes sem duplicar!
+   - CATEGORIAS FLEXÍVEIS E ACUMULADORES DE GASTOS VARIÁVEIS: As categorias financeiras incluem "Mercado", "Transporte", "Compras Avulsas", "Moradia & Fixos", "Pets", "Estudos & UERJ", "Lazer & Outros" e "Dívida". Gastos variáveis do dia a dia (como Uber/Transporte, Mercado e Compras Avulsas) funcionam como acumuladores mensais inteligentes na aba Finanças (não exigem teto fixo rígido se a usuária não quiser estipular um valor prévio).
    - Não use "AGENDAR_COMPROMISSO" para despesas financeiras/boletos; use "REGISTRAR_GASTO" com "lancamentosAjuste" contendo todos os itens!
+4. PROIBIÇÃO DE PERGUNTAS DESNECESSÁRIAS E DE AÇÕES INDESEJADAS QUANDO O OBJETIVO É ENRIQUECER / ALINHAR (CRÍTICO):
+   - Quando a usuária estiver explicando como funciona a rotina/finanças dela, ensinando regras, calibrando seu entendimento, reclamando de algo ou pedindo para você "evitar perguntas quando o objetivo é enriquecer" / "parar de ficar dando ação toda hora":
+     a) NÃO gere cards de ação ("acoesPropostas": [])! Gere ações SOMENTE quando houver um comando concreto de lançamento, atualização de dados reais ou pedido explícito de execução. Conversas de alinhamento, explicações de regras ou feedbacks sobre seu comportamento DEVEM ter "acoesPropostas": [] (guarde tudo silenciosamente em "aprendizadosExtraidos" e "novaRegraAprendida").
+     b) EVITE FAZER PERGUNTAS NO FINAL DA RESPOSTA quando o objetivo for enriquecer seu contexto ou consolidar informações! Não fique interrogando a usuária a cada mensagem. Em vez de fazer perguntas, consolide o que você entendeu de forma direta, inteligente e completa, fazendo apenas apontamentos práticos e úteis.
 
 IMPORTANTE: Retorne SEMPRE um ÚNICO objeto JSON {...} na raiz (NUNCA retorne uma lista/array [...] na raiz, mesmo quando houver várias imagens!).
 Formato exato do objeto JSON:
@@ -3334,11 +3347,21 @@ Formato exato do objeto JSON:
           texto
         );
 
+      // Se a usuária pediu explicitamente para parar de gerar ações toda hora ou está apenas alinhando regras / enriquecendo contexto sem valores concretos para lançar, suprime ações indevidas!
+      const pediuSemAcaoOuAlinhamento =
+        /\b(parar de ficar dando a[çc][ãa]o|n[ãa]o precisa dar a[çc][ãa]o|sem dar a[çc][ãa]o|evite perguntas quando o objetivo [ée] enriquecer|s[óo] estamos alinhando|entendeu o que quis dizer)\b/i.test(
+          texto
+        ) &&
+        listaAnexos.length === 0 &&
+        lancamentosExtraidosTexto.length === 0 &&
+        !pediuSaldoExplicito;
+
       // Remove GUARDAR_SEGUNDO_CEREBRO se a usuária não pediu para guardar no Segundo Cérebro e já existem outras ações reais
-      const acoesFiltradas =
-        !pediuParaGuardarExplicitamente && acoesMapeadas.length > 1
-          ? acoesMapeadas.filter((ac) => ac.tipo !== "GUARDAR_SEGUNDO_CEREBRO")
-          : acoesMapeadas;
+      const acoesFiltradas = pediuSemAcaoOuAlinhamento
+        ? []
+        : !pediuParaGuardarExplicitamente && acoesMapeadas.length > 1
+        ? acoesMapeadas.filter((ac) => ac.tipo !== "GUARDAR_SEGUNDO_CEREBRO")
+        : acoesMapeadas;
 
       const anexosVisiveis = isVoiceNote ? undefined : listaAnexos;
 

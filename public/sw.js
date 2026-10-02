@@ -1,4 +1,4 @@
-const CACHE_NAME = 'casa-da-lala-offline-v22';
+const CACHE_NAME = 'casa-da-lala-offline-v23';
 const FONT_CACHE_NAME = 'casa-da-lala-fonts-v4';
 
 const PRECACHE_ASSETS = [

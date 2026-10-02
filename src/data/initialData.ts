@@ -1566,13 +1566,14 @@ export const INITIAL_CARTOES: CartaoCredito[] = [
 ];
 
 export const INITIAL_ORCAMENTOS: OrcamentoCategoria[] = [
-  { categoria: "Mercado", tetoMensal: 550 },
+  { categoria: "Mercado", tetoMensal: 550, semTetoDefinido: true },
+  { categoria: "Transporte", tetoMensal: 180, semTetoDefinido: true },
+  { categoria: "Compras Avulsas", tetoMensal: 0, semTetoDefinido: true },
   { categoria: "Pets", tetoMensal: 280 },
-  { categoria: "Transporte", tetoMensal: 180 },
   { categoria: "Moradia & Fixos", tetoMensal: 650 },
   { categoria: "Estudos & UERJ", tetoMensal: 120 },
   { categoria: "Dívida", tetoMensal: 250 },
-  { categoria: "Lazer & Outros", tetoMensal: 160 },
+  { categoria: "Lazer & Outros", tetoMensal: 160, semTetoDefinido: true },
 ];
 
 export const INITIAL_LANCAMENTOS: LancamentoFinanceiro[] = [

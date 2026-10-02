@@ -1219,10 +1219,33 @@ export default function App() {
       .slice(0, 3);
   }, [tarefas]);
 
+  const diasRestantesCiclo = useMemo(() => {
+    const hoje = new Date();
+    const diaHoje = hoje.getDate();
+    const diaAlvo = perfilCalibrado.diaProximoPagamento;
+    if (diaAlvo && diaAlvo >= 1 && diaAlvo <= 31) {
+      if (diaAlvo > diaHoje) {
+        return Math.max(1, diaAlvo - diaHoje);
+      }
+      const ultimoDiaMes = new Date(
+        hoje.getFullYear(),
+        hoje.getMonth() + 1,
+        0
+      ).getDate();
+      return Math.max(1, ultimoDiaMes - diaHoje + diaAlvo);
+    }
+    const ultimoDiaMes = new Date(
+      hoje.getFullYear(),
+      hoje.getMonth() + 1,
+      0
+    ).getDate();
+    return Math.max(1, ultimoDiaMes - diaHoje + 1);
+  }, [perfilCalibrado.diaProximoPagamento]);
+
   const dinheiroLivreInfo = useMemo(() => {
     const lancsMes = lancamentos.filter((l) => l.mesKey === mesSelecionado);
-    return calcularDinheiroLivreHoje(contas, lancsMes, 4);
-  }, [contas, lancamentos, mesSelecionado]);
+    return calcularDinheiroLivreHoje(contas, lancsMes, diasRestantesCiclo);
+  }, [contas, lancamentos, mesSelecionado, diasRestantesCiclo]);
 
   const prontidaoInfo = useMemo(
     () => calcularProntidaoDetalhada(checkin, volumeSemana, ultimoSRPE),
@@ -1541,8 +1564,17 @@ export default function App() {
     catRaw?: string
   ): OrcamentoCategoria["categoria"] => {
     const c = (catRaw || "").trim();
+    if (!c) return "Moradia & Fixos";
     if (c === "Pets (Nina & Tobias)" || c === "Pets") return "Pets";
     if (c === "Mobilidade & UERJ" || c === "Transporte") return "Transporte";
+    if (
+      c === "Compras Avulsas" ||
+      c.toLowerCase() === "compras avulsas" ||
+      c.toLowerCase() === "compra avulsa" ||
+      c.toLowerCase() === "avulsos"
+    ) {
+      return "Compras Avulsas";
+    }
     if (
       c === "Mercado" ||
       c === "Moradia & Fixos" ||
@@ -1552,7 +1584,7 @@ export default function App() {
     ) {
       return c;
     }
-    return "Moradia & Fixos";
+    return c;
   };
 
   const adicionarLancamento = (
@@ -1963,11 +1995,32 @@ export default function App() {
           let comprouSachePet = false;
 
           listaAjuste.forEach((item, idx) => {
-            const val = Number(item.valor) || 0;
-            if (val <= 0) return;
             const desc = (item.descricao || "Despesa").trim();
+            const normDesc = desc
+              .toLowerCase()
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .trim();
+            const existenteMatch = lancamentos.find((ex) => {
+              const normEx = ex.descricao
+                .toLowerCase()
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .trim();
+              return (
+                normEx === normDesc ||
+                (normEx.length >= 4 &&
+                  normDesc.length >= 4 &&
+                  (normEx.includes(normDesc) || normDesc.includes(normEx)))
+              );
+            });
+            const val = Number(item.valor) || existenteMatch?.valor || 0;
+            if (val <= 0) return;
             const cat = normalizarCategoriaFinancas(
-              item.categoria || acao.payload?.categoriaGasto || "Moradia & Fixos"
+              item.categoria ||
+                existenteMatch?.categoria ||
+                acao.payload?.categoriaGasto ||
+                "Moradia & Fixos"
             );
             const metodo: "Conta / Pix" | "Cartão de Crédito" =
               item.metodo === "Cartão de Crédito"
@@ -2094,8 +2147,13 @@ export default function App() {
                     .normalize("NFD")
                     .replace(/[\u0300-\u036f]/g, "")
                     .trim();
+                  const nomesBatem =
+                    normEx === normNovo ||
+                    (normEx.length >= 4 &&
+                      normNovo.length >= 4 &&
+                      (normEx.includes(normNovo) || normNovo.includes(normEx)));
                   return (
-                    normEx === normNovo &&
+                    nomesBatem &&
                     ex.status === "previsto" &&
                     novo.status === "previsto" &&
                     (ex.mesKey === novo.mesKey || ex.recorrente || novo.recorrente)
@@ -2104,13 +2162,13 @@ export default function App() {
                 if (idxExist >= 0) {
                   base[idxExist] = {
                     ...base[idxExist],
-                    valor: novo.valor,
+                    valor: novo.valor > 0 ? novo.valor : base[idxExist].valor,
                     data: novo.data,
                     diaVencimento: novo.diaVencimento,
                     semData: novo.semData,
                     recorrente: novo.recorrente,
-                    categoria: novo.categoria,
-                    metodo: novo.metodo,
+                    categoria: novo.categoria || base[idxExist].categoria,
+                    metodo: novo.metodo || base[idxExist].metodo,
                   };
                 } else {
                   base = [novo, ...base];
@@ -3996,6 +4054,14 @@ export default function App() {
                 setLancamentos={setLancamentos}
                 adicionarLancamento={adicionarLancamento}
                 dinheiroLivreInfo={dinheiroLivreInfo}
+                diasRestantesCiclo={diasRestantesCiclo}
+                diaProximoPagamento={perfilCalibrado.diaProximoPagamento}
+                onSetDiaProximoPagamento={(dia) =>
+                  setPerfilCalibrado((prev) => ({
+                    ...prev,
+                    diaProximoPagamento: dia,
+                  }))
+                }
               />
             )}
           </main>

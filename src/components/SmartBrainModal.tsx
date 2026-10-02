@@ -1083,17 +1083,17 @@ export function SmartBrainModal({
               </button>
 
               <textarea
-                rows={1}
+                rows={2}
                 value={textoLivre}
                 onChange={(e) => setTextoLivre(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
                     e.preventDefault();
                     falarComALala();
                   }
                 }}
-                placeholder="Mensagem para a Lala..."
-                className="flex-1 px-3.5 py-2.5 rounded-2xl text-xs outline-none resize-none leading-relaxed min-h-[44px]"
+                placeholder="Mensagem para a Lala (Enter pula linha)..."
+                className="flex-1 px-3.5 py-2.5 rounded-2xl text-sm outline-none resize-none leading-relaxed min-h-[52px] max-h-36"
                 style={{ background: t.cardSubtle, color: t.text }}
               />
 
