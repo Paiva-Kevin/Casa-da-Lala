@@ -615,9 +615,30 @@ export function mergeInteracoesLala<T = Record<string, unknown>>(
     }
   }
 
-  const sortedReal = Array.from(byId.values()).sort(
-    (a, b) => (Number(b.id) || 0) - (Number(a.id) || 0)
-  );
+  const now = Date.now();
+  const sortedReal = Array.from(byId.values())
+    .map((it) => {
+      // If an item was left with processandoResposta === true from earlier (created > 15s ago),
+      // clear the lock so the UI is never stuck on startup
+      if (
+        it &&
+        it.processandoResposta === true &&
+        now - (Number(it.id) || 0) > 15000
+      ) {
+        return {
+          ...it,
+          processandoResposta: false,
+          respostaLala:
+            it.respostaLala &&
+            !it.respostaLala.startsWith("Lando seus") &&
+            !it.respostaLala.startsWith("Analisando sua mensagem")
+              ? it.respostaLala
+              : "Arquivo recebido! Toque em 'Reanalisar' ou 'Concluir Agora' para gerar os treinos e ações no seu aplicativo.",
+        };
+      }
+      return it;
+    })
+    .sort((a, b) => (Number(b.id) || 0) - (Number(a.id) || 0));
 
   if (welcomeCard) {
     sortedReal.push(welcomeCard);

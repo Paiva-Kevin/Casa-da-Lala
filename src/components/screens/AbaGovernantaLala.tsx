@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles,
   Mic,
@@ -57,6 +57,7 @@ import {
   formatarTamanhoBytes,
   lerArquivoParaAnexo,
   pararVozDaLala,
+  processarMensagemLocalLala,
 } from "../../services/lalaEngine";
 import { LalaAppActionCard, getNomeAmigavelTipoAcao } from "../LalaAppActionCard";
 
@@ -965,17 +966,159 @@ export function AbaGovernantaLala({
     }
   };
 
-  // Se uma mensagem ficou com processandoResposta: true (ex: página recarregou durante análise), retoma automaticamente!
+  const forcarConclusaoInteracao = useCallback(
+    (interacaoId?: number) => {
+      const it =
+        interacoes.find((i) =>
+          interacaoId ? i.id === interacaoId : i.processandoResposta
+        ) || interacoes[0];
+      if (!it) {
+        setProcessando(false);
+        setEnvioEmAndamento(null);
+        return;
+      }
+      const targetId = it.id;
+      const anx =
+        it.anexos && it.anexos.length > 0
+          ? it.anexos
+          : it.anexo
+          ? [it.anexo]
+          : [];
+      const primeiroAnexo = anx[0];
+
+      const local = processarMensagemLocalLala(
+        it.mensagemUsuario,
+        {
+          nomeUsuario: perfilCalibrado?.nomeUsuario,
+          prontidaoScore,
+          horasSono: checkin.horasSono,
+          dinheiroLivreHoje,
+          sachesRestantes: petsPerfil[0]?.estoqueSaches ?? 6,
+          tarefasHojeCount: tarefas.filter((tk) => !tk.feito).length,
+          prioridade1:
+            tarefas.find((tk) => !tk.feito)?.texto || "Organizar rotina do dia",
+          disciplinasUERJ: disciplinas.map(
+            (d) =>
+              `${d.nome} (${d.horarioSala}) Faltas: ${d.faltasAtuais}/${d.faltasMax}`
+          ),
+          projetosAtivos: projetos.map((p) => `${p.nome}: ${p.tarefa}`),
+          contasBancarias: contas.map((c) => ({
+            nome: c.nome,
+            saldoAtual: c.saldoAtual,
+          })),
+          cartoesCredito: cartoes.map((cc) => ({
+            nome: cc.nome,
+            faturaAtual: cc.faturaAtual,
+            limiteTotal: cc.limiteTotal,
+            vencimentoDia: cc.vencimentoDia,
+          })),
+          gastosPrevistosERecorrentes: lancamentos.slice(0, 35).map(
+            (l) =>
+              `${l.descricao}: R$ ${Number(l.valor || 0)
+                .toFixed(2)
+                .replace(".", ",")}`
+          ),
+          tomLala: tom,
+          autonomiaLala: perfilCalibrado?.autonomiaLala ?? "confirmar",
+          tiposAutomatizados: perfilCalibrado?.tiposAutomatizados || [],
+          regrasAprendidasLala: perfilCalibrado?.regrasAprendidasLala || [],
+          itensMemoriaViva: perfilCalibrado?.itensMemoriaViva || [],
+        },
+        primeiroAnexo
+      );
+
+      const agoraHora = new Date().toLocaleTimeString("pt-BR", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+
+      const acoesProcessadas = (local.acoesPropostas || []).map(
+        (ac: AcaoGovernanta) => {
+          const autoParaEsteTipo = deveExecutarAutomaticamente(ac.tipo);
+        if (autoParaEsteTipo && !ac.executada) {
+          onExecutarAcao(ac, targetId);
+          return { ...ac, executada: true, executadaEm: agoraHora };
+        }
+        return { ...ac, executada: false };
+      });
+
+      setInteracoes((prev) =>
+        prev.map((item) =>
+          item.id === targetId
+            ? {
+                ...item,
+                ...local,
+                id: targetId,
+                processandoResposta: false,
+                dataHora: agoraHora,
+                acoesPropostas: acoesProcessadas,
+              }
+            : item
+        )
+      );
+      setProcessando(false);
+      setEnvioEmAndamento(null);
+      showToast("Análise concluída com sucesso!");
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      interacoes,
+      perfilCalibrado,
+      prontidaoScore,
+      checkin,
+      dinheiroLivreHoje,
+      petsPerfil,
+      tarefas,
+      disciplinas,
+      projetos,
+      contas,
+      cartoes,
+      lancamentos,
+      tom,
+      onExecutarAcao,
+      showToast,
+    ]
+  );
+
+  const cancelarInteracao = useCallback(
+    (interacaoId?: number) => {
+      setInteracoes((prev) =>
+        prev.map((item) =>
+          interacaoId === undefined || item.id === interacaoId
+            ? {
+                ...item,
+                processandoResposta: false,
+                respostaLala: item.processandoResposta
+                  ? "Análise cancelada. Pode me mandar outra mensagem ou reenviar o arquivo quando quiser!"
+                  : item.respostaLala,
+              }
+            : item
+        )
+      );
+      setProcessando(false);
+      setEnvioEmAndamento(null);
+      showToast("Chat liberado.");
+    },
+    [setInteracoes, showToast]
+  );
+
+  // Se uma mensagem ficou com processandoResposta: true (ex: página recarregou durante análise ou travou desde mais cedo), retoma ou auto-conclui!
   const retomouPendenteRef = useRef<Set<number>>(new Set());
   useEffect(() => {
     if (processando) return;
     const pendente = interacoes.find(
-      (it) =>
-        it.processandoResposta === true &&
-        !retomouPendenteRef.current.has(it.id)
+      (it) => it.processandoResposta === true
     );
-    if (pendente) {
+    if (!pendente) return;
+
+    if (!retomouPendenteRef.current.has(pendente.id)) {
       retomouPendenteRef.current.add(pendente.id);
+      // Se a mensagem foi enviada há mais de 10 segundos (ex: o usuário recarregou ou estava travada desde mais cedo), conclui direto!
+      const eraDeMaisCedo = Date.now() - pendente.id > 10000;
+      if (eraDeMaisCedo) {
+        forcarConclusaoInteracao(pendente.id);
+        return;
+      }
       const anx =
         pendente.anexos && pendente.anexos.length > 0
           ? pendente.anexos
@@ -988,9 +1131,15 @@ export function AbaGovernantaLala({
         false,
         pendente.id
       );
+    } else {
+      // Já tentou retomar e continuou pendente: conclui localmente após 3 segundos
+      const timer = window.setTimeout(() => {
+        forcarConclusaoInteracao(pendente.id);
+      }, 3000);
+      return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [interacoes, processando]);
+  }, [interacoes, processando, forcarConclusaoInteracao]);
 
   // Combina ações pendentes no chat + histórico de ações executadas/editadas/desfeitas
   const itensHistoricoUnificado = useMemo(() => {
@@ -1742,6 +1891,55 @@ export function AbaGovernantaLala({
             </div>
           )}
 
+          {/* FAIXA DE RESGATE SE HOUVER ANÁLISE TRAVADA OU EM PROCESSAMENTO */}
+          {(processando || interacoes.some((it) => it.processandoResposta === true)) && (
+            <div
+              className="px-4 py-2 border-b flex items-center justify-between gap-2 shrink-0 animate-in fade-in"
+              style={{
+                backgroundColor: `${t.primary}15`,
+                borderColor: `${t.primary}40`,
+              }}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <Sparkles
+                  size={14}
+                  className="animate-spin shrink-0"
+                  style={{ color: t.primary }}
+                />
+                <span
+                  className="text-xs font-bold truncate"
+                  style={{ color: t.text }}
+                >
+                  Lala está processando uma mensagem ou arquivo. Demorando?
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => forcarConclusaoInteracao()}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white flex items-center gap-1 cursor-pointer shadow-2xs hover:opacity-90"
+                  style={{ backgroundColor: t.primary }}
+                  title="Concluir imediatamente e gerar as ações"
+                >
+                  <Zap size={11} /> Concluir Agora
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cancelarInteracao()}
+                  className="px-2 py-1 rounded-lg text-[11px] font-medium border cursor-pointer hover:opacity-80"
+                  style={{
+                    backgroundColor: t.card,
+                    color: t.textSoft,
+                    borderColor: t.border,
+                  }}
+                  title="Cancelar e liberar o chat"
+                >
+                  Liberar Chat
+                </button>
+              </div>
+            </div>
+          )}
+
           <div
             className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5"
             style={{ backgroundColor: t.bg }}
@@ -1842,6 +2040,55 @@ export function AbaGovernantaLala({
                         >
                           {it.respostaLala}
                         </p>
+
+                        {it.processandoResposta && (
+                          <div
+                            className="mt-2.5 p-3 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 animate-in fade-in"
+                            style={{
+                              backgroundColor: `${t.primary}12`,
+                              borderColor: `${t.primary}30`,
+                            }}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Sparkles
+                                size={14}
+                                className="animate-spin shrink-0"
+                                style={{ color: t.primary }}
+                              />
+                              <span
+                                className="text-xs font-semibold"
+                                style={{ color: t.text }}
+                              >
+                                Lendo seu arquivo... Demorando?
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => forcarConclusaoInteracao(it.id)}
+                                className="px-3 py-1.5 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 cursor-pointer shadow-xs hover:opacity-90"
+                                style={{ backgroundColor: t.primary }}
+                                title="Concluir análise imediatamente e montar as ações"
+                              >
+                                <Zap size={13} />
+                                <span>Concluir Agora</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => cancelarInteracao(it.id)}
+                                className="px-2.5 py-1.5 rounded-xl text-xs font-medium border cursor-pointer hover:opacity-80"
+                                style={{
+                                  backgroundColor: t.card,
+                                  color: t.textSoft,
+                                  borderColor: t.border,
+                                }}
+                                title="Cancelar e liberar o chat"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        )}
 
                         {it.matrizDecisao &&
                           renderMatrizComparativa(it.matrizDecisao)}

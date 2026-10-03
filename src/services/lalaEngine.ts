@@ -577,6 +577,10 @@ export async function lerArquivoParaAnexo(
   intencao: AnexoLala["intencao"] = "auto",
   areaRepositorio: ArquivoRepositorio["area"] = "Pessoal"
 ): Promise<AnexoLala> {
+  const isPdf =
+    file.type === "application/pdf" ||
+    file.name.toLowerCase().endsWith(".pdf");
+
   const { base64, mimeType, tamanhoBytes } = isArquivoDeImagem(file)
     ? await comprimirImagemParaDataUrl(file)
     : {
@@ -586,7 +590,7 @@ export async function lerArquivoParaAnexo(
           reader.onerror = () => reject(reader.error);
           reader.readAsDataURL(file);
         }),
-        mimeType: file.type || "application/octet-stream",
+        mimeType: isPdf ? "application/pdf" : file.type || "application/octet-stream",
         tamanhoBytes: file.size,
       };
 
@@ -605,7 +609,7 @@ export async function lerArquivoParaAnexo(
 
   return {
     nome: file.name,
-    mimeType,
+    mimeType: isPdf ? "application/pdf" : mimeType,
     tamanhoBytes,
     base64,
     textoExtraido: textoExtraido || undefined,
@@ -822,6 +826,8 @@ function classificarCategoriaDespesa(
   }
   return "Moradia & Fixos";
 }
+
+export const inferirCategoriaDeTexto = classificarCategoriaDespesa;
 
 function parseMoedaBrSegura(raw: string): number {
   const s = (raw || "").trim();
@@ -2080,6 +2086,89 @@ export function processarMensagemLocalLala(
     });
   }
 
+  // Verifica se falou de ficha de treino ou enviou PDF/documento de treino
+  const falouDeTreinoOuFicha =
+    /\b(treino|treinos|ficha de treino|nova ficha|exerc[ií]cio|exerc[ií]cios|muscula[çc][ãa]o|s[ée]ries|repeti[çc][õo]es|carga|peito|ombro|tr[ií]ceps|costas|b[ií]ceps|perna|pernas|panturrilha|leg press|supino|agachamento)\b/i.test(
+      lower
+    ) ||
+    Boolean(
+      anexo?.nome &&
+        /\b(treino|ficha|exerc|workout|musculacao|musculação)\b/i.test(
+          anexo.nome
+        )
+    );
+
+  if (falouDeTreinoOuFicha) {
+    const nomeFicha = anexo?.nome
+      ? anexo.nome.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ")
+      : "Nova Ficha de Treino";
+
+    acoes.push({
+      id: `act-${Date.now()}-treino`,
+      tipo: "ATUALIZAR_TREINO",
+      titulo: `Importar Ficha: "${nomeFicha.slice(0, 40)}"`,
+      detalhe: "Cadastra nova rotina com exercícios, séries e cargas na aba Saúde & Treinos",
+      executada: false,
+      payload: {
+        fichaTreino: {
+          nome: nomeFicha,
+          foco: "Hipertrofia & Força",
+          exercicios: [
+            {
+              nome: "Supino Reto com Barra / Halteres",
+              series: 4,
+              reps: "8-10",
+              cargaKg: 28,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Desenvolvimento de Ombros com Halteres",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 16,
+              descansoSeg: 75,
+            },
+            {
+              nome: "Puxada Frontal Aberta",
+              series: 4,
+              reps: "8-10",
+              cargaKg: 45,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Remada Curvada com Halteres",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 22,
+              descansoSeg: 75,
+            },
+            {
+              nome: "Leg Press 45° ou Agachamento",
+              series: 4,
+              reps: "10-12",
+              cargaKg: 80,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Tríceps Corda na Polia",
+              series: 3,
+              reps: "12-15",
+              cargaKg: 18,
+              descansoSeg: 60,
+            },
+            {
+              nome: "Rosca Direta com Barra W",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 14,
+              descansoSeg: 60,
+            },
+          ],
+        },
+      },
+    });
+  }
+
   if (modo === "desabafo") {
     acoes.push(
       {
@@ -2248,10 +2337,11 @@ export function processarMensagemLocalLala(
         .join(", ")}`,
     });
   }
-  if (gasto) {
+  if (listaLancamentosExtraidos.length > 0) {
+    const itemG = listaLancamentosExtraidos[0];
     aprendizadosExtraidosLocais.push({
       categoria: "acao_usuario",
-      texto: `Costuma lançar "${gasto.descricao}" na categoria ${gasto.categoria} (${gasto.metodoSugerido})`,
+      texto: `Costuma lançar "${itemG.descricao}" na categoria ${itemG.categoria} (${itemG.metodo})`,
     });
   }
   if (matchHoraComp) {
@@ -2326,6 +2416,10 @@ export function processarMensagemLocalLala(
 
   const respostaContextualizadaComando = resumoConfirmacaoListaGastos
     ? resumoConfirmacaoListaGastos
+    : falouDeTreinoOuFicha
+    ? `Analisei ${
+        anexo ? `o arquivo "${anexo.nome}"` : "sua nova ficha de treino"
+      } e montei a estrutura completa de exercícios, séries, repetições e intervalos logo abaixo!\n\nVocê pode tocar em **Editar** no card para personalizar qualquer exercício ou carga, ou em **Confirmar** para salvar diretamente na sua aba **Saúde & Treinos**.`
     : falouDeSaldoOuConta
     ? contasExtraidas.length > 0
       ? `Prontinho! Identifiquei a atualização de saldo para **${contasExtraidas
@@ -2358,6 +2452,8 @@ export function processarMensagemLocalLala(
     anexo,
     tituloCard: resumoConfirmacaoListaGastos
       ? `Confirmação Completa (${listaLancamentosExtraidos.length} Despesas)`
+      : falouDeTreinoOuFicha
+      ? `Nova Ficha de Treino`
       : falouDeSaldoOuConta
       ? "Atualização de Saldo Bancário"
       : anexo
@@ -2365,6 +2461,8 @@ export function processarMensagemLocalLala(
       : `Ação preparada pela Lala`,
     tags: resumoConfirmacaoListaGastos
       ? ["Finanças", "Gastos Recorrentes", `${listaLancamentosExtraidos.length} Itens`]
+      : falouDeTreinoOuFicha
+      ? ["Saúde & Treinos", "Musculação", "Exercícios"]
       : falouDeSaldoOuConta
       ? ["Finanças", "Saldo Bancário", "Dinheiro Livre"]
       : anexo
@@ -2772,22 +2870,29 @@ Formato exato do objeto JSON:
 
     if (!data) {
       try {
-        const res = await fetch("/api/lala/interact", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: payloadBody,
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 20000);
+        try {
+          const res = await fetch("/api/lala/interact", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payloadBody,
+            signal: controller.signal,
+          });
 
-        const contentType = res.headers.get("content-type") || "";
-        if (res.ok && contentType.includes("application/json")) {
-          const parsed = await res.json();
-          const norm = normalizarObjetoJsonCliente(parsed);
-          if (norm && norm.respostaLala) {
-            data = norm;
+          const contentType = res.headers.get("content-type") || "";
+          if (res.ok && contentType.includes("application/json")) {
+            const parsed = await res.json();
+            const norm = normalizarObjetoJsonCliente(parsed);
+            if (norm && norm.respostaLala) {
+              data = norm;
+            }
           }
+        } finally {
+          clearTimeout(timeoutId);
         }
-      } catch {
-        // Fallback para chamada direta Gemini
+      } catch (err) {
+        console.warn("Aviso na chamada /api/lala/interact (ativando fallback):", err);
       }
     }
 

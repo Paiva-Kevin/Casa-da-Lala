@@ -993,6 +993,83 @@ export function LalaAppActionCard({
                 ))}
               </div>
             )}
+
+            {/* PREVIEW VISUAL DE FICHA DE TREINO */}
+            {p?.fichaTreino && (
+              <div
+                className="p-3 rounded-2xl border space-y-2 w-full"
+                style={{
+                  backgroundColor: `${meta.corDestaque}0A`,
+                  borderColor: `${meta.corDestaque}30`,
+                }}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span
+                    className="text-xs font-bold flex items-center gap-1.5"
+                    style={{ color: meta.corDestaque }}
+                  >
+                    <span>🏋️ {p.fichaTreino.nome || "Ficha de Treino"}</span>
+                    {p.fichaTreino.foco && (
+                      <span className="text-[10px] font-normal opacity-85">
+                        · {p.fichaTreino.foco}
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className="text-[10px] font-mono-num font-bold px-2 py-0.5 rounded-full"
+                    style={{
+                      backgroundColor: `${meta.corDestaque}18`,
+                      color: meta.corDestaque,
+                    }}
+                  >
+                    {p.fichaTreino.exercicios?.length || 0} exercícios
+                  </span>
+                </div>
+
+                {p.fichaTreino.exercicios &&
+                  p.fichaTreino.exercicios.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                      {p.fichaTreino.exercicios.map((ex, idx) => (
+                        <div
+                          key={idx}
+                          className="p-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
+                          style={{
+                            backgroundColor: t.card,
+                            borderColor: t.border,
+                          }}
+                        >
+                          <div className="min-w-0">
+                            <p
+                              className="font-semibold truncate"
+                              style={{ color: t.text }}
+                            >
+                              {idx + 1}. {ex.nome}
+                            </p>
+                            <p
+                              className="text-[10px]"
+                              style={{ color: t.textSoft }}
+                            >
+                              {ex.series || 3}x {ex.reps || "10"} reps
+                              {ex.cargaKg ? ` · ${ex.cargaKg} kg` : ""}
+                            </p>
+                          </div>
+                          {ex.descansoSeg && (
+                            <span
+                              className="text-[10px] font-mono-num px-1.5 py-0.5 rounded"
+                              style={{
+                                backgroundColor: `${meta.corDestaque}15`,
+                                color: meta.corDestaque,
+                              }}
+                            >
+                              {ex.descansoSeg}s
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </div>
+            )}
           </>
         ) : (
           /* EDITOR INLINE DA AÇÃO (PARA CORRIGIR E ENSINAR A LALA) */
@@ -1878,6 +1955,271 @@ export function LalaAppActionCard({
                   ))}
                 </div>
               )}
+
+            {/* Edição de Ficha de Treino */}
+            {(draftAcao.tipo === "ATUALIZAR_TREINO" ||
+              draftAcao.payload?.fichaTreino) && (
+              <div
+                className="space-y-2 p-2.5 rounded-xl border"
+                style={{ backgroundColor: t.bg, borderColor: t.border }}
+              >
+                <span
+                  className="text-[10px] font-bold block"
+                  style={{ color: t.primary }}
+                >
+                  🏋️ Ficha de Treino & Exercícios
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label
+                      className="text-[9px] font-bold uppercase block mb-0.5"
+                      style={{ color: t.textSoft }}
+                    >
+                      Nome da Ficha
+                    </label>
+                    <input
+                      value={draftAcao.payload?.fichaTreino?.nome || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setDraftAcao((prev) => ({
+                          ...prev,
+                          payload: {
+                            ...prev.payload,
+                            fichaTreino: {
+                              ...prev.payload?.fichaTreino,
+                              nome: val,
+                              foco:
+                                prev.payload?.fichaTreino?.foco || "Hipertrofia",
+                              exercicios:
+                                prev.payload?.fichaTreino?.exercicios || [],
+                            },
+                          },
+                        }));
+                      }}
+                      className="w-full px-2 py-1 rounded-lg border text-xs outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="text-[9px] font-bold uppercase block mb-0.5"
+                      style={{ color: t.textSoft }}
+                    >
+                      Foco / Divisão
+                    </label>
+                    <input
+                      value={draftAcao.payload?.fichaTreino?.foco || ""}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setDraftAcao((prev) => ({
+                          ...prev,
+                          payload: {
+                            ...prev.payload,
+                            fichaTreino: {
+                              ...prev.payload?.fichaTreino,
+                              foco: val,
+                              nome:
+                                prev.payload?.fichaTreino?.nome || "Novo Treino",
+                              exercicios:
+                                prev.payload?.fichaTreino?.exercicios || [],
+                            },
+                          },
+                        }));
+                      }}
+                      placeholder="Ex: Peito e Tríceps / Pernas"
+                      className="w-full px-2 py-1 rounded-lg border text-xs outline-none"
+                      style={{
+                        backgroundColor: t.card,
+                        color: t.text,
+                        borderColor: t.border,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex items-center justify-between">
+                    <span
+                      className="text-[10px] font-bold"
+                      style={{ color: t.textSoft }}
+                    >
+                      Exercícios (
+                      {draftAcao.payload?.fichaTreino?.exercicios?.length || 0})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDraftAcao((prev) => ({
+                          ...prev,
+                          payload: {
+                            ...prev.payload,
+                            fichaTreino: {
+                              ...prev.payload?.fichaTreino,
+                              nome:
+                                prev.payload?.fichaTreino?.nome || "Novo Treino",
+                              foco:
+                                prev.payload?.fichaTreino?.foco || "Hipertrofia",
+                              exercicios: [
+                                ...(prev.payload?.fichaTreino?.exercicios || []),
+                                {
+                                  nome: "Novo Exercício",
+                                  series: 3,
+                                  reps: "10-12",
+                                  cargaKg: 20,
+                                  descansoSeg: 60,
+                                },
+                              ],
+                            },
+                          },
+                        }));
+                      }}
+                      className="text-[10px] font-bold flex items-center gap-0.5 cursor-pointer"
+                      style={{ color: t.primary }}
+                    >
+                      <Plus size={11} /> Exercício
+                    </button>
+                  </div>
+
+                  {(draftAcao.payload?.fichaTreino?.exercicios || []).map(
+                    (ex, idx) => (
+                      <div
+                        key={idx}
+                        className="p-2 rounded-lg border flex flex-col sm:flex-row items-start sm:items-center gap-1.5"
+                        style={{
+                          backgroundColor: t.card,
+                          borderColor: t.border,
+                        }}
+                      >
+                        <input
+                          value={ex.nome}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setDraftAcao((prev) => {
+                              const exs = [
+                                ...(prev.payload?.fichaTreino?.exercicios || []),
+                              ];
+                              exs[idx] = { ...exs[idx], nome: val };
+                              return {
+                                ...prev,
+                                payload: {
+                                  ...prev.payload,
+                                  fichaTreino: {
+                                    ...prev.payload?.fichaTreino!,
+                                    exercicios: exs,
+                                  },
+                                },
+                              };
+                            });
+                          }}
+                          className="flex-1 px-2 py-1 rounded border text-xs outline-none w-full"
+                          style={{
+                            backgroundColor: t.bg,
+                            color: t.text,
+                            borderColor: t.border,
+                          }}
+                          placeholder="Nome do exercício"
+                        />
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <input
+                            type="number"
+                            value={ex.series || 3}
+                            onChange={(e) => {
+                              const val = Number(e.target.value) || 3;
+                              setDraftAcao((prev) => {
+                                const exs = [
+                                  ...(prev.payload?.fichaTreino?.exercicios || []),
+                                ];
+                                exs[idx] = { ...exs[idx], series: val };
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    fichaTreino: {
+                                      ...prev.payload?.fichaTreino!,
+                                      exercicios: exs,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                            className="w-12 px-1.5 py-1 rounded border text-xs font-mono-num text-center outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                            title="Séries"
+                          />
+                          <span
+                            className="text-[10px]"
+                            style={{ color: t.textSoft }}
+                          >
+                            x
+                          </span>
+                          <input
+                            value={ex.reps || "10"}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setDraftAcao((prev) => {
+                                const exs = [
+                                  ...(prev.payload?.fichaTreino?.exercicios || []),
+                                ];
+                                exs[idx] = { ...exs[idx], reps: val };
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    fichaTreino: {
+                                      ...prev.payload?.fichaTreino!,
+                                      exercicios: exs,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                            className="w-16 px-1.5 py-1 rounded border text-xs font-mono-num text-center outline-none"
+                            style={{
+                              backgroundColor: t.bg,
+                              color: t.text,
+                              borderColor: t.border,
+                            }}
+                            placeholder="reps"
+                            title="Repetições"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDraftAcao((prev) => {
+                                const exs = (
+                                  prev.payload?.fichaTreino?.exercicios || []
+                                ).filter((_, i) => i !== idx);
+                                return {
+                                  ...prev,
+                                  payload: {
+                                    ...prev.payload,
+                                    fichaTreino: {
+                                      ...prev.payload?.fichaTreino!,
+                                      exercicios: exs,
+                                    },
+                                  },
+                                };
+                              });
+                            }}
+                            className="p-1 text-red-500 cursor-pointer"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  )}
+                </div>
+              </div>
+            )}
 
             <div>
               <label

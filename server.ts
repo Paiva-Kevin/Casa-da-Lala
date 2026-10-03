@@ -668,19 +668,24 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       const parts: any[] = [];
 
       for (const itemAnexo of listaAnexos) {
-        if (itemAnexo?.base64 && itemAnexo.mimeType) {
-          const cleanBase64 = itemAnexo.base64.includes(",")
+        if (itemAnexo?.base64 && (itemAnexo.mimeType || itemAnexo.nome)) {
+          let rawMime = (itemAnexo.mimeType || "").split(";")[0].trim().toLowerCase();
+          if (itemAnexo.nome && itemAnexo.nome.toLowerCase().endsWith(".pdf")) {
+            rawMime = "application/pdf";
+          }
+          const rawBase64 = itemAnexo.base64.includes(",")
             ? itemAnexo.base64.split(",")[1]
             : itemAnexo.base64;
+          const cleanBase64 = rawBase64.replace(/\s+/g, "");
 
           if (
-            itemAnexo.mimeType.startsWith("image/") ||
-            itemAnexo.mimeType.startsWith("audio/") ||
-            itemAnexo.mimeType === "application/pdf"
+            rawMime.startsWith("image/") ||
+            rawMime.startsWith("audio/") ||
+            rawMime === "application/pdf"
           ) {
             parts.push({
               inlineData: {
-                mimeType: itemAnexo.mimeType.split(";")[0],
+                mimeType: rawMime,
                 data: cleanBase64,
               },
             });
