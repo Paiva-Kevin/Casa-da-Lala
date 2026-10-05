@@ -906,10 +906,11 @@ export function AbaGovernantaLala({
         }
       }
 
+      const acoesParaAutoExecutar: AcaoGovernanta[] = [];
       const acoesProcessadas = (resultado.acoesPropostas || []).map((ac) => {
         const autoParaEsteTipo = deveExecutarAutomaticamente(ac.tipo);
         if (autoParaEsteTipo && !ac.executada) {
-          onExecutarAcao(ac, novaInteracaoId);
+          acoesParaAutoExecutar.push(ac);
           return { ...ac, executada: true, executadaEm: agoraHora };
         }
         return { ...ac, executada: false };
@@ -943,6 +944,14 @@ export function AbaGovernantaLala({
         }
         return [novaInteracao, ...prev];
       });
+
+      if (acoesParaAutoExecutar.length > 0) {
+        window.setTimeout(() => {
+          acoesParaAutoExecutar.forEach((ac) => {
+            onExecutarAcao(ac, novaInteracaoId);
+          });
+        }, 60);
+      }
 
       if (vozAutomaticaLala || veioDeVoz) {
         reproduzirFalaDaLala(novaInteracaoId, resultado.respostaLala);
@@ -1032,15 +1041,17 @@ export function AbaGovernantaLala({
         minute: "2-digit",
       });
 
+      const acoesParaAutoExecutar: AcaoGovernanta[] = [];
       const acoesProcessadas = (local.acoesPropostas || []).map(
         (ac: AcaoGovernanta) => {
           const autoParaEsteTipo = deveExecutarAutomaticamente(ac.tipo);
-        if (autoParaEsteTipo && !ac.executada) {
-          onExecutarAcao(ac, targetId);
-          return { ...ac, executada: true, executadaEm: agoraHora };
+          if (autoParaEsteTipo && !ac.executada) {
+            acoesParaAutoExecutar.push(ac);
+            return { ...ac, executada: true, executadaEm: agoraHora };
+          }
+          return { ...ac, executada: false };
         }
-        return { ...ac, executada: false };
-      });
+      );
 
       setInteracoes((prev) =>
         prev.map((item) =>
@@ -1059,6 +1070,14 @@ export function AbaGovernantaLala({
       setProcessando(false);
       setEnvioEmAndamento(null);
       showToast("Análise concluída com sucesso!");
+
+      if (acoesParaAutoExecutar.length > 0) {
+        window.setTimeout(() => {
+          acoesParaAutoExecutar.forEach((ac) => {
+            onExecutarAcao(ac, targetId);
+          });
+        }, 60);
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
@@ -1113,24 +1132,27 @@ export function AbaGovernantaLala({
 
     if (!retomouPendenteRef.current.has(pendente.id)) {
       retomouPendenteRef.current.add(pendente.id);
-      // Se a mensagem foi enviada há mais de 10 segundos (ex: o usuário recarregou ou estava travada desde mais cedo), conclui direto!
+      // Se a mensagem foi enviada há mais de 10 segundos (ex: o usuário recarregou ou estava travada desde mais cedo), conclui direto com debounce seguro!
       const eraDeMaisCedo = Date.now() - pendente.id > 10000;
-      if (eraDeMaisCedo) {
-        forcarConclusaoInteracao(pendente.id);
-        return;
-      }
-      const anx =
-        pendente.anexos && pendente.anexos.length > 0
-          ? pendente.anexos
-          : pendente.anexo
-          ? [pendente.anexo]
-          : [];
-      enviarMensagemParaLala(
-        pendente.mensagemUsuario,
-        anx,
-        false,
-        pendente.id
-      );
+      const timer = window.setTimeout(() => {
+        if (eraDeMaisCedo) {
+          forcarConclusaoInteracao(pendente.id);
+        } else {
+          const anx =
+            pendente.anexos && pendente.anexos.length > 0
+              ? pendente.anexos
+              : pendente.anexo
+              ? [pendente.anexo]
+              : [];
+          enviarMensagemParaLala(
+            pendente.mensagemUsuario,
+            anx,
+            false,
+            pendente.id
+          );
+        }
+      }, 100);
+      return () => clearTimeout(timer);
     } else {
       // Já tentou retomar e continuou pendente: conclui localmente após 3 segundos
       const timer = window.setTimeout(() => {

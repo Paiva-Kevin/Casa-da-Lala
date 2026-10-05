@@ -246,15 +246,32 @@ export interface AcaoGovernanta {
     };
     fichaTreino?: {
       nome: string;
+      modalidade?: ModalidadeTreino;
       foco: string;
+      duracaoEstimadaMin?: number;
       exercicios: {
         nome: string;
         series: number;
         reps: string;
-        cargaKg: number;
-        descansoSeg: number;
+        cargaKg?: number;
+        descansoSeg?: number;
+        notaTecnica?: string;
       }[];
     };
+    fichasTreino?: {
+      nome: string;
+      modalidade?: ModalidadeTreino;
+      foco: string;
+      duracaoEstimadaMin?: number;
+      exercicios: {
+        nome: string;
+        series: number;
+        reps: string;
+        cargaKg?: number;
+        descansoSeg?: number;
+        notaTecnica?: string;
+      }[];
+    }[];
     projetos?: {
       nome: string;
       papel?: string;
@@ -643,6 +660,7 @@ export interface FichaTreino {
   nome: string;
   modalidade: ModalidadeTreino;
   foco: string;
+  duracaoEstimadaMin?: number;
   ultimaRealizacao?: string;
   exercicios: ExercicioTreino[];
 }

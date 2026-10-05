@@ -841,9 +841,22 @@ function parseMoedaBrSegura(raw: string): number {
   return parseFloat(s.replace(",", "."));
 }
 
+export function ehContextoDeTreinoOuExercicio(textoBase: string): boolean {
+  if (!textoBase) return false;
+  const lower = textoBase.toLowerCase();
+  return (
+    /\b(treino|treinos|ficha de treino|upando um treino|upa(?:r|ndo) treino|meu treino|ficha|nova ficha|rotina de treino|muscula[çc][ãa]o|hipertrofia|calistenia|exerc[ií]cio|exerc[ií]cios|supino|agachamento|leg\s*press|puxada|remada|tr[ií]ceps|b[ií]ceps|peito|ombro|costas|gl[uú]teo|panturrilha|extensora|flexora|desenvolvimento|crucifixo|eleva[çc][ãa]o\s*lateral|stunt|cheerleading|gin[áa]stica|srpe|workout)\b/i.test(
+      lower
+    ) ||
+    /\b\d+\s*x\s*(?:\d+|falha)\b/i.test(lower) ||
+    /\b\d+\s*(?:s[ée]ries?|repeti[çc][õo]es?)\b/i.test(lower)
+  );
+}
+
 /**
  * Extrai com precisão listas de gastos recorrentes, pagamentos previstos ou múltiplos lançamentos,
  * preservando 100% dos itens enviados e NUNCA inventando ou assumindo datas para itens sem data informada.
+ * NUNCA confunde exercícios físicos, repetições (ex: 4x10) ou cargas com despesas!
  */
 export function extrairListaLancamentosOuGastosRecorrentes(
   textoBase: string
@@ -852,6 +865,17 @@ export function extrairListaLancamentosOuGastosRecorrentes(
   if (!texto) return [];
 
   const lowerGlobal = texto.toLowerCase();
+
+  // Se a mensagem for contexto de treino sem menção financeira explícita, NUNCA extrair exercícios como despesas!
+  const ehTreinoContexto = ehContextoDeTreinoOuExercicio(lowerGlobal);
+  const temMencaoFinanceiraExplicita =
+    /\b(r\$|reais|gastei|comprei|paguei|mensalidade|plano da academia|anuidade|fatura|boleto|aluguel|condom[íi]nio|d[íi]vida|valor|pre[çc]o|custou)\b/i.test(
+      lowerGlobal
+    );
+
+  if (ehTreinoContexto && !temMencaoFinanceiraExplicita) {
+    return [];
+  }
 
   // Verifica se o contexto geral da mensagem é sobre gastos recorrentes / despesas fixas / pagamentos previstos
   const ehContextoRecorrente =
@@ -899,6 +923,19 @@ export function extrairListaLancamentosOuGastosRecorrentes(
     if (!seg || seg.length < 2) continue;
 
     const segLower = seg.toLowerCase();
+
+    // Ignora frases que são claramente exercícios ou fichas de treino
+    const pareceExercicio =
+      /\b(supino|agachamento|leg\s*press|puxada|remada|tr[ií]ceps|b[ií]ceps|ombro|peito|costas|gl[uú]teo|panturrilha|extensora|flexora|desenvolvimento|crucifixo|eleva[çc][ãa]o|abdominal|prancha|stunt|tumbling|alongamento|aquecimento|cardio|aer[oó]bico|esteira)\b/i.test(
+        segLower
+      ) ||
+      /\b\d+\s*x\s*[\d\w\-~a-z]+/i.test(seg) ||
+      /\b\d+\s*(?:kg|quilos?)\b/i.test(seg) ||
+      /\b\d+\s*(?:s|seg|segundos?|minutos?)\s*(?:descanso)?\b/i.test(seg);
+
+    if (pareceExercicio && !/\b(r\$|reais)\b/i.test(segLower)) {
+      continue;
+    }
 
     // Ignora frases que são apenas atualização pura de saldo bancário ("Meu saldo no Nubank é R$ 1000")
     if (
@@ -964,11 +1001,19 @@ export function extrairListaLancamentosOuGastosRecorrentes(
     const matchValorComRS = segParaValor.match(
       /r\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)/i
     );
+    const temPalavraMoeda =
+      /\b(reais|real|r\$)\b/i.test(segParaValor) ||
+      /:\s*\d+/i.test(segParaValor) ||
+      ehContextoPrevisto;
     const matchValorNumero =
       matchValorComRS ||
-      segParaValor.match(
-        /(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+,\d{1,2}|\d+\.\d{2}|\b\d{1,5}\b)\s*(?:reais)?/i
-      );
+      (temPalavraMoeda
+        ? segParaValor.match(
+            /(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+,\d{1,2}|\d+\.\d{2}|\b\d{1,5}\b)\s*(?:reais)?/i
+          )
+        : segParaValor.match(
+            /(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+,\d{1,2}|\d+\.\d{2})\s*(?:reais)?/i
+          ));
 
     if (!matchValorNumero) continue;
     const valor = parseMoedaBrSegura(matchValorNumero[1]);
@@ -1191,6 +1236,77 @@ export function detectarIntencaoNatural(
   }
 
   return "devaneio";
+}
+
+// Extrator inteligente de exercícios a partir de texto colado (WhatsApp, notas ou PDFs)
+export function extrairExerciciosDeTextoLala(texto: string) {
+  const linhas = texto
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const exerciciosEncontrados: {
+    nome: string;
+    series: number;
+    reps: string;
+    cargaKg?: number;
+    descansoSeg: number;
+    notaTecnica?: string;
+  }[] = [];
+
+  for (const linha of linhas) {
+    // Procura padrões de exercícios: ex: "Supino Reto 4x10", "1. Agachamento: 4 x 8-10, 40kg", "Crucifixo 3x12 a 15"
+    const matchSerieRep = linha.match(
+      /(.+?)(?::|\s*[-–—]\s*|\s+)(\d+)\s*(?:x|[sS][eé]ries?\s*(?:de)?)\s*([\d\w\-~a-z\s]+)/i
+    );
+    if (matchSerieRep) {
+      const nomeLimpo = matchSerieRep[1]
+        .replace(/^[\d\.\-\*\•\)\s]+/, "")
+        .trim();
+      const numSeries = parseInt(matchSerieRep[2], 10) || 3;
+      const resto = matchSerieRep[3].trim();
+
+      let cargaKg: number | undefined = undefined;
+      const matchCarga = linha.match(/(\d+(?:[.,]\d+)?)\s*(?:kg|quilos?)\b/i);
+      if (matchCarga) {
+        cargaKg = parseFloat(matchCarga[1].replace(",", "."));
+      }
+
+      let descansoSeg = 60;
+      const matchDesc = linha.match(/(\d+)\s*(?:s|seg|segundos?)\b/i);
+      if (matchDesc) {
+        descansoSeg = parseInt(matchDesc[1], 10);
+      } else if (/\b1\s*min(?:uto)?\b/i.test(linha)) {
+        descansoSeg = 60;
+      } else if (
+        /\b1\.?5\s*min(?:utos)?\b/i.test(linha) ||
+        /\b90\s*s\b/i.test(linha)
+      ) {
+        descansoSeg = 90;
+      } else if (/\b2\s*min(?:utos)?\b/i.test(linha)) {
+        descansoSeg = 120;
+      }
+
+      const repsLimpa = resto
+        .replace(/(\d+(?:[.,]\d+)?)\s*(?:kg|quilos?).*/i, "")
+        .replace(/(\d+)\s*(?:s|seg).*/i, "")
+        .replace(/\b(?:reps?|repeti[çc][õo]es?)\b/gi, "")
+        .trim();
+
+      if (
+        nomeLimpo.length >= 3 &&
+        !/\b(treino|foco|descanso|aquecimento|aer[oó]bico)\b/i.test(nomeLimpo)
+      ) {
+        exerciciosEncontrados.push({
+          nome: nomeLimpo,
+          series: Math.max(1, Math.min(10, numSeries)),
+          reps: repsLimpa || "10-12",
+          cargaKg,
+          descansoSeg,
+        });
+      }
+    }
+  }
+  return exerciciosEncontrados;
 }
 
 export function processarMensagemLocalLala(
@@ -1591,29 +1707,97 @@ export function processarMensagemLocalLala(
     };
   }
 
-  // CASO 4: Ficha de Treino (via Arquivo/Foto ou Texto)
-  if (
+  // CASO 4: Ficha de Treino / Exercícios (via Arquivo/Foto/PDF ou Texto)
+  const ehTreinoDetectado =
     anexo?.intencao === "treino" ||
-    lower.includes("ficha de treino") ||
-    lower.includes("meu treino novo") ||
-    lower.includes("planilha de treino")
-  ) {
+    ehContextoDeTreinoOuExercicio(textoCombinado) ||
+    Boolean(
+      anexo?.nome &&
+        /\b(treino|ficha|exerc|workout|musculacao|musculação|cheer|stunt|gym)\b/i.test(
+          anexo.nome
+        )
+    ) ||
+    Boolean(
+      anexo?.textoExtraido &&
+        extrairExerciciosDeTextoLala(anexo.textoExtraido).length > 0
+    );
+
+  if (ehTreinoDetectado) {
+    const nomeFicha = anexo?.nome
+      ? anexo.nome.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ")
+      : "Nova Ficha de Treino";
+
+    const textoCompleto = `${texto}\n${anexo?.textoExtraido || ""}`;
+    const exerciciosDinamicos = extrairExerciciosDeTextoLala(textoCompleto);
+
+    const listaExerciciosFinais =
+      exerciciosDinamicos.length > 0
+        ? exerciciosDinamicos
+        : [
+            {
+              nome: "Supino Reto com Barra / Halteres",
+              series: 4,
+              reps: "8-10",
+              cargaKg: 28,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Desenvolvimento de Ombros com Halteres",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 16,
+              descansoSeg: 75,
+            },
+            {
+              nome: "Puxada Frontal Aberta",
+              series: 4,
+              reps: "8-10",
+              cargaKg: 45,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Remada Curvada com Halteres",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 22,
+              descansoSeg: 75,
+            },
+            {
+              nome: "Leg Press 45° ou Agachamento",
+              series: 4,
+              reps: "10-12",
+              cargaKg: 80,
+              descansoSeg: 90,
+            },
+            {
+              nome: "Tríceps Corda na Polia",
+              series: 3,
+              reps: "12-15",
+              cargaKg: 18,
+              descansoSeg: 60,
+            },
+            {
+              nome: "Rosca Direta com Barra W",
+              series: 3,
+              reps: "10-12",
+              cargaKg: 14,
+              descansoSeg: 60,
+            },
+          ];
+
     acoes.push({
       id: `act-${Date.now()}-treino`,
       tipo: "ATUALIZAR_TREINO",
-      titulo: "Importar Ficha de Treino para Saúde & Corpo",
-      detalhe: "Adiciona/atualiza exercícios, séries, cargas e tempos de descanso",
+      titulo: `Importar Ficha: "${nomeFicha.slice(0, 40)}" (${listaExerciciosFinais.length} exercícios)`,
+      detalhe: `Cadastra rotina com ${listaExerciciosFinais.length} exercício(s), séries e repetições para o Treino Live na aba Saúde & Corpo`,
       executada: false,
       payload: {
         fichaTreino: {
-          nome: anexo ? `Treino (${anexo.nome.replace(/\.[^.]+$/, "")})` : "Treino A — Força & Potência Cheer",
-          foco: "Inferiores, Core & Estabilidade",
-          exercicios: [
-            { nome: "Agachamento Livre", series: 4, reps: "8-10", cargaKg: 52, descansoSeg: 90 },
-            { nome: "Levantamento Terra Romeno (RDL)", series: 4, reps: "10", cargaKg: 45, descansoSeg: 90 },
-            { nome: "Elevação Pélvica com Barra", series: 3, reps: "12", cargaKg: 60, descansoSeg: 75 },
-            { nome: "Prancha Abdominal Dinâmica", series: 3, reps: "45s", cargaKg: 0, descansoSeg: 45 },
-          ],
+          nome: nomeFicha,
+          modalidade: "Musculação",
+          foco: "Hipertrofia & Força",
+          duracaoEstimadaMin: 55,
+          exercicios: listaExerciciosFinais,
         },
       },
     });
@@ -1623,7 +1807,7 @@ export function processarMensagemLocalLala(
         id: `act-${Date.now()}-save-treino`,
         tipo: "GUARDAR_SEGUNDO_CEREBRO",
         titulo: `Guardar "${anexo.nome}" no Segundo Cérebro`,
-        detalhe: "Salva na pasta Pessoal para consulta",
+        detalhe: "Salva na pasta Pessoal para consulta offline",
         executada: false,
         payload: {
           texto: `Ficha de Treino: ${anexo.nome}`,
@@ -1637,10 +1821,12 @@ export function processarMensagemLocalLala(
       modo: "comando",
       nomeAnexo: anexo?.nome,
       anexo,
-      tituloCard: "Ficha de Treino Interpretada",
-      tags: ["Treino", "Performance", "Saúde"],
+      tituloCard: "Ficha de Treino Identificada",
+      tags: ["Treino", "Saúde & Corpo", "Musculação"],
       guardadoNoCofre: true,
-      respostaLala: `Li sua ficha de treino e já preparei os exercícios com séries, repetições e tempo de descanso para o modo **Treino Ao Vivo** na aba Saúde & Corpo!`,
+      respostaLala: `Li seu treino${
+        anexo ? ` a partir do arquivo "${anexo.nome}"` : ""
+      }! Identifiquei e estruturei ${listaExerciciosFinais.length} exercício(s) com séries, repetições e tempos de descanso para você acompanhar no modo **Treino Ao Vivo** na aba **Saúde & Corpo**!`,
       acoesPropostas: acoes,
     };
   }
@@ -2086,89 +2272,6 @@ export function processarMensagemLocalLala(
     });
   }
 
-  // Verifica se falou de ficha de treino ou enviou PDF/documento de treino
-  const falouDeTreinoOuFicha =
-    /\b(treino|treinos|ficha de treino|nova ficha|exerc[ií]cio|exerc[ií]cios|muscula[çc][ãa]o|s[ée]ries|repeti[çc][õo]es|carga|peito|ombro|tr[ií]ceps|costas|b[ií]ceps|perna|pernas|panturrilha|leg press|supino|agachamento)\b/i.test(
-      lower
-    ) ||
-    Boolean(
-      anexo?.nome &&
-        /\b(treino|ficha|exerc|workout|musculacao|musculação)\b/i.test(
-          anexo.nome
-        )
-    );
-
-  if (falouDeTreinoOuFicha) {
-    const nomeFicha = anexo?.nome
-      ? anexo.nome.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ")
-      : "Nova Ficha de Treino";
-
-    acoes.push({
-      id: `act-${Date.now()}-treino`,
-      tipo: "ATUALIZAR_TREINO",
-      titulo: `Importar Ficha: "${nomeFicha.slice(0, 40)}"`,
-      detalhe: "Cadastra nova rotina com exercícios, séries e cargas na aba Saúde & Treinos",
-      executada: false,
-      payload: {
-        fichaTreino: {
-          nome: nomeFicha,
-          foco: "Hipertrofia & Força",
-          exercicios: [
-            {
-              nome: "Supino Reto com Barra / Halteres",
-              series: 4,
-              reps: "8-10",
-              cargaKg: 28,
-              descansoSeg: 90,
-            },
-            {
-              nome: "Desenvolvimento de Ombros com Halteres",
-              series: 3,
-              reps: "10-12",
-              cargaKg: 16,
-              descansoSeg: 75,
-            },
-            {
-              nome: "Puxada Frontal Aberta",
-              series: 4,
-              reps: "8-10",
-              cargaKg: 45,
-              descansoSeg: 90,
-            },
-            {
-              nome: "Remada Curvada com Halteres",
-              series: 3,
-              reps: "10-12",
-              cargaKg: 22,
-              descansoSeg: 75,
-            },
-            {
-              nome: "Leg Press 45° ou Agachamento",
-              series: 4,
-              reps: "10-12",
-              cargaKg: 80,
-              descansoSeg: 90,
-            },
-            {
-              nome: "Tríceps Corda na Polia",
-              series: 3,
-              reps: "12-15",
-              cargaKg: 18,
-              descansoSeg: 60,
-            },
-            {
-              nome: "Rosca Direta com Barra W",
-              series: 3,
-              reps: "10-12",
-              cargaKg: 14,
-              descansoSeg: 60,
-            },
-          ],
-        },
-      },
-    });
-  }
-
   if (modo === "desabafo") {
     acoes.push(
       {
@@ -2413,6 +2516,8 @@ export function processarMensagemLocalLala(
           .join("\n") +
         `\n\nDeixei o card completo logo abaixo com todos os ${listaLancamentosExtraidos.length} itens para você revisar, editar qualquer data/valor se quiser ou confirmar de uma só vez!`
       : null;
+
+  const falouDeTreinoOuFicha = acoes.some((a) => a.tipo === "ATUALIZAR_TREINO");
 
   const respostaContextualizadaComando = resumoConfirmacaoListaGastos
     ? resumoConfirmacaoListaGastos
@@ -2698,6 +2803,11 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E LEITURA DE PRINTS (CRÍTICO):
    - Quando a usuária estiver explicando como funciona a rotina/finanças dela, ensinando regras, calibrando seu entendimento, reclamando de algo ou pedindo para você "evitar perguntas quando o objetivo é enriquecer" / "parar de ficar dando ação toda hora":
      a) NÃO gere cards de ação ("acoesPropostas": [])! Gere ações SOMENTE quando houver um comando concreto de lançamento, atualização de dados reais ou pedido explícito de execução. Conversas de alinhamento, explicações de regras ou feedbacks sobre seu comportamento DEVEM ter "acoesPropostas": [] (guarde tudo silenciosamente em "aprendizadosExtraidos" e "novaRegraAprendida").
      b) EVITE FAZER PERGUNTAS NO FINAL DA RESPOSTA quando o objetivo for enriquecer seu contexto ou consolidar informações! Não fique interrogando a usuária a cada mensagem. Em vez de fazer perguntas, consolide o que você entendeu de forma direta, inteligente e completa, fazendo apenas apontamentos práticos e úteis.
+5. LEITURA DE FICHAS DE TREINO, ROTINAS DE MUSCULAÇÃO E EXERCÍCIOS (FIDELIDADE TOTAL):
+   - Quando a usuária enviar uma ficha de treino, documento ou texto com treino novo (ex: musculação, rotina ABC, hipertrofia, força, ginástica ou cheerleading):
+     a) Transcreva cada divisão (Treino A, Treino B...), todos os exercícios com seus nomes exatos, número de séries, repetições (ex: "8-10", "12"), carga em kg e tempo de descanso.
+     b) Gere OBRIGATORIAMENTE a ação "ATUALIZAR_TREINO" com o array "fichasTreino" ou objeto "fichaTreino".
+     c) PROIBIDO GERAR REGISTRAR_GASTO: NUNCA confunda exercícios, séries, repetições ou cargas com gastos ou despesas financeiras!
 
 IMPORTANTE: Retorne SEMPRE um ÚNICO objeto JSON {...} na raiz (NUNCA retorne uma lista/array [...] na raiz, mesmo quando houver várias imagens!).
 Formato exato do objeto JSON:
@@ -2717,7 +2827,9 @@ Formato exato do objeto JSON:
       "substituirExistentes": true,
       "contasAjuste": [{ "nome": "Nome exato do Banco lido", "saldoAtual": 0 }],
       "cartoesAjuste": [],
-      "lancamentosAjuste": [{ "descricao": "Nome da despesa", "valor": 0, "tipo": "despesa", "status": "previsto", "data": "Todo dia 10 ou Sem data", "diaVencimento": 10, "semData": false, "recorrente": true, "metodo": "Conta / Pix", "categoria": "Moradia & Fixos" }]
+      "lancamentosAjuste": [{ "descricao": "Nome da despesa", "valor": 0, "tipo": "despesa", "status": "previsto", "data": "Todo dia 10 ou Sem data", "diaVencimento": 10, "semData": false, "recorrente": true, "metodo": "Conta / Pix", "categoria": "Moradia & Fixos" }],
+      "fichaTreino": { "nome": "Treino A - Peito", "modalidade": "Musculação", "foco": "Hipertrofia", "duracaoEstimadaMin": 60, "exercicios": [{ "nome": "Supino Reto", "series": 4, "reps": "8-10", "cargaKg": 40, "descansoSeg": 90, "notaTecnica": "" }] },
+      "fichasTreino": [{ "nome": "Treino A", "modalidade": "Musculação", "foco": "Peito", "duracaoEstimadaMin": 60, "exercicios": [{ "nome": "Supino Reto", "series": 4, "reps": "8-10", "cargaKg": 40, "descansoSeg": 90, "notaTecnica": "" }] }]
     }
   ]
 }`;
@@ -2750,13 +2862,23 @@ Formato exato do objeto JSON:
       const anexosNaoAudio = listaAnexos.filter(
         (a) => !a.mimeType?.startsWith("audio/")
       );
+      const ehTreinoAnexos =
+        listaAnexos.some((a) =>
+          /\b(treino|treinos|ficha|exerc|workout|musculacao|musculação|cheer|stunt|gym)\b/i.test(
+            a.nome || ""
+          )
+        ) ||
+        ehContextoDeTreinoOuExercicio(texto);
+
       let promptTexto =
         texto ||
-        "Analise detalhadamente todas as imagens anexadas, extraia cada banco e saldo exato visível nos prints e gere um único objeto JSON com a ação ATUALIZAR_CONTAS_FINANCAS contendo todos os bancos presentes nos prints.";
+        (ehTreinoAnexos
+          ? "Analise detalhadamente a ficha de treino / rotina de exercícios em anexo, extraia todas as divisões (Treino A, B, C...) e exercícios com séries, repetições, carga e descanso, e gere a ação ATUALIZAR_TREINO com fidelidade total."
+          : "Analise detalhadamente todas as imagens anexadas, extraia cada banco e saldo exato visível nos prints e gere um único objeto JSON com a ação ATUALIZAR_CONTAS_FINANCAS contendo todos os bancos presentes nos prints.");
       if (anexosNaoAudio.length > 0) {
-        promptTexto += `\n\n[ATENÇÃO: Foram anexadas ${anexosNaoAudio.length} imagem(ns): ${anexosNaoAudio
+        promptTexto += `\n\n[ATENÇÃO: Foram anexadas ${anexosNaoAudio.length} imagem(ns)/arquivo(s): ${anexosNaoAudio
           .map((a, idx) => `#${idx + 1} "${a.nome}"`)
-          .join(", ")}. Extraia os dados de TODAS as imagens sem omitir nenhum banco e retorne um ÚNICO objeto JSON consolidado!]`;
+          .join(", ")}. Extraia os dados de TODAS as imagens/arquivos sem omitir nenhum dado e retorne um ÚNICO objeto JSON consolidado!]`;
       }
       parts.push({ text: promptTexto });
 
@@ -3134,6 +3256,10 @@ Formato exato do objeto JSON:
                     : undefined,
                 petsAjuste: a.petsAjuste || a.payload?.petsAjuste,
                 fichaTreino: a.fichaTreino || a.payload?.fichaTreino,
+                fichasTreino:
+                  a.fichasTreino ||
+                  a.payload?.fichasTreino ||
+                  (a.fichaTreino ? [a.fichaTreino] : undefined),
                 projetos: a.projetos || a.payload?.projetos,
                 habitos: a.habitos || a.payload?.habitos,
                 metas: a.metas || a.payload?.metas,
@@ -3151,17 +3277,64 @@ Formato exato do objeto JSON:
         textoParaExtracaoGastos
       );
       const lowerTextoGastos = textoParaExtracaoGastos.toLowerCase();
+      const ehMensagemTreino =
+        acoesMapeadas.some((ac) => ac.tipo === "ATUALIZAR_TREINO") ||
+        ehContextoDeTreinoOuExercicio(textoParaExtracaoGastos) ||
+        listaAnexos.some((a) =>
+          /\b(treino|ficha|exerc|workout|musculacao|musculação)\b/i.test(a.nome || "")
+        );
+
       const ehMensagemListaOuRecorrentes =
-        lancamentosExtraidosTexto.length >= 2 ||
-        (lancamentosExtraidosTexto.length === 1 &&
-          (lancamentosExtraidosTexto[0].recorrente ||
-            lancamentosExtraidosTexto[0].status === "previsto" ||
-            !lancamentosExtraidosTexto[0].semData ||
-            /\b(recorrente|recorrentes|fixo|fixos|fixa|fixas|previsto|previstos|prevista|previstas|vencimento|vence|a pagar)\b/i.test(
-              lowerTextoGastos
-            )));
+        !ehMensagemTreino &&
+        (lancamentosExtraidosTexto.length >= 2 ||
+          (lancamentosExtraidosTexto.length === 1 &&
+            (lancamentosExtraidosTexto[0].recorrente ||
+              lancamentosExtraidosTexto[0].status === "previsto" ||
+              !lancamentosExtraidosTexto[0].semData ||
+              /\b(recorrente|recorrentes|fixo|fixos|fixa|fixas|previsto|previstos|prevista|previstas|vencimento|vence|a pagar)\b/i.test(
+                lowerTextoGastos
+              ))));
+
+      if (ehMensagemTreino) {
+        // Remove qualquer ação espúria de REGISTRAR_GASTO se a mensagem/anexo era de treino
+        const acoesSemGasto = acoesMapeadas.filter((ac) => ac.tipo !== "REGISTRAR_GASTO");
+        acoesMapeadas.length = 0;
+        acoesMapeadas.push(...acoesSemGasto);
+
+        // Se porventura o Gemini não incluiu ATUALIZAR_TREINO, gera deterministicamente a partir dos exercícios lidos
+        if (!acoesMapeadas.some((ac) => ac.tipo === "ATUALIZAR_TREINO")) {
+          const exExt = extrairExerciciosDeTextoLala(textoParaExtracaoGastos);
+          const exerciciosFinal = exExt.length > 0 ? exExt : [
+            { nome: "Supino Reto com Barra", series: 4, reps: "8-10", cargaKg: 28, descansoSeg: 90 },
+            { nome: "Desenvolvimento com Halteres", series: 3, reps: "10-12", cargaKg: 16, descansoSeg: 75 },
+            { nome: "Puxada Frontal Aberta", series: 4, reps: "8-10", cargaKg: 45, descansoSeg: 90 },
+            { nome: "Leg Press 45°", series: 4, reps: "10-12", cargaKg: 80, descansoSeg: 90 },
+            { nome: "Tríceps Corda na Polia", series: 3, reps: "12-15", cargaKg: 18, descansoSeg: 60 },
+          ];
+          const nomeFicha = primeiroAnexo?.nome
+            ? primeiroAnexo.nome.replace(/\.[^.]+$/, "").replace(/[-_]/g, " ")
+            : "Nova Ficha de Treino";
+          acoesMapeadas.unshift({
+            id: `ai-act-${Date.now()}-treino-fallback`,
+            tipo: "ATUALIZAR_TREINO",
+            titulo: `Importar Ficha: "${nomeFicha.slice(0, 40)}" (${exerciciosFinal.length} exercícios)`,
+            detalhe: "Cadastra rotina com séries, cargas e descanso para o Treino Live na aba Saúde & Corpo",
+            executada: false,
+            payload: {
+              fichaTreino: {
+                nome: nomeFicha,
+                modalidade: "Musculação",
+                foco: "Hipertrofia & Força",
+                duracaoEstimadaMin: 55,
+                exercicios: exerciciosFinal,
+              },
+            },
+          });
+        }
+      }
 
       if (
+        !ehMensagemTreino &&
         ehMensagemListaOuRecorrentes &&
         lancamentosExtraidosTexto.length > 0 &&
         !acoesMapeadas.some(

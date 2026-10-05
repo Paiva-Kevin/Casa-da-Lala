@@ -20,6 +20,8 @@ import {
   Moon,
   Brain,
   Trash2,
+  FileText,
+  Upload,
 } from "lucide-react";
 import {
   Artigo,
@@ -40,6 +42,7 @@ import {
   calcularSituacaoNotaDisciplina,
   FASES_ARTIGO,
 } from "../../data/initialData";
+import { extrairExerciciosDeTextoLala } from "../../services/lalaEngine";
 
 // ============================================================================
 // 1. MÓDULO UNIFICADO: ESTUDOS & TRABALHO (ENTREGÁVEIS UERJ, ARTIGOS, LEITURAS & PROJETOS)
@@ -1342,6 +1345,13 @@ export function SaudePetsScreen({
   const [novaFichaFoco, setNovaFichaFoco] = useState("");
   const [refeicaoEditandoId, setRefeicaoEditandoId] = useState<number | null>(null);
 
+  // Importador direto de treino em texto ou PDF
+  const [mostrarImportarTreino, setMostrarImportarTreino] = useState(false);
+  const [textoTreinoImportar, setTextoTreinoImportar] = useState("");
+  const [nomeTreinoImportar, setNomeTreinoImportar] = useState("Meu Treino Novo");
+  const [modalidadeImportar, setModalidadeImportar] = useState<ModalidadeTreino>("Musculação");
+  const [substituirAoImportar, setSubstituirAoImportar] = useState(false);
+
   // Mapa Articular Stitch (Cheerleading, Stunt & Ginástica)
   const [statusArticulacoes, setStatusArticulacoes] = useState<
     Record<string, "100% Novo" | "Leve Tensão" | "Mobilidade 5m">
@@ -1615,20 +1625,182 @@ export function SaudePetsScreen({
                 </button>
               ))}
               {setFichasTreino && (
-                <button
-                  onClick={() => setMostrarNovaFicha((v) => !v)}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border cursor-pointer"
-                  style={{
-                    background: `${t.primary}15`,
-                    color: t.primary,
-                    borderColor: `${t.primary}40`,
-                  }}
-                >
-                  + Ficha
-                </button>
+                <>
+                  <button
+                    onClick={() => {
+                      setMostrarImportarTreino((v) => !v);
+                      setMostrarNovaFicha(false);
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border cursor-pointer flex items-center gap-1.5"
+                    style={{
+                      background: `${t.action}15`,
+                      color: t.action,
+                      borderColor: `${t.action}40`,
+                    }}
+                    title="Colar texto de treino do WhatsApp, PDF ou aplicativo para cadastrar automaticamente"
+                  >
+                    <Upload size={13} />
+                    <span>Importar / Colar Treino</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setMostrarNovaFicha((v) => !v);
+                      setMostrarImportarTreino(false);
+                    }}
+                    className="px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border cursor-pointer"
+                    style={{
+                      background: `${t.primary}15`,
+                      color: t.primary,
+                      borderColor: `${t.primary}40`,
+                    }}
+                  >
+                    + Ficha Manual
+                  </button>
+                </>
               )}
             </div>
           </div>
+
+          {mostrarImportarTreino && setFichasTreino && (
+            <div
+              className="p-4 sm:p-5 rounded-3xl border space-y-3.5 shadow-sm"
+              style={{ background: t.card, borderColor: t.action }}
+            >
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="text-sm font-bold flex items-center gap-2" style={{ color: t.text }}>
+                    <FileText size={16} style={{ color: t.action }} />
+                    Importar ou Colar Treino Real
+                  </h4>
+                  <p className="text-xs" style={{ color: t.textSoft }}>
+                    Cole o texto da sua ficha (ex: WhatsApp, bloco de notas ou PDF) com o nome dos exercícios e séries (ex: "Supino 4x10").
+                  </p>
+                </div>
+                <button
+                  onClick={() => setMostrarImportarTreino(false)}
+                  className="text-xs font-bold px-2 py-1 rounded-lg"
+                  style={{ background: t.cardSubtle, color: t.textSoft }}
+                >
+                  Fechar
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <input
+                  value={nomeTreinoImportar}
+                  onChange={(e) => setNomeTreinoImportar(e.target.value)}
+                  placeholder="Nome da Ficha (ex: Treino A · Peito & Tríceps)"
+                  className="px-3 py-2 rounded-xl text-xs border outline-none font-semibold"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                />
+                <select
+                  value={modalidadeImportar}
+                  onChange={(e) => setModalidadeImportar(e.target.value as ModalidadeTreino)}
+                  className="px-3 py-2 rounded-xl text-xs border outline-none font-semibold"
+                  style={{ background: t.bg, color: t.text, borderColor: t.border }}
+                >
+                  <option value="Musculação">Musculação</option>
+                  <option value="Cheerleading">Cheerleading</option>
+                  <option value="Ginástica">Ginástica</option>
+                </select>
+              </div>
+
+              <textarea
+                rows={5}
+                value={textoTreinoImportar}
+                onChange={(e) => setTextoTreinoImportar(e.target.value)}
+                placeholder={`Cole seu treino aqui, por exemplo:\n\nSupino Reto com Barra 4x10 (30kg) - 90s descanso\nDesenvolvimento de Ombros com Halteres 3x12 (16kg)\nPuxada Frontal Aberta 4x10 (45kg)\nRemada Curvada 3x12 (20kg)\nLeg Press 45° 4x12 (120kg)\nTríceps Corda 3x15\nRosca Direta Barra W 3x10`}
+                className="w-full p-3 rounded-2xl text-xs border outline-none resize-none leading-relaxed font-mono"
+                style={{ background: t.bg, color: t.text, borderColor: t.border }}
+              />
+
+              {(() => {
+                const exExtraidos = extrairExerciciosDeTextoLala(textoTreinoImportar);
+                return (
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold" style={{ color: t.textSoft }}>
+                        Exercícios reconhecidos:{" "}
+                        <strong style={{ color: exExtraidos.length > 0 ? t.primary : t.action }}>
+                          {exExtraidos.length}
+                        </strong>
+                      </span>
+                      <label className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={substituirAoImportar}
+                          onChange={(e) => setSubstituirAoImportar(e.target.checked)}
+                          className="rounded"
+                        />
+                        <span className="text-[11px]" style={{ color: t.textSoft }}>
+                          Substituir treinos anteriores
+                        </span>
+                      </label>
+                    </div>
+
+                    {exExtraidos.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                        {exExtraidos.map((ex, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
+                            style={{ background: t.bg, borderColor: t.border }}
+                          >
+                            <span className="font-semibold truncate" style={{ color: t.text }}>
+                              {idx + 1}. {ex.nome}
+                            </span>
+                            <span className="text-[10px] shrink-0 font-mono-num" style={{ color: t.action }}>
+                              {ex.series}x {ex.reps} {ex.cargaKg ? `· ${ex.cargaKg}kg` : ""}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <button
+                      disabled={exExtraidos.length === 0}
+                      onClick={() => {
+                        if (exExtraidos.length === 0) return;
+                        const novaFichaObj: FichaTreino = {
+                          id: Date.now(),
+                          nome: nomeTreinoImportar.trim() || "Nova Ficha de Treino",
+                          modalidade: modalidadeImportar,
+                          foco: "Hipertrofia & Força",
+                          duracaoEstimadaMin: 55,
+                          ultimaRealizacao: "Importada",
+                          exercicios: exExtraidos.map((ex, idx) => ({
+                            id: Date.now() + idx * 10,
+                            nome: ex.nome,
+                            modalidade: modalidadeImportar,
+                            descansoSeg: ex.descansoSeg,
+                            series: Array.from({ length: ex.series }, (_, sIdx) => ({
+                              id: Date.now() + idx * 10 + sIdx + 1,
+                              numero: sIdx + 1,
+                              cargaOuDetalhe: ex.cargaKg ? `${ex.cargaKg} kg` : "Peso corporal",
+                              repsOuTempo: ex.reps,
+                              concluida: false,
+                            })),
+                          })),
+                        };
+
+                        setFichasTreino((prev) =>
+                          substituirAoImportar ? [novaFichaObj] : [novaFichaObj, ...prev]
+                        );
+                        setTextoTreinoImportar("");
+                        setMostrarImportarTreino(false);
+                      }}
+                      className="w-full py-2.5 rounded-2xl text-xs font-bold text-white flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 transition-all shadow-xs"
+                      style={{ background: t.action }}
+                    >
+                      <Check size={14} />
+                      <span>Salvar Ficha com {exExtraidos.length} Exercício(s)</span>
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
 
           {mostrarNovaFicha && setFichasTreino && (
             <div

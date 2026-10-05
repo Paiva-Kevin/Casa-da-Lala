@@ -26,6 +26,7 @@ import {
   ContaBancaria,
   Disciplina,
   FichaTreino,
+  ModalidadeTreino,
   HabitoDiario,
   ItemEstoqueCasa,
   ItemListaCompras,
@@ -2751,23 +2752,27 @@ export default function App() {
         break;
       }
       case "ATUALIZAR_TREINO": {
-        if (acao.payload?.fichaTreino) {
-          const ft = acao.payload.fichaTreino;
-          const novaFicha: FichaTreino = {
-            id: Date.now(),
-            nome: ft.nome,
-            modalidade: "Musculação",
-            foco: ft.foco,
+        const rawFichas =
+          acao.payload?.fichasTreino ||
+          (acao.payload?.fichaTreino ? [acao.payload.fichaTreino] : []);
+        if (rawFichas.length > 0) {
+          const novasFichas: FichaTreino[] = rawFichas.map((ft, fIdx) => ({
+            id: Date.now() + fIdx * 100,
+            nome: ft.nome || `Treino ${String.fromCharCode(65 + fIdx)}`,
+            modalidade: (ft.modalidade as ModalidadeTreino) || "Musculação",
+            foco: ft.foco || "Hipertrofia & Força",
+            duracaoEstimadaMin: ft.duracaoEstimadaMin || 50,
             ultimaRealizacao: "Importada pela Lala",
-            exercicios: ft.exercicios.map((ex, idx) => ({
-              id: Date.now() + idx,
+            exercicios: (ft.exercicios || []).map((ex, idx) => ({
+              id: Date.now() + fIdx * 1000 + idx * 10,
               nome: ex.nome,
-              modalidade: "Musculação",
-              descansoSeg: ex.descansoSeg,
+              modalidade: (ft.modalidade as ModalidadeTreino) || "Musculação",
+              notaTecnica: ex.notaTecnica,
+              descansoSeg: ex.descansoSeg || 60,
               series: Array.from(
                 { length: Math.max(1, ex.series || 3) },
                 (_, sIdx) => ({
-                  id: Date.now() + idx * 10 + sIdx,
+                  id: Date.now() + fIdx * 1000 + idx * 10 + sIdx + 1,
                   numero: sIdx + 1,
                   cargaOuDetalhe: ex.cargaKg
                     ? `${ex.cargaKg} kg`
@@ -2777,9 +2782,23 @@ export default function App() {
                 })
               ),
             })),
-          };
-          setFichasTreino((prev) => [novaFicha, ...prev]);
-          showToast(`Ficha "${ft.nome}" importada para Saúde & Corpo!`);
+          }));
+
+          setFichasTreino((prev) =>
+            acao.payload?.substituirExistentes
+              ? novasFichas
+              : [...novasFichas, ...prev]
+          );
+
+          if (novasFichas.length === 1) {
+            showToast(
+              `Ficha "${novasFichas[0].nome}" com ${novasFichas[0].exercicios.length} exercício(s) salva em Saúde & Treinos!`
+            );
+          } else {
+            showToast(
+              `${novasFichas.length} fichas de treino importadas com sucesso para Saúde & Treinos!`
+            );
+          }
         }
         break;
       }

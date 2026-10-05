@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, ThinkingLevel } from "@google/genai";
+import { PDFParse } from "pdf-parse";
 
 const PORT = Number(process.env.PORT) || 3000;
 const APP_BUILD_VERSION = "v19.0";
@@ -598,6 +599,7 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
      d) Defina "substituirExistentes": true na ação "ATUALIZAR_CONTAS_FINANCAS" sempre que a usuária enviar prints das contas dela para calibrar/atualizar as finanças, garantindo que contas antigas de exemplo sejam removidas e as novas (como PicPay, Nubank, etc.) sejam criadas/atualizadas.
    - Se ela pedir "atualize meu saldo" por texto sem anexar prints e sem informar valor numérico, gere a ação "ATUALIZAR_CONTAS_FINANCAS" para edição rápida no card.
 4. LISTAS DE GASTOS RECORRENTES, CONTAS FIXAS, PAGAMENTOS PREVISTOS E CATEGORIAS FLEXÍVEIS (REGRA DE OURO):
+   - PROIBIÇÃO ABSOLUTA DE CONFUNDIR TREINOS COM GASTOS: NUNCA interprete nomes de exercícios (ex: Supino, Agachamento, Leg Press, Puxada, Tríceps, Rosca, Abdominal, Stunt, Tumbling), repetições (ex: 4x10, 3x12, 10-12), séries ou cargas em kg (ex: 30kg, 80kg) como despesas ou pagamentos! Quando a usuária enviar ou upar um treino, ficha ou exercícios, você DEVE gerar OBRIGATORIAMENTE a ação "ATUALIZAR_TREINO" (com 'fichasTreino' ou 'fichaTreino') e NUNCA a ação "REGISTRAR_GASTO".
    - Quando a usuária enviar uma lista de gastos recorrentes, despesas fixas, boletos, assinaturas ou pagamentos previstos (por texto, áudio ou imagem), você DEVE confirmar e incluir **100% de todas as despesas enviadas sem omitir NENHUMA**, tanto no texto de "respostaLala" (listando uma por uma com valor e data/sem data) quanto no array "lancamentosAjuste" dentro da ação "REGISTRAR_GASTO".
    - PROIBIDO INVENTAR OU ASSUMIR DATAS: Se a usuária informou o dia de vencimento (ex: "dia 10", "vence dia 15", "05/05"), preencha "diaVencimento": 10, "data": "Todo dia 10" (ou "10/05"), "semData": false. Se a usuária NÃO informou data/dia para uma despesa (ex: "Netflix R$ 55,90" ou "Condomínio R$ 620"), preencha OBRIGATORIAMENTE "semData": true, "diaVencimento": null e "data": "Sem data". NUNCA invente dias nem use a data de hoje para gastos previstos/recorrentes sem data!
    - ATUALIZAÇÃO DE DATAS DE GASTOS RECORRENTES JÁ EXISTENTES: Se a usuária informar as datas/dias de vencimento de gastos que ela já mencionou antes (ex: "Academia dia 10, Wellhub dia 05, Acordo dia 18 e Celular dia 17"), inclua esses itens em "lancamentosAjuste" dentro de "REGISTRAR_GASTO" com os valores correspondentes do contexto e as novas datas ("Todo dia 10", "diaVencimento": 10, "semData": false, "recorrente": true) — o aplicativo atualizará os lançamentos existentes sem duplicar!
@@ -609,6 +611,12 @@ DIRETRIZES DE INTELIGÊNCIA ADAPTATIVA E CONVERSAÇÃO PROFUNDA:
      b) EVITE FAZER PERGUNTAS NO FINAL DA RESPOSTA quando o objetivo for enriquecer seu contexto ou consolidar informações! Não fique interrogando a usuária a cada mensagem. Em vez de fazer perguntas, consolide o que você entendeu de forma direta, inteligente e completa, fazendo apenas apontamentos práticos e úteis.
 6. CONFIRMAÇÃO E AUTOMAÇÃO PROGRESSIVA:
    - Se a usuária pedir para automatizar um tipo de ação (ex: "automatize atualizações de saldo", "pode fazer gastos direto"), preencha "automatizarTipos". Se pedir para voltar a confirmar, preencha "pedirConfirmacaoTipos".
+7. LEITURA DE FICHAS DE TREINO, ROTINAS DE MUSCULAÇÃO, CHEERLEADING E GINÁSTICA (FIDELIDADE TOTAL):
+   - Quando a usuária enviar uma ficha de treino, documento ou texto com treino novo (ex: musculação, rotina ABC, hipertrofia, força, ginástica ou cheerleading):
+     a) EXTRAÇÃO COMPLETA: Transcreva com fidelidade ABSOLUTA cada divisão (ex: Treino A, Treino B, Treino C, Treino D...), todos os exercícios com seus nomes exatos, número de séries, repetições (ex: "8-10", "12/10/8", "15", "Falha"), carga (se informada) e tempo de descanso em segundos (ex: 60s, 90s) e notas técnicas (ex: "Drop-set na última", "Pausa de 2s", "Rest-pause").
+     b) MÚLTIPLAS DIVISÕES: Se houver mais de uma divisão (ex: Treino A, Treino B, Treino C), gere o array "fichasTreino" contendo todas as divisões ou uma ação "ATUALIZAR_TREINO" para cada ficha/divisão!
+     c) PROIBIDO INVENTAR: NUNCA substitua por treinos genéricos nem invente exercícios que não estão no documento ou texto fornecido!
+     d) Se a usuária pedir para substituir fichas antigas ou for uma ficha nova completa, marque "substituirExistentes": true.
 
 Retorne SEMPRE um objeto JSON válido exatamente neste formato:
 {
@@ -654,7 +662,8 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       "itensCompras": [{ "nome": "Item", "categoria": "Despensa & Meal Prep", "quantidadeComprar": 1, "unidade": "un", "precoEstimado": 15.0 }],
       "disciplinas": [{ "nome": "Matéria", "professor": "Prof", "horarioSala": "Seg 08h-10h", "aulasTotaisSemestre": 30, "faltasMax": 7 }],
       "petsAjuste": [{ "nome": "Nina", "racao": "Royal Canin", "estoqueSaches": 12, "estoqueRacaoKg": 4, "proximaVet": "Em dia" }],
-      "fichaTreino": { "nome": "Treino A", "foco": "Força", "exercicios": [{ "nome": "Agachamento", "series": 4, "reps": "10", "cargaKg": 40, "descansoSeg": 90 }] },
+      "fichaTreino": { "nome": "Treino A - Peito", "modalidade": "Musculação", "foco": "Hipertrofia", "duracaoEstimadaMin": 60, "exercicios": [{ "nome": "Supino Reto", "series": 4, "reps": "8-10", "cargaKg": 40, "descansoSeg": 90, "notaTecnica": "Cadência controlada" }] },
+      "fichasTreino": [{ "nome": "Treino A", "modalidade": "Musculação", "foco": "Peito e Tríceps", "duracaoEstimadaMin": 60, "exercicios": [{ "nome": "Supino Reto", "series": 4, "reps": "8-10", "cargaKg": 40, "descansoSeg": 90, "notaTecnica": "" }] }],
       "projetos": [{ "nome": "Projeto", "papel": "Autora", "tarefa": "Entrega", "prazo": "Sexta", "prioridade": "alta" }],
       "habitos": [{ "titulo": "Hábito", "categoria": "Saúde", "metaTexto": "Diário" }],
       "metas": [{ "titulo": "Meta", "categoria": "Finanças", "prazo": "Dezembro", "marcos": ["Passo 1"] }],
@@ -666,6 +675,7 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       // Build multimodal contents array supporting 1 or multiple images/files
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const parts: any[] = [];
+      const pdfTextosExtraidos: string[] = [];
 
       for (const itemAnexo of listaAnexos) {
         if (itemAnexo?.base64 && (itemAnexo.mimeType || itemAnexo.nome)) {
@@ -677,6 +687,23 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
             ? itemAnexo.base64.split(",")[1]
             : itemAnexo.base64;
           const cleanBase64 = rawBase64.replace(/\s+/g, "");
+
+          if (rawMime === "application/pdf") {
+            try {
+              const pdfBuffer = Buffer.from(cleanBase64, "base64");
+              const parser = new PDFParse({ data: pdfBuffer });
+              const parsedPdf = await parser.getText();
+              if (parsedPdf?.text && parsedPdf.text.trim()) {
+                const pdfTextTrimm = parsedPdf.text.trim();
+                pdfTextosExtraidos.push(
+                  `[CONTEÚDO TEXTUAL COMPLETO DO PDF "${itemAnexo.nome || "treino.pdf"}"]:\n${pdfTextTrimm}`
+                );
+                console.log(`[PDFParse] Extraídos ${pdfTextTrimm.length} caracteres do PDF ${itemAnexo.nome}`);
+              }
+            } catch (pdfErr) {
+              console.warn("[PDFParse] Erro ao extrair texto do PDF:", pdfErr);
+            }
+          }
 
           if (
             rawMime.startsWith("image/") ||
@@ -694,11 +721,36 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
       }
 
       const temAudio = listaAnexos.some((a) => a.mimeType?.startsWith("audio/"));
+      const ehTreinoAnexo =
+        listaAnexos.some((a) =>
+          /\b(treino|treinos|ficha|exerc|workout|musculacao|musculação|cheer|stunt|gym)\b/i.test(
+            a.nome || ""
+          )
+        ) ||
+        pdfTextosExtraidos.some((p) =>
+          /\b(treino|exerc[ií]cio|s[ée]ries|repeti[çc][õo]es|supino|agachamento|leg press|descanso)\b/i.test(
+            p
+          )
+        ) ||
+        /\b(treino|treinos|ficha|upando|workout|muscula[çc][ãa]o|exerc[ií]cio|supino|agachamento)\b/i.test(
+          mensagem || ""
+        );
+
       let promptFinal =
         mensagem ||
         (temAudio
           ? "Ouça com atenção esta mensagem de voz da usuária, transcreva o que ela disse em 'transcricaoAudioUsuario', responda em 'respostaLala' e gere todas as ações correspondentes."
+          : ehTreinoAnexo
+          ? "Analise detalhadamente a ficha de treino / rotina de exercícios em anexo, extraia todas as divisões (Treino A, Treino B, Treino C, etc.) e todos os exercícios com séries, repetições, carga e descanso, e gere a ação ATUALIZAR_TREINO com fidelidade total."
           : "Analise detalhadamente CADA UMA das imagens/arquivos em anexo, extraia todos os bancos (ex: Nubank, PicPay, Inter, etc.), valores exatos de saldos, faturas, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
+
+      if (ehTreinoAnexo) {
+        promptFinal += `\n\n[ATENÇÃO CRÍTICA: A usuária está enviando/upando uma ficha de treino / rotina de exercícios. PROIBIDO gerar ações financeiras (REGISTRAR_GASTO) para séries, repetições (ex: 4x10) ou cargas em kg! Gere OBRIGATORIAMENTE a ação ATUALIZAR_TREINO com 'fichasTreino' ou 'fichaTreino'.]`;
+      }
+
+      if (pdfTextosExtraidos.length > 0) {
+        promptFinal += `\n\n${pdfTextosExtraidos.join("\n\n")}\n\n[ATENÇÃO: Extraia TODAS as divisões de treino (Treino A, Treino B, Treino C, etc.) e TODOS os exercícios com séries, repetições, carga e descanso exatamente como constam no PDF acima!]`;
+      }
 
       const anexosNaoAudio = listaAnexos.filter(
         (a) => !a.mimeType?.startsWith("audio/")
@@ -746,6 +798,13 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
 
       if (!parsed) {
         throw lastErr || new Error("Nenhum modelo Gemini respondeu com JSON válido.");
+      }
+
+      if (ehTreinoAnexo && parsed && Array.isArray(parsed.acoesPropostas)) {
+        parsed.acoesPropostas = parsed.acoesPropostas.filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (a: any) => a?.tipo !== "REGISTRAR_GASTO"
+        );
       }
 
       return res.json(parsed);

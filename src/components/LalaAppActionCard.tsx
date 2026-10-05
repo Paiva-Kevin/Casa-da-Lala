@@ -994,80 +994,87 @@ export function LalaAppActionCard({
               </div>
             )}
 
-            {/* PREVIEW VISUAL DE FICHA DE TREINO */}
-            {p?.fichaTreino && (
-              <div
-                className="p-3 rounded-2xl border space-y-2 w-full"
-                style={{
-                  backgroundColor: `${meta.corDestaque}0A`,
-                  borderColor: `${meta.corDestaque}30`,
-                }}
-              >
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span
-                    className="text-xs font-bold flex items-center gap-1.5"
-                    style={{ color: meta.corDestaque }}
-                  >
-                    <span>🏋️ {p.fichaTreino.nome || "Ficha de Treino"}</span>
-                    {p.fichaTreino.foco && (
-                      <span className="text-[10px] font-normal opacity-85">
-                        · {p.fichaTreino.foco}
-                      </span>
-                    )}
-                  </span>
-                  <span
-                    className="text-[10px] font-mono-num font-bold px-2 py-0.5 rounded-full"
+            {/* PREVIEW VISUAL DE FICHAS DE TREINO (ÚNICA OU MÚLTIPLAS) */}
+            {(p?.fichasTreino || p?.fichaTreino) && (
+              <div className="space-y-2.5 w-full">
+                {(
+                  p.fichasTreino || (p.fichaTreino ? [p.fichaTreino] : [])
+                ).map((ft, fIdx) => (
+                  <div
+                    key={fIdx}
+                    className="p-3 rounded-2xl border space-y-2 w-full"
                     style={{
-                      backgroundColor: `${meta.corDestaque}18`,
-                      color: meta.corDestaque,
+                      backgroundColor: `${meta.corDestaque}0A`,
+                      borderColor: `${meta.corDestaque}30`,
                     }}
                   >
-                    {p.fichaTreino.exercicios?.length || 0} exercícios
-                  </span>
-                </div>
-
-                {p.fichaTreino.exercicios &&
-                  p.fichaTreino.exercicios.length > 0 && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
-                      {p.fichaTreino.exercicios.map((ex, idx) => (
-                        <div
-                          key={idx}
-                          className="p-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
-                          style={{
-                            backgroundColor: t.card,
-                            borderColor: t.border,
-                          }}
-                        >
-                          <div className="min-w-0">
-                            <p
-                              className="font-semibold truncate"
-                              style={{ color: t.text }}
-                            >
-                              {idx + 1}. {ex.nome}
-                            </p>
-                            <p
-                              className="text-[10px]"
-                              style={{ color: t.textSoft }}
-                            >
-                              {ex.series || 3}x {ex.reps || "10"} reps
-                              {ex.cargaKg ? ` · ${ex.cargaKg} kg` : ""}
-                            </p>
-                          </div>
-                          {ex.descansoSeg && (
-                            <span
-                              className="text-[10px] font-mono-num px-1.5 py-0.5 rounded"
-                              style={{
-                                backgroundColor: `${meta.corDestaque}15`,
-                                color: meta.corDestaque,
-                              }}
-                            >
-                              {ex.descansoSeg}s
-                            </span>
-                          )}
-                        </div>
-                      ))}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span
+                        className="text-xs font-bold flex items-center gap-1.5"
+                        style={{ color: meta.corDestaque }}
+                      >
+                        <span>🏋️ {ft.nome || `Treino ${String.fromCharCode(65 + fIdx)}`}</span>
+                        {ft.foco && (
+                          <span className="text-[10px] font-normal opacity-85">
+                            · {ft.foco}
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className="text-[10px] font-mono-num font-bold px-2 py-0.5 rounded-full"
+                        style={{
+                          backgroundColor: `${meta.corDestaque}18`,
+                          color: meta.corDestaque,
+                        }}
+                      >
+                        {ft.exercicios?.length || 0} exercícios
+                      </span>
                     </div>
-                  )}
+
+                    {ft.exercicios && ft.exercicios.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto pr-1">
+                        {ft.exercicios.map((ex, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 rounded-xl border text-[11px] flex items-center justify-between gap-2"
+                            style={{
+                              backgroundColor: t.card,
+                              borderColor: t.border,
+                            }}
+                          >
+                            <div className="min-w-0">
+                              <p
+                                className="font-semibold truncate"
+                                style={{ color: t.text }}
+                              >
+                                {idx + 1}. {ex.nome}
+                              </p>
+                              <p
+                                className="text-[10px]"
+                                style={{ color: t.textSoft }}
+                              >
+                                {ex.series || 3}x {ex.reps || "10"} reps
+                                {ex.cargaKg ? ` · ${ex.cargaKg} kg` : ""}
+                                {ex.notaTecnica ? ` · ${ex.notaTecnica}` : ""}
+                              </p>
+                            </div>
+                            {ex.descansoSeg && (
+                              <span
+                                className="text-[10px] font-mono-num px-1.5 py-0.5 rounded shrink-0"
+                                style={{
+                                  backgroundColor: `${meta.corDestaque}15`,
+                                  color: meta.corDestaque,
+                                }}
+                              >
+                                {ex.descansoSeg}s
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </>
