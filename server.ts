@@ -111,8 +111,11 @@ function writeServerSnapshot(payload: any): void {
 }
 
 const CHAT_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-flash-latest",
+  "gemini-3.1-flash-lite",
+  "gemini-3.8-flash",
   "gemini-3-flash-preview",
-  "gemini-3.1-flash-lite-preview",
 ];
 
 const TTS_MODELS = [
@@ -691,25 +694,44 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
           if (rawMime === "application/pdf") {
             try {
               const pdfBuffer = Buffer.from(cleanBase64, "base64");
-              const parser = new PDFParse({ data: pdfBuffer });
+              const parser = new PDFParse({ data: new Uint8Array(pdfBuffer) });
               const parsedPdf = await parser.getText();
-              if (parsedPdf?.text && parsedPdf.text.trim()) {
+              const trimmed = (parsedPdf?.text || "").replace(/\s+/g, " ").trim();
+              if (trimmed && trimmed.length > 20) {
                 const pdfTextTrimm = parsedPdf.text.trim();
                 pdfTextosExtraidos.push(
                   `[CONTEÚDO TEXTUAL COMPLETO DO PDF "${itemAnexo.nome || "treino.pdf"}"]:\n${pdfTextTrimm}`
                 );
                 console.log(`[PDFParse] Extraídos ${pdfTextTrimm.length} caracteres do PDF ${itemAnexo.nome}`);
+              } else {
+                // PDF escaneado / sem texto selecionável: renderiza páginas como PNG para o Gemini ler visualmente
+                try {
+                  const screenshots = await parser.getScreenshot({ imageDataUrl: true });
+                  if (screenshots?.pages && screenshots.pages.length > 0) {
+                    for (const pg of screenshots.pages.slice(0, 4)) {
+                      if (pg.dataUrl) {
+                        const b64 = pg.dataUrl.split(",")[1];
+                        if (b64) {
+                          parts.push({
+                            inlineData: {
+                              mimeType: "image/png",
+                              data: b64,
+                            },
+                          });
+                        }
+                      }
+                    }
+                  }
+                } catch (scErr) {
+                  console.warn("[PDFParse] getScreenshot fallback:", scErr);
+                }
               }
             } catch (pdfErr) {
               console.warn("[PDFParse] Erro ao extrair texto do PDF:", pdfErr);
             }
           }
 
-          if (
-            rawMime.startsWith("image/") ||
-            rawMime.startsWith("audio/") ||
-            rawMime === "application/pdf"
-          ) {
+          if (rawMime.startsWith("image/") || rawMime.startsWith("audio/")) {
             parts.push({
               inlineData: {
                 mimeType: rawMime,
@@ -745,7 +767,11 @@ Retorne SEMPRE um objeto JSON válido exatamente neste formato:
           : "Analise detalhadamente CADA UMA das imagens/arquivos em anexo, extraia todos os bancos (ex: Nubank, PicPay, Inter, etc.), valores exatos de saldos, faturas, gastos, compromissos ou tarefas e gere as ações correspondentes para atualizar o aplicativo agora.");
 
       if (ehTreinoAnexo) {
-        promptFinal += `\n\n[ATENÇÃO CRÍTICA: A usuária está enviando/upando uma ficha de treino / rotina de exercícios. PROIBIDO gerar ações financeiras (REGISTRAR_GASTO) para séries, repetições (ex: 4x10) ou cargas em kg! Gere OBRIGATORIAMENTE a ação ATUALIZAR_TREINO com 'fichasTreino' ou 'fichaTreino'.]`;
+        promptFinal += `\n\n[DIRETRIZES RÍGIDAS DE IMPORTAÇÃO DE TREINO]:
+1. PROIBIDO INVENTAR: Transcreva SOMENTE os exercícios reais do documento ou texto com seus nomes exatos. NUNCA adicione exercícios genéricos de exemplo!
+2. PROIBIDO JUNTAR TUDO EM UMA SÉRIE/FICHA SÓ: Se o documento contiver divisões (ex: Treino A, Treino B, Treino C ou Série A, Série B, Série C, Superior / Inferior, Push / Pull / Legs), você DEVE criar cada divisão separada dentro do array "fichasTreino" (uma ficha para cada divisão/série)!
+3. EXTRAÇÃO DE EXERCÍCIOS: Para cada exercício, capture o número de séries (ex: 4), repetições (ex: 10, 8-10, 12, Falha), carga em kg (se informada) e tempo de descanso em segundos.
+4. PROIBIDO REGISTRAR_GASTO: Treino não é despesa financeira. Retorne OBRIGATORIAMENTE a ação ATUALIZAR_TREINO com o array "fichasTreino".`;
       }
 
       if (pdfTextosExtraidos.length > 0) {
